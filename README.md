@@ -10,14 +10,22 @@ The initial implementation is the basic **K3s** installation, Tailscale networki
 
 The existing Linear project [guaranine](https://linear.app/kian-finishing-zombie-granola/project/guaranine-5e147e0efbea) is the intended Clusterfork binding for `klever-lab/guaranine` on `main`. Once enrollment is verified and enabled, issues in this project entering **Todo** go through the shared readiness review and development workflow. No repository-specific worker or custom platform API is needed.
 
-Run repository validation with Node.js 22 or newer:
+Run repository validation with Python 3.12 or newer:
 
 ```bash
-npm ci
-npm test
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --requirement requirements-dev.txt
+bash scripts/validate.sh
 ```
 
 The current check lints the repository's Markdown, which is its only implementation content today. When adding Ansible, scripts, Kubernetes manifests, or an ISO build, extend validation to check and exercise those components. Passing documentation lint does not validate an undeployed cluster or an installer image.
+
+## Infrastructure as code
+
+Terraform owns the Azure resources and state backend. Ansible owns repeatable host and K3s configuration. Kubernetes manifests own deployed workloads. Version configuration and pin dependencies in this repository so environments can be recreated without portal-only changes. Live provisioning uses the documented operator credentials and preflight; repository CI validates configuration without creating Azure resources.
+
+The first implementation issue is [KIAN-972: Manage the Azure K3s coordinator VM with Terraform](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-972/manage-the-azure-k3s-coordinator-vm-with-terraform).
 
 ## Controller choice
 
