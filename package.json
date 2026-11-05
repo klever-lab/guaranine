@@ -1,0 +1,19 @@
+{
+  "name": "guaranine-validation",
+  "private": true,
+  "description": "Validation for the Guaranine infrastructure repository",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "markdownlint-cli2",
+    "test": "npm run lint"
+  },
+  "devDependencies": {
+    "markdownlint-cli2": "0.24.0"
+  },
+  "overrides": {
+    "katex": "0.18.2",
+    "re2js": "2.8.7"
+  }
+}

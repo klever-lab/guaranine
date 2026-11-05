@@ -1,0 +1,29 @@
+# Managed by Clusterfork setup-remote-development.
+name: Clusterfork repository validation
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  validate:
+    name: Clusterfork validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run repository validation
+        env:
+          CLUSTERFORK_VALIDATION_COMMANDS: "[[\"npm\", \"ci\"], [\"npm\", \"test\"]]"
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          for argv in json.loads(os.environ['CLUSTERFORK_VALIDATION_COMMANDS']):
+              subprocess.run(argv, check=True)
+          PYTHON
