@@ -1,4 +1,4 @@
-# Managed by Clusterfork setup-remote-development.
+# Repository validation shared with Clusterfork Symphony.
 name: Clusterfork repository validation
 on: [push, pull_request]
 permissions:
@@ -15,15 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+      - name: Install validation dependencies
+        run: python3 -m pip install --requirement requirements-dev.txt
       - name: Run repository validation
-        env:
-          CLUSTERFORK_VALIDATION_COMMANDS: "[[\"npm\", \"ci\"], [\"npm\", \"test\"]]"
-        run: |
-          python3 - <<'PYTHON'
-          import json, os, subprocess
-          for argv in json.loads(os.environ['CLUSTERFORK_VALIDATION_COMMANDS']):
-              subprocess.run(argv, check=True)
-          PYTHON
+        run: bash scripts/validate.sh
