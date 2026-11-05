@@ -7,6 +7,7 @@ All laptops are in separate locations. Every private inter-host connection must 
 Current architecture:
 
 - K3s with one control-plane/server node and local SQLite on a stable hub outside the replaceable worker pool; the laptops are agents/workers connected over Tailscale. Keep persistent storage outside the replaceable worker pool as well. The hub is infrastructure, not another disposable worker.
+- Use Azure for Students credits for the initial coordinator, on a separate Linux VM from existing Azure services. Target 2 vCPUs and 4 GiB RAM initially; verify quota, availability, remaining credit, and total cost before provisioning. Preserve the subscription spending limit and document credit expiry and coordinator recovery.
 - Kubernetes schedules containers automatically. The initial delivery is basic K3s installation, Tailscale networking, worker enrollment, verification, and maintenance. KubeVirt, portable persistent storage, public domains, and full monitoring are future additions.
 - Use host Tailscale addresses for cluster transport, with Flannel bound to the Tailscale interface. Do not assume LAN connectivity or form an embedded-etcd/control-plane quorum across the laptops.
 - Use storage accessible from destination hosts for movable workloads; local-path storage does not provide portable disks. Record storage, control-plane availability, and partition/fencing limitations honestly.
