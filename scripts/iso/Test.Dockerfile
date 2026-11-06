@@ -13,6 +13,7 @@ RUN set -eu; \
       fi; \
     done; \
     test "$indexed" = 1; \
+    mkdir -p /var/cache/apt/archives; \
     apt_get -o Acquire::ForceHash=SHA256 --print-uris --yes --download-only --no-install-recommends install ca-certificates iproute2 iptables kmod procps python3 conntrack > /tmp/bootstrap-packages; \
     while read -r quoted_uri filename size hash; do \
       case "$quoted_uri" in \'*) ;; *) continue ;; esac; \

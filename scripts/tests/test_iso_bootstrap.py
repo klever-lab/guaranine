@@ -21,8 +21,7 @@ class BootstrapMirrorTests(unittest.TestCase):
                   package_hash='SHA256:' + DIGEST):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for path in ('etc/ssl/certs', 'etc/apt/sources.list.d', 'tmp', 'var/lib/apt/lists',
-                         'var/cache/apt/archives', 'bin'):
+            for path in ('etc/ssl/certs', 'etc/apt/sources.list.d', 'tmp', 'var/lib/apt/lists', 'bin'):
                 (root / path).mkdir(parents=True, exist_ok=True)
             (root / 'etc/ssl/certs/ca-certificates.crt').write_text('DISPOSABLE PUBLIC CA FIXTURE')
             (root / 'etc/apt/sources.list.d/debian.sources').write_text('DISPOSABLE SOURCE FIXTURE')
