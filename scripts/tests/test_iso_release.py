@@ -104,6 +104,7 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertNotIn("pull_request_target", workflow["on"])
         self.assertIn("workflow_dispatch", workflow["on"])
         self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertEqual(workflow['jobs']['trust']['permissions']['checks'], 'read')
         release = workflow["jobs"]["release"]
         self.assertEqual(set(release["needs"]), {"trust", "build-test"})
         self.assertIn("github.event_name == 'push'", release["if"])
@@ -124,7 +125,7 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertIn("merge-base --is-ancestor", guard)
         self.assertIn(".merged_at != null", guard)
         self.assertNotIn('"APPROVED"', guard)
-        self.assertIn('passed("build-test")', guard)
+        self.assertIn('passed("Clusterfork validation")', guard)
         publisher = (ROOT / "scripts/iso/publish-release.py").read_text()
         self.assertNotIn('"--clobber"', publisher)
         self.assertIn("Versioned asset differs", publisher)

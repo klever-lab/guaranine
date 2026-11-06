@@ -75,7 +75,7 @@ print(json.dumps(fixture[url]))
             f'repos/{REPOSITORY}/commits/{self.head}/check-runs?filter=all&per_page=100'])
 
     def test_missing_pending_failed_foreign_or_untrusted_checks_cannot_release(self):
-        for name in ('Clusterfork validation', 'trust', 'build-test'):
+        for name in ('Clusterfork validation',):
             for mutation in ('missing', 'pending', 'failed', 'foreign', 'untrusted'):
                 with self.subTest(name=name, mutation=mutation):
                     checks = copy.deepcopy(self.checks)
@@ -94,12 +94,18 @@ print(json.dumps(fixture[url]))
                     self.checks = checks
 
     def test_latest_check_result_controls_reruns(self):
-        previous = copy.deepcopy(self.checks[0]['check_runs'][-1])
+        previous = copy.deepcopy(self.checks[0]['check_runs'][0])
         latest = {**previous, 'id': 100, 'conclusion': 'failure'}
         self.checks.append({'check_runs': [latest]})
         self.assertNotEqual(self.guard().returncode, 0)
         latest['conclusion'] = 'success'
-        self.checks[0]['check_runs'][-1]['conclusion'] = 'failure'
+        self.checks[0]['check_runs'][0]['conclusion'] = 'failure'
+        self.assertEqual(self.guard().returncode, 0)
+
+    def test_prior_pr_image_checks_are_not_required_to_authorize_a_fresh_tag_build(self):
+        # Documentation-only PRs need not trigger the path-filtered ISO workflow.
+        # The release workflow itself still requires its exact-image build/test.
+        self.checks[0]['check_runs'] = self.checks[0]['check_runs'][:1]
         self.assertEqual(self.guard().returncode, 0)
 
     def test_no_merged_main_pr_or_wrong_repository_cannot_release(self):

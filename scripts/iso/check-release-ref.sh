@@ -15,4 +15,4 @@ gh api --paginate --slurp "repos/$GH_REPO/commits/$accepted_head/check-runs?filt
     'def passed($name): map(select(.name == $name)) | max_by(.id) |
        .status == "completed" and .conclusion == "success";
      [.[] | .check_runs[] | select(.app.slug == "github-actions" and .head_sha == $head)] |
-     passed("Clusterfork validation") and passed("trust") and passed("build-test")' >/dev/null
+     passed("Clusterfork validation")' >/dev/null
