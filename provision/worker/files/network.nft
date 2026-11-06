@@ -1,0 +1,23 @@
+# Own only this table. Never flush K3s, Tailscale, or operator firewall tables.
+table inet guaranine
+delete table inet guaranine
+table inet guaranine {
+  chain input {
+    type filter hook input priority -20; policy accept;
+    iifname != { "lo", "tailscale0", "cni0", "flannel.1" } tcp dport { 22, 6443, 6444, 10250, 10256 } drop
+    iifname != { "lo", "tailscale0" } udp dport 8472 drop
+  }
+  chain output {
+    type filter hook output priority -20; policy accept;
+    oifname != { "lo", "tailscale0" } ip daddr 100.64.0.0/10 drop
+    oifname != { "lo", "tailscale0" } ip6 daddr fd7a:115c:a1e0::/48 drop
+    oifname != { "lo", "tailscale0" } tcp dport { 22, 6443, 10250 } drop
+    oifname != { "lo", "tailscale0" } udp dport 8472 drop
+  }
+  chain forward {
+    type filter hook forward priority -20; policy accept;
+    oifname != { "lo", "tailscale0" } ip daddr 100.64.0.0/10 drop
+    oifname != { "lo", "tailscale0" } ip6 daddr fd7a:115c:a1e0::/48 drop
+    iifname != { "lo", "tailscale0", "cni0", "flannel.1" } ip daddr { 10.42.0.0/16, 10.43.0.0/16 } drop
+  }
+}

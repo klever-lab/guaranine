@@ -23,3 +23,14 @@ crash.*.log
 *.key
 id_rsa*
 id_ed25519*
+
+# Public outputs are produced outside the checkout; never upload guest state.
+*.iso
+*.qcow2
+*.vmdk
+*.raw
+*.fd
+enrollment.json
+qemu-results.json
+build.json
+SHA256SUMS

@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict worker cluster traffic to the tailnet
+Before=k3s-agent.service ssh.service
+After=network-pre.target nftables.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/guaranine-network.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

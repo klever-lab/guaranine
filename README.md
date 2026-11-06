@@ -4,7 +4,7 @@ K3s for a fleet of old laptops (2–8 GB RAM each) in different locations. Use `
 
 **Every inter-host connection uses Tailscale. No shared LAN or sub-10 ms latency between laptops is assumed.**
 
-The initial implementation is the basic **K3s** installation, Tailscale networking, worker enrollment, verification, and maintenance. A custom API and LXC are excluded. KubeVirt, portable persistent storage, public domains, and full monitoring are later additions. [Azure coordinator Terraform](infra/azure/README.md) is implemented for offline review and validation; nothing has been provisioned, and host/K3s configuration is still pending.
+The initial implementation is the basic **K3s** installation, Tailscale networking, worker enrollment, verification, and maintenance. A custom API and LXC are excluded. KubeVirt, portable persistent storage, public domains, and full monitoring are later additions. [Azure coordinator Terraform](infra/azure/README.md) is implemented for offline review and validation; nothing has been provisioned, and coordinator host/K3s configuration is still pending. The [laptop installer and worker profile](images/laptop/README.md) supply automatic worker enrollment; hosted tailnet and physical hardware qualification remain operator checks.
 
 ## Remote development
 
@@ -19,7 +19,7 @@ python3 -m pip install --requirement requirements-dev.txt
 bash scripts/validate.sh
 ```
 
-The shared entry point reuses Terraform from `PATH` when it matches [.terraform-version](.terraform-version); otherwise it downloads that exact version into temporary storage and verifies the archive against committed SHA-256 checksums. No system installation is required on Linux/macOS AMD64/ARM64. It lints Markdown, tests tool bootstrap, parses the OS bootstrap YAML, and runs Terraform formatting, backend-disabled initialization, validation, and mocked plan/lifecycle tests for both Azure roots. Downloads require access to HashiCorp releases and the provider registry; no Azure credentials or resources are needed. CI and Symphony run the same entry point. Future Ansible, Kubernetes manifests, and installer work must extend validation for those components. Passing offline checks does not validate a deployed cluster.
+The shared entry point reuses Terraform from `PATH` when it matches [.terraform-version](.terraform-version); otherwise it downloads that exact version into temporary storage and verifies the archive against committed SHA-256 checksums. No system installation is required on Linux/macOS AMD64/ARM64. It lints Markdown, tests tool bootstrap, parses the OS bootstrap YAML, and runs Terraform formatting, backend-disabled initialization, validation, and mocked plan/lifecycle tests for both Azure roots. Downloads require access to HashiCorp releases and the provider registry; no Azure credentials or resources are needed. CI and Symphony run the same entry point. It also tests worker enrollment behavior and installer/release contracts, runs ShellCheck, Ansible syntax and pinned Actionlint. The separate [ISO workflow](.github/workflows/laptop-iso.yml) builds the image and requires actual BIOS/UEFI QEMU installation and automatic enrollment tests with disposable K3s/Tailscale identities before publication. Passing credential-free checks does not validate a deployed hosted tailnet.
 
 ## Infrastructure as code
 
@@ -112,14 +112,14 @@ Workloads specify resource requirements, labels, and availability constraints, n
 ## Bootstrap with existing tooling
 
 1. Install minimal Debian and Tailscale on each laptop. Use unique hostnames, short-lived enrollment credentials, unattended updates, and lid settings suitable for an always-on host.
-2. Reuse upstream [k3s-io/k3s-ansible](https://github.com/k3s-io/k3s-ansible), with one inventory entry in `server` and the rest in `agent`. Inventory SSH endpoints and the API endpoint use Tailscale addresses. Pin the Ansible revision and a compatible K3s release when implementing.
+2. For workers, use the [versioned Ansible profile and Debian installer](images/laptop/README.md), with pinned upstream K3s agent installation tooling. Setup invokes the profile automatically. Existing Debian hosts can use the same profile installer. Coordinator host configuration remains separate work: configure exactly one stable server with local SQLite. Inventory SSH endpoints and the API endpoint use Tailscale addresses.
 3. Keep the control-plane database local to the stable hub. K3s's documented minimums are [2 CPU cores / 2 GB RAM for a server and 1 core / 512 MB for an agent](https://docs.k3s.io/installation/requirements#hardware), before application resources. Reserve additional capacity for the OS, networking, controllers, and workload overhead.
 4. Install KubeVirt on a Kubernetes release it supports, and enable VM workloads only on hosts with working hardware virtualization and sufficient RAM. Follow the upstream [installation and hardware checks](https://kubevirt.io/user-guide/cluster_admin/installation/). Small nodes can still run containers.
 5. Install storage and networking policy before relying on cross-host recovery. Validate the setup on the actual hardware and WAN links before claiming it is operational.
 
 ## Adding and removing computers
 
-The target workflow uses standard agent registration and maintenance APIs. The repeatable installer/enrollment profile is still to be implemented; it must not require hand-writing application placement or network routes for each new laptop.
+The workflow uses standard agent registration and maintenance APIs. The [laptop installer guide](images/laptop/README.md) covers download/verification, disk confirmation, protected setup inputs, automatic enrollment, credential replacement, reusable Ansible provisioning and release qualification. The worker profile does not require hand-writing application placement or cluster routes for each laptop.
 
 **Add a worker:** boot the common installer or run the common bootstrap on Debian, supply enrollment credentials, and let it join Tailscale and the existing K3s server. The profile supplies the hub's stable tailnet API address and configures the new node's own Tailscale IP and Flannel interface. Give it a unique node name. Once it is `Ready`, its allocatable resources become available to the scheduler automatically. Existing workloads do not have to be rewritten. K3s already provides [agent registration using a server URL and join token](https://docs.k3s.io/quick-start).
 
