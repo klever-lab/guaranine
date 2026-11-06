@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry worker enrollment and verify health after reboot
+
+[Timer]
+OnBootSec=30
+OnUnitInactiveSec=60
+RandomizedDelaySec=15
+Unit=guaranine-enroll.service
+
+[Install]
+WantedBy=timers.target

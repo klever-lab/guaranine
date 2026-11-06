@@ -1,0 +1,13 @@
+Template: guaranine/disk
+Type: select
+Choices: ${DISKS}
+Description: Installation disk:
+ ALL DATA ON THE SELECTED DISK WILL BE ERASED.
+ Select the whole target disk. Disconnect other storage if uncertain.
+ ${DETAILS}
+
+Template: guaranine/confirm-disk
+Type: string
+Description: Confirm target disk:
+ Type the exact disk path ${DISK} to confirm this installation target.
+ Debian will also ask you to confirm writing the partition table.
