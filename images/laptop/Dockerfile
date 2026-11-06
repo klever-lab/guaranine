@@ -4,15 +4,32 @@ RUN set -eu; \
     chmod 0644 /etc/ssl/certs/ca-certificates.crt; \
     cp /etc/ssl/certs/ca-certificates.crt /tmp/build-ca.pem; \
     rm /etc/apt/sources.list.d/debian.sources; \
-    installed=0; \
+    apt_get() { apt-get -o Acquire::https::CaInfo=/tmp/build-ca.pem -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 "$@"; }; \
+    indexed=0; \
     for mirror in snapshot.debian.org snapshot-cloudflare.debian.org; do \
       echo "deb [check-valid-until=no] https://$mirror/archive/debian/20261101T000000Z trixie main non-free-firmware" > /etc/apt/sources.list; \
-      if apt-get -o Acquire::https::CaInfo=/tmp/build-ca.pem -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o APT::Update::Error-Mode=any update && \
-         apt-get -o Acquire::https::CaInfo=/tmp/build-ca.pem -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ca-certificates python3 xorriso; then \
-        installed=1; break; \
+      if apt_get -o APT::Update::Error-Mode=any update; then \
+        indexed=1; break; \
       fi; \
     done; \
-    test "$installed" = 1; \
+    test "$indexed" = 1; \
+    apt_get -o Acquire::ForceHash=SHA256 --print-uris --yes --download-only --no-install-recommends install ca-certificates python3 xorriso > /tmp/bootstrap-packages; \
+    while read -r quoted_uri filename size hash; do \
+      case "$quoted_uri" in \'*) ;; *) continue ;; esac; \
+      uri=${quoted_uri#\'}; uri=${uri%\'}; \
+      case "$uri" in https://snapshot.debian.org/archive/debian/*/pool/*|https://snapshot-cloudflare.debian.org/archive/debian/*/pool/*) ;; *) exit 1 ;; esac; \
+      case "$filename" in */*|.*|'') exit 1 ;; esac; \
+      case "$size" in *[!0-9]*|'') exit 1 ;; esac; \
+      case "$hash" in SHA256:*) digest=${hash#SHA256:} ;; *) exit 1 ;; esac; \
+      test "${#digest}" = 64; \
+      case "$digest" in *[!0-9a-f]*) exit 1 ;; esac; \
+      pool_path=${uri#*/pool/}; \
+      destination=/var/cache/apt/archives/$filename; \
+      if ! /usr/lib/apt/apt-helper -o Acquire::https::CaInfo=/tmp/build-ca.pem -o Acquire::Retries=3 -o Acquire::https::Timeout=30 download-file "https://deb.debian.org/debian/pool/$pool_path" "$destination" "$hash"; then \
+        /usr/lib/apt/apt-helper -o Acquire::https::CaInfo=/tmp/build-ca.pem -o Acquire::Retries=3 -o Acquire::https::Timeout=30 download-file "$uri" "$destination" "$hash"; \
+      fi; \
+    done < /tmp/bootstrap-packages; \
+    apt_get --no-download install -y --no-install-recommends ca-certificates python3 xorriso; \
     cp /tmp/build-ca.pem /etc/ssl/certs/ca-certificates.crt
 COPY packages.txt /opt/worker-packages.txt
 COPY download-packages.py /opt/download-packages.py
