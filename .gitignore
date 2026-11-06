@@ -38,6 +38,3 @@ machine.yaml
 *.vhd
 *.vhd.zst
 private.json
-qemu-results.json
-build.json
-SHA256SUMS

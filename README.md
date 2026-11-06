@@ -2,7 +2,7 @@
 
 One Talos control-plane VM on Azure, plus laptop workers anywhere. Kubernetes places applications automatically. Every private connection between machines uses Tailscale; no shared LAN or sub-10 ms connection is required.
 
-**Keep it simple:** prebuilt Talos images, the official Tailscale extension, native Kubernetes and Terraform. No custom platform API, enrollment server or extra management stack.
+**Keep it simple:** the official Talos imager and Tailscale extension, native Kubernetes and Terraform. No custom platform API, enrollment server or extra management stack.
 
 ## Setup
 
@@ -20,7 +20,7 @@ The preparation command creates a short-lived Tailscale key, generates and valid
 
 ## What is ready
 
-Public boot media is [prebuilt and released](https://github.com/klever-lab/guaranine/releases/latest). It contains no credentials and boots into maintenance. Each unattended installer must be generated privately for its intended laptop; it cannot safely be a shared public download. See [images and enrollment limits](images/laptop/README.md).
+The supported installer is a private ISO generated for each laptop with `./guaranine worker`. It contains that laptop's enrollment configuration and is built directly with upstream Talos tooling. See [enrollment limits](talos/README.md#enrollment-security-status).
 
 The repository has configuration, Terraform and tested image tooling. **There is no deployed cluster yet.** The full 24-hour, single-use, hardware-bound enrollment policy and YubiKey boot authorization remain unfinished. Physical hardware and live Azure/Tailscale operation still need verification.
 
@@ -45,7 +45,7 @@ Use Python 3.12+. Run the same checks as CI:
 env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bash scripts/validate.sh
 ```
 
-This checks both Talos roles, machine preparation, image publication boundaries, workflows, shell and credential-free Terraform plans/lifecycle. The image workflow separately builds disposable private ISO/VHD fixtures and boots the public ISO in BIOS/UEFI. No private image leaves CI. Todo issues in the existing [Guaranine Linear project](https://linear.app/kian-finishing-zombie-granola/project/guaranine-5e147e0efbea) use the shared Clusterfork Symphony controller.
+This checks both Talos roles, machine preparation, credential boundaries, workflows, shell and credential-free Terraform plans/lifecycle. The [private-image workflow](.github/workflows/private-images.yml) separately builds disposable private ISO/VHD fixtures and discards them. It publishes no images. Todo issues in the existing [Guaranine Linear project](https://linear.app/kian-finishing-zombie-granola/project/guaranine-5e147e0efbea) use the shared Clusterfork Symphony controller.
 
 ## Original design question
 

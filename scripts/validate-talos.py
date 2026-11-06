@@ -68,7 +68,7 @@ def main():
             executable.write_bytes(package.extractfile('actionlint').read())
             executable.chmod(0o755)
         subprocess.run([str(executable)], cwd=ROOT, check=True)
-    shell = [ROOT / 'guaranine', ROOT / 'scripts/talos/check-release-ref.sh', ROOT / 'scripts/validate.sh']
+    shell = [ROOT / 'guaranine', ROOT / 'scripts/validate.sh']
     subprocess.run(['shellcheck', *map(str, shell)], check=True)
     for path in ROOT.glob('scripts/talos/*.py'):
         compile(path.read_text(), str(path), 'exec')

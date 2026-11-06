@@ -2,10 +2,6 @@
   "talos": "v1.14.5",
   "kubernetes": "1.37.1",
   "schematic_id": "4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b",
-  "iso": {
-    "url": "https://factory.talos.dev/image/4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b/v1.14.5/metal-amd64.iso",
-    "sha256": "55b714de7b9ce6d42bc3424d672995c1dc429507dd8658f30d228835e64eb9cd"
-  },
   "imager": "ghcr.io/siderolabs/imager@sha256:ef33373986bb0765132f0558ea43c9f8fee2c3839f1d1a4232693b77092d7350",
   "installer_base": "ghcr.io/siderolabs/installer-base@sha256:1644fe7ddfe3deb4b81487c3c7e49fce830eca862b608b32f577b866c8d36b48",
   "tailscale_extension": "ghcr.io/siderolabs/tailscale@sha256:669bcfe20aa99a8c47e890e4819826baca9ad78a807910a757791bb0c86cf9e8",

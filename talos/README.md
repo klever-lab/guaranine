@@ -34,6 +34,8 @@ This checks Docker, creates a 24-hour single-use Tailscale key, generates and sc
 
 Outputs live under `nodes/laptop-01/` in the operator directory. Keep the whole directory private. Existing node outputs are never overwritten. If a build fails, inspect its protected diagnostics; revoke its Tailscale key before removing that node directory and preparing it again. Installed workers normally keep their identity across reboots and do not need a new installer.
 
+Only the machine configuration is embedded. Operator API credentials, administration files and cluster signing keys are not included in worker images. Configuration is passed to the pinned local imager through stdin; it never goes to public Image Factory. Private files use mode 0600 under mode-0700 directories. Never publish them or upload them as CI artifacts.
+
 For the one Azure control plane, prepare a VHD instead:
 
 ```bash
@@ -41,6 +43,22 @@ For the one Azure control plane, prepare a VHD instead:
 ```
 
 These disk names are examples. Verify the actual Azure SKU's device mapping: the OS disk is disposable and the retained data disk at LUN 0 belongs to Talos's `ETCD` volume. Follow the [Azure guide](../infra/azure/README.md) for upload and Terraform. No preparation command provisions a VM or changes a laptop.
+
+## Enrollment security status
+
+The requested behavior is unattended enrollment for one laptop, with unused authority expiring after 24 hours, potentially authorized by the user's YubiKey 5 NFC. The command requests a preauthorized, non-ephemeral, single-use Tailscale key with a 24-hour lifetime. Enrolled devices retain their own identity after the key expires.
+
+**The full policy is unfinished.** Talos cluster join authority is separate from Tailscale registration. A copied unused private image can race the intended laptop; it is not hardware-bound. YubiKey authorization during boot is not implemented. An ISO remains copyable and bootable after 24 hours; a local clock check cannot securely expire it. No extra enrollment/authentication server is authorized.
+
+## Hardware and image validation
+
+The pinned AMD64 release needs x86-64-v2, compatible storage/NIC hardware and at least 1 GiB RAM for a worker before application capacity. Start with Ethernet or USB Ethernet. Physical laptops, Wi-Fi/firmware, lid/power behavior and live WAN operation still need qualification.
+
+The private-image CI workflow exercises the operator commands with disposable keys and builds both ISO and Azure VHD using the real pinned upstream imager. Outputs and protected logs are discarded. This checks image construction, not successful boot, installation or real cluster enrollment. Nothing is deployed yet.
+
+Update [versions.json](versions.json) using official Talos checksums, extension metadata and OCI digests. Run repository validation and both private-format builds after changing pins. Keep [schematic.yaml](schematic.yaml) for the Tailscale-enabled installer referenced by generated machine configuration; it contains only the extension name. Private installers do not depend on a public Guaranine ISO.
+
+There is no public ISO publishing workflow. Existing public ISO releases are historical boot media and are no longer the installation path.
 
 ## Bootstrap the control plane once
 

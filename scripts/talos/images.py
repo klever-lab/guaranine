@@ -1,31 +1,13 @@
 #!/usr/bin/env python3
-"""Fetch the public Talos ISO, or build a private machine image locally."""
-import argparse
+"""Build a private machine image locally with the pinned upstream Talos imager."""
 import json
-import os
 from pathlib import Path
 import subprocess
 import tarfile
 
 import yaml
 
-from common import ROOT, PINS, digest, fetch, protected, output_directory, private_command, private_write, source, talosctl
-
-ISO = 'guaranine-talos-amd64.iso'
-
-
-def public_image(args):
-    directory = output_directory(args.output)
-    image = directory / ISO
-    fetch(PINS['iso'], image)
-    manifest = {'schema': 2, 'os': 'talos', 'private': False, **source(),
-                'talos_version': PINS['talos'], 'kubernetes_version': PINS['kubernetes'],
-                'schematic_id': PINS['schematic_id'], 'iso_sha256': digest(image),
-                'upstream_url': PINS['iso']['url'],
-                'qualification': 'Public image boot and maintenance API only; no credentials or automatic cluster enrollment',
-                'tests': 'pending'}
-    (directory / 'build.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    print('Fetched the checksum-pinned public Talos ISO with the Tailscale extension')
+from common import PINS, digest, protected, output_directory, private_command, private_write, talosctl
 
 
 def imager_profile(config, image_format):
@@ -89,51 +71,3 @@ def private_image(args):
         'warning': 'Contains enrollment credentials. Never publish or upload as a CI artifact.'}, indent=2) + '\n')
     print('Built a private Talos machine image; keep the entire output directory private')
     return artifacts[0]
-
-
-def validate_public(directory):
-    directory = Path(directory)
-    manifest = json.loads((directory / 'build.json').read_text())
-    evidence = json.loads((directory / 'qemu-results.json').read_text())
-    if manifest.get('private') is not False or (directory / 'private.json').exists():
-        raise ValueError('Private machine images can never be released')
-    if manifest['os'] != 'talos' or manifest['iso_sha256'] != digest(directory / ISO) or manifest['iso_sha256'] != PINS['iso']['sha256']:
-        raise ValueError('The image does not match the Talos build manifest')
-    if evidence['iso_sha256'] != manifest['iso_sha256'] or evidence['source_commit'] != manifest['source_commit']:
-        raise ValueError('Guest evidence belongs to another image/source commit')
-    if set(evidence['firmware']) != {'bios', 'uefi'}:
-        raise ValueError('Both BIOS and UEFI boot evidence are required')
-    for result in evidence['firmware'].values():
-        if result != {'boot': 'passed', 'maintenance_api': 'passed', 'disk_unchanged': 'passed', 'talos_version': PINS['talos']}:
-            raise ValueError('A required public-image test failed or is missing')
-    return manifest, evidence
-
-
-def finalize(directory):
-    directory = Path(directory)
-    manifest, evidence = validate_public(directory)
-    manifest['tests'] = evidence
-    (directory / 'build.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    (directory / 'SHA256SUMS').write_text(''.join(f'{digest(directory/name)}  {name}\n' for name in (ISO, 'build.json', 'qemu-results.json')))
-    return manifest
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest='command', required=True)
-    public = commands.add_parser('public', help='Fetch the public, credential-free ISO')
-    public.add_argument('--output', required=True)
-    public.set_defaults(action=public_image)
-    final = commands.add_parser('finalize')
-    final.add_argument('directory')
-    final.set_defaults(action=lambda args: finalize(args.directory))
-    args = parser.parse_args()
-    os.umask(0o077)
-    try:
-        args.action(args)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
-        parser.exit(1, f'{type(error).__name__}: {error}\n')
-
-
-if __name__ == '__main__':
-    main()

@@ -1,7 +1,6 @@
-"""Security and publication boundaries around upstream Talos tooling."""
+"""Private machine preparation and security boundaries around upstream Talos tooling."""
 from datetime import datetime, timedelta, timezone
 import contextlib
-import copy
 import hashlib
 import io
 import json
@@ -187,50 +186,6 @@ class MachineCommandTests(unittest.TestCase):
             config.main(['talosctl', '--talosconfig', '/private/talosconfig', 'version', '--client'])
         execute.assert_called_once_with('/verified/talosctl',
             ['/verified/talosctl', '--talosconfig', '/private/talosconfig', 'version', '--client'])
-
-
-class TalosReleaseTests(unittest.TestCase):
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(); self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
-        (self.root/images.ISO).write_bytes(b'DISPOSABLE IMAGE FIXTURE')
-        self.sha = common.digest(self.root/images.ISO)
-        self.pin = patch.dict(common.PINS['iso'], {'sha256': self.sha}); self.pin.start(); self.addCleanup(self.pin.stop)
-        self.manifest = {'os': 'talos', 'private': False, 'source_commit': 'a'*40, 'source_dirty': False,
-                         'iso_sha256': self.sha, 'talos_version': common.PINS['talos']}
-        boot = {'boot': 'passed', 'maintenance_api': 'passed', 'disk_unchanged': 'passed', 'talos_version': common.PINS['talos']}
-        self.evidence = {'source_commit': 'a'*40, 'iso_sha256': self.sha,
-                         'firmware': {'bios': copy.deepcopy(boot), 'uefi': copy.deepcopy(boot)}}
-        self.write()
-
-    def write(self):
-        (self.root/'build.json').write_text(json.dumps(self.manifest))
-        (self.root/'qemu-results.json').write_text(json.dumps(self.evidence))
-
-    def test_finalization_binds_both_boot_modes_to_public_image_and_source(self):
-        manifest = images.finalize(self.root)
-        self.assertEqual(manifest['tests'], self.evidence)
-        for line in (self.root/'SHA256SUMS').read_text().splitlines():
-            expected, name = line.split()
-            self.assertEqual(expected, common.digest(self.root/name))
-
-    def test_private_foreign_failed_and_skipped_evidence_cannot_publish(self):
-        for mode in ('bios', 'uefi'):
-            for field in ('boot', 'maintenance_api', 'disk_unchanged'):
-                for bad in ('failed', 'skipped', None):
-                    with self.subTest(mode=mode, field=field, bad=bad):
-                        saved = self.evidence['firmware'][mode][field]
-                        self.evidence['firmware'][mode][field] = bad; self.write()
-                        with self.assertRaises(ValueError): images.finalize(self.root)
-                        self.evidence['firmware'][mode][field] = saved
-        self.evidence['source_commit'] = 'b'*40; self.write()
-        with self.assertRaises(ValueError): images.finalize(self.root)
-        self.evidence['source_commit'] = 'a'*40
-        self.manifest['private'] = True; self.write()
-        with self.assertRaises(ValueError): images.finalize(self.root)
-        self.manifest['private'] = False; self.write()
-        (self.root/'private.json').write_text('{}')
-        with self.assertRaises(ValueError): images.finalize(self.root)
 
 
 if __name__ == '__main__':

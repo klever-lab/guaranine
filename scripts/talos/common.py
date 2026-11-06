@@ -1,4 +1,4 @@
-"""Pinned upstream tooling and the boundary between public artifacts and secrets."""
+"""Pinned upstream tooling and protected local operator files."""
 import hashlib
 import json
 import os
@@ -101,9 +101,3 @@ def private_command(arguments, directory, *, data=None):
         private_write(path, result.stdout + result.stderr)
         raise ValueError(f'Private operation failed; inspect protected diagnostic file {path}')
     return result.stdout
-
-
-def source():
-    commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
-    dirty = bool(subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True).strip())
-    return {'source_commit': commit, 'source_dirty': dirty}
