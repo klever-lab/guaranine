@@ -10,6 +10,7 @@
 - Do not build a framework, custom controller/API, enrollment service, plugin system, fallback matrix or speculative integration. Add only the minimum glue needed for a current requirement.
 - Do not add a service, dependency, Terraform root or operator procedure merely because it might be useful later. A complicated proposal is rejected until there is a simpler design.
 - Keep the main README short and actionable. Put each necessary operational detail in one owning guide; avoid duplicated explanations and alternative workflows.
+- Keep the small CLI in `scripts/guaranine.py`, each Terraform root in one `main.tf`, and operator instructions in `SETUP.md`. Avoid helper-file proliferation, duplicate metadata and per-worker copies of operator credentials.
 - Simplicity must preserve credentials, backups, Tailscale-only transport and honest limits. Never call an unfinished security guarantee complete or hide essential manual work behind an "automatic" claim.
 
 ## Platform boundaries
@@ -20,10 +21,7 @@ All laptops are in separate locations. Every private inter-host connection must 
 
 **Server authorization:** Do not add any extra server without the user's explicit authorization. The current architecture is one planned Talos control-plane VM and laptop workers. A separate enrollment broker, authentication server, custom coordinator, Omni installation or other management service requires explicit authorization, even when hosted on the control-plane VM or inside the cluster. A design discussion, existing Terraform or a request for automatic enrollment does not grant that authorization.
 
-Read [README.md](README.md) first, then the owning guide:
-
-- [Talos configuration and operations](talos/README.md): private ISO/VHD generation, enrollment limitations, Tailscale/CNI policy, control-plane bootstrap, maintenance and etcd recovery.
-- [Azure infrastructure](infra/azure/README.md): student-credit preflight, private image upload, protected local Terraform state, one control-plane VM, retained data disk and recovery.
+Read [README.md](README.md) first, then [SETUP.md](SETUP.md) for Azure provisioning, private images, enrollment limitations, Tailscale/CNI policy, bootstrap, maintenance and recovery.
 
 The control plane uses local etcd on its retained disk. Laptop workers never join an etcd quorum. One control plane is a deliberate availability tradeoff. Persistent workload storage, KubeVirt, public domains, external secret management and full monitoring remain later platform work. Preserve automatic scheduling and drain/eviction; never choose replacement workload hosts by hand. WAN disconnection is not proof of fencing.
 

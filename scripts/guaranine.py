@@ -1,22 +1,176 @@
 #!/usr/bin/env python3
-"""Prepare one machine using the pinned upstream Talos tools."""
+"""Prepare private Talos installers using pinned upstream tools."""
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import ipaddress
 import json
 import os
 from pathlib import Path
+import platform
 import re
+import stat
 import subprocess
 import sys
+import tarfile
+import tempfile
+import time
 from types import SimpleNamespace
 import urllib.parse
 import urllib.request
 
 import yaml
 
-from common import ROOT, PINS, TAILNET, external, protected, output_directory, private_command, private_write, talosctl
-from images import private_image
+ROOT = Path(__file__).resolve().parents[1]
+PINS = json.loads((ROOT / 'talos/versions.json').read_text())
+TAILNET = '100.64.0.0/10'
+
+
+def digest(path):
+    with Path(path).open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def external(path):
+    path = Path(path).expanduser().resolve()
+    if path == ROOT or ROOT in path.parents:
+        raise ValueError('Private inputs and generated outputs must be outside the checkout')
+    return path
+
+
+def protected(path):
+    original = Path(path).expanduser()
+    info = original.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise ValueError('Private input must be an operator-owned regular file with mode 0600')
+    return external(original)
+
+
+def output_directory(path):
+    path = external(path)
+    path.mkdir(mode=0o700, parents=True, exist_ok=False)
+    path.chmod(0o700)
+    return path
+
+
+def private_write(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as stream:
+        stream.write(data)
+
+
+def fetch(spec, destination):
+    """Only promote a fully downloaded object with the committed digest."""
+    destination = Path(destination)
+    for attempt in range(4):
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                request = urllib.request.Request(spec['url'], headers={'User-Agent': 'guaranine-talos/0.2', 'Accept': 'application/octet-stream'})
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    while block := response.read(1024 * 1024):
+                        stream.write(block)
+            if digest(temporary) != spec['sha256']:
+                raise ValueError('Pinned download checksum mismatch')
+            temporary.replace(destination)
+            return destination
+        except (OSError, ValueError):
+            if attempt == 3:
+                raise
+            time.sleep(attempt + 1)
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+
+
+def talosctl():
+    target = platform.system().lower() + '_' + {'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine().lower(), '')
+    expected = PINS['talosctl_sha256'].get(target)
+    if not expected:
+        raise ValueError('Talos tooling supports Linux/macOS AMD64/ARM64')
+    override = os.environ.get('GUARANINE_TALOSCTL_BINARY')
+    if override:
+        binary = Path(override)
+        if digest(binary) != expected:
+            raise ValueError('The supplied talosctl does not match the committed release digest')
+        return str(binary)
+    cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'guaranine' / PINS['talos']
+    cache.mkdir(parents=True, exist_ok=True)
+    binary = cache / ('talosctl-' + target)
+    if not binary.exists() or digest(binary) != expected:
+        fetch({'url': f"https://github.com/siderolabs/talos/releases/download/{PINS['talos']}/talosctl-{target.replace('_', '-')}", 'sha256': expected}, binary)
+    binary.chmod(0o755)
+    return str(binary)
+
+
+def private_command(arguments, directory, *, data=None):
+    """Never echo configuration or subprocess error bodies into a terminal/CI log."""
+    result = subprocess.run(arguments, input=data, text=True, capture_output=True, timeout=600)
+    if result.returncode:
+        path = Path(directory) / ('error-' + str(time.time_ns()) + '.log')
+        private_write(path, result.stdout + result.stderr)
+        raise ValueError(f'Private operation failed; inspect protected diagnostic file {path}')
+    return result.stdout
+
+
+def imager_profile(config, image_format):
+    profile = {'baseProfileName': 'azure' if image_format == 'azure' else 'iso',
+               'arch': 'amd64', 'version': PINS['talos'].removeprefix('v'),
+               'platform': 'azure' if image_format == 'azure' else 'metal',
+               'customization': {'embeddedMachineConfiguration': config},
+               'input': {'systemExtensions': [{'imageRef': PINS['tailscale_extension']}],
+                         'baseInstaller': {'imageRef': PINS['installer_base']}},
+               'output': {'kind': 'iso' if image_format == 'iso' else 'image'}}
+    if image_format == 'azure':
+        profile['output'].update(imageOptions={'diskFormat': 'vhd', 'diskFormatOptions': 'subformat=fixed,force_size',
+                                               'diskSize': 11736711168, 'bootloader': 'dual-boot'}, outFormat='.zst')
+    return profile
+
+
+def private_image(args):
+    config = protected(args.config)
+    documents = list(yaml.safe_load_all(config.read_text()))
+    machine = next((doc for doc in documents if doc.get('version') == 'v1alpha1'), None)
+    if not machine or machine.get('machine', {}).get('type') not in ('controlplane', 'worker'):
+        raise ValueError('A complete private Talos machine configuration is required')
+    if args.format == 'azure' and machine['machine']['type'] != 'controlplane':
+        raise ValueError('Only the one planned control-plane VM is in scope for Azure images')
+    if not any(doc.get('kind') == 'ExtensionServiceConfig' and doc.get('name') == 'tailscale' for doc in documents):
+        raise ValueError('The image must include the Tailscale enrollment configuration')
+    directory = output_directory(args.output)
+    private_command([talosctl(), 'validate', '--strict', '--mode', 'metal', '--config', str(config)], directory)
+    profile = yaml.safe_dump(imager_profile(config.read_text(), args.format), sort_keys=False)
+    # Profile/credentials go through stdin, never shell arguments, environment,
+    # public Image Factory, a Docker build context, or a repository file. Tar
+    # output avoids root-owned bind-mount files from the privileged container.
+    archive = directory / 'imager-output.tar'
+    log = directory / 'imager.log'
+    with archive.open('xb') as stream, log.open('xb') as errors:
+        result = subprocess.run(['docker', 'run', '--rm', '--privileged', '--platform', 'linux/amd64', '-i', PINS['imager'], '-', '--tar-to-stdout'],
+                                input=profile.encode(), stdout=stream, stderr=errors, timeout=900)
+    archive.chmod(0o600); log.chmod(0o600)
+    if result.returncode:
+        raise ValueError(f'Private imager failed; inspect protected diagnostics in {log}')
+    artifacts = []
+    with tarfile.open(archive) as package:
+        for member in package:
+            suffix = '.iso' if args.format == 'iso' else '.vhd.zst'
+            if not member.isfile() or not member.name.endswith(suffix):
+                continue
+            if Path(member.name).name != member.name or member.size <= 0:
+                raise ValueError('Unsafe image archive member')
+            target = directory / member.name
+            with package.extractfile(member) as source, target.open('xb') as destination:
+                while block := source.read(1024 * 1024):
+                    destination.write(block)
+            target.chmod(0o600)
+            artifacts.append(target)
+    if len(artifacts) != 1:
+        raise ValueError('The upstream imager must produce exactly one image of the requested format')
+    archive.unlink()
+    print('Built a private Talos machine image; keep the entire output directory private')
+    return artifacts[0]
 
 
 def operator_directory():
@@ -102,14 +256,17 @@ def generate(args):
     if required_tag not in record['capabilities']['devices']['create'].get('tags', []):
         raise ValueError('The enrollment key must carry the tag for this node role')
     directory = output_directory(args.output)
+    config = directory / (args.role + '.yaml')
+    # Only the control-plane profile needs an operator administration context.
+    output_types = 'controlplane,talosconfig' if args.role == 'controlplane' else 'worker'
+    output = directory if args.role == 'controlplane' else config
     command = [talosctl(), 'gen', 'config', args.cluster, cluster_endpoint,
                '--with-secrets', str(secrets), '--talos-version', PINS['talos'],
                '--kubernetes-version', PINS['kubernetes'], '--with-docs=false', '--with-examples=false',
                '--with-cluster-discovery=false', '--install-disk', args.disk,
                '--install-image', f"factory.talos.dev/metal-installer/{PINS['schematic_id']}:{PINS['talos']}",
-               '--output-types', args.role + ',talosconfig', '--output', str(directory)]
+               '--output-types', output_types, '--output', str(output)]
     private_command(command, directory)
-    config = directory / (args.role + '.yaml')
     documents = list(yaml.safe_load_all(config.read_text()))
     # Avoid automatic endpoint selection outside the explicitly selected tailnet.
     documents = [doc for doc in documents if doc.get('kind') != 'KubePrismConfig']
@@ -126,9 +283,10 @@ def generate(args):
                                            'minSize': '2GiB', 'grow': True}})
     config.write_text(yaml.safe_dump_all(documents, sort_keys=False))
     config.chmod(0o600)
-    private_command([talosctl(), 'machineconfig', 'patch', str(config),
-                     '--patch', '@' + str(ROOT / 'talos/patches/common.yaml'),
-                     '--patch', '@' + str(ROOT / 'talos/patches' / (args.role + '.yaml')),
+    patches = ['--patch', '@' + str(ROOT / 'talos/patches/common.yaml')]
+    if args.role == 'controlplane':
+        patches += ['--patch', '@' + str(ROOT / 'talos/patches/controlplane.yaml')]
+    private_command([talosctl(), 'machineconfig', 'patch', str(config), *patches,
                      '--output', str(directory / 'machine.yaml')], directory)
     private_command([talosctl(), 'validate', '--strict', '--mode', 'metal',
                      '--config', str(directory / 'machine.yaml')], directory)
@@ -136,10 +294,6 @@ def generate(args):
     for file in directory.iterdir():
         if file.is_file():
             file.chmod(0o600)
-    private_write(directory / 'enrollment.json', json.dumps({
-        'node': args.name, 'role': args.role, 'tailscale_key_id': record['id'],
-        'expires': record['expires'], 'private': True,
-        'scope': 'Tailscale key expiry and one tailnet registration; not hardware-bound Talos enrollment'}, indent=2) + '\n')
     return directory / 'machine.yaml'
 
 

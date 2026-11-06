@@ -1,4 +1,0 @@
-apiVersion: v1alpha1
-kind: KubeNodeConfig
-labels:
-  guaranine.io/role: worker

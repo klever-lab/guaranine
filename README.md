@@ -7,7 +7,7 @@ One Talos control-plane VM on Azure, plus laptop workers anywhere. Kubernetes pl
 ## Setup
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Docker on your operator computer. Run `./guaranine init` once and fill in its private `operator.yaml`.
-2. Set up the one Azure control plane using the [Azure guide](infra/azure/README.md). Nothing is provisioned yet; this is still a one-time operator task.
+2. Set up the one Azure control plane using [SETUP.md](SETUP.md). Nothing is provisioned yet; this is still a one-time operator task.
 3. Save its Tailscale Kubernetes endpoint in `operator.yaml`. Prepare each laptop with one command:
 
    ```bash
@@ -16,11 +16,11 @@ One Talos control-plane VM on Azure, plus laptop workers anywhere. Kubernetes pl
 
 4. Install and boot that laptop's **private** ISO. Its embedded configuration handles installation and enrollment. Use Kubernetes manifests with CPU/RAM requests to run applications; Kubernetes chooses the worker.
 
-The preparation command creates a short-lived Tailscale key, generates and validates the node configuration, and runs the pinned upstream Talos imager. Its files stay in `~/.local/state/guaranine` by default. [Talos operations](talos/README.md) covers settings, bootstrap and worker removal.
+The preparation command creates a short-lived Tailscale key, generates and validates the node configuration, and runs the pinned upstream Talos imager. Its files stay in `~/.local/state/guaranine` by default. [SETUP.md](SETUP.md) covers settings, bootstrap and worker removal.
 
 ## What is ready
 
-The supported installer is a private ISO generated for each laptop with `./guaranine worker`. It contains that laptop's enrollment configuration and is built directly with upstream Talos tooling. See [enrollment limits](talos/README.md#enrollment-security-status).
+The supported installer is a private ISO generated for each laptop with `./guaranine worker`. It contains that laptop's enrollment configuration and is built directly with upstream Talos tooling. See [enrollment limits](SETUP.md#enrollment-security-status).
 
 The repository has configuration, Terraform and tested image tooling. **There is no deployed cluster yet.** The full 24-hour, single-use, hardware-bound enrollment policy and YubiKey boot authorization remain unfinished. Physical hardware and live Azure/Tailscale operation still need verification.
 

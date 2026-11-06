@@ -3,7 +3,8 @@ on:
   pull_request:
     paths:
       - 'talos/**'
-      - 'scripts/talos/**'
+      - 'scripts/guaranine.py'
+      - 'scripts/test-private-images.py'
       - 'guaranine'
       - 'requirements.txt'
       - '.github/workflows/private-images.yml'
@@ -11,7 +12,8 @@ on:
     branches: [main]
     paths:
       - 'talos/**'
-      - 'scripts/talos/**'
+      - 'scripts/guaranine.py'
+      - 'scripts/test-private-images.py'
       - 'guaranine'
       - 'requirements.txt'
       - '.github/workflows/private-images.yml'
@@ -35,4 +37,4 @@ jobs:
       - name: Install runtime dependency
         run: python3 -m pip install --requirement requirements.txt
       - name: Build disposable private ISO and Azure VHD with upstream imager
-        run: python3 scripts/talos/private-smoke.py
+        run: python3 scripts/test-private-images.py

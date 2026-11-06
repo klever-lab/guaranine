@@ -9,13 +9,12 @@ from unittest.mock import patch
 
 import yaml
 
-import config
-from common import private_write
+import guaranine as cli
 
 
 def disposable_key(token, tailnet, role, output):
     now = datetime.now(timezone.utc)
-    private_write(output, json.dumps({
+    cli.private_write(output, json.dumps({
         'id': 'disposable-ci', 'key': 'tskey-auth-DISPOSABLE-NO-TAILNET-ACCESS',
         'created': now.isoformat(), 'expires': (now + timedelta(hours=24)).isoformat(),
         'capabilities': {'devices': {'create': {'reusable': False, 'ephemeral': False,
@@ -27,13 +26,13 @@ def main():
     with tempfile.TemporaryDirectory(prefix='guaranine-disposable-private-images-') as scratch:
         directory = Path(scratch) / 'operator'
         with patch.dict(os.environ, GUARANINE_OPERATOR_DIR=str(directory)):
-            config.main(['init'])
+            cli.main(['init'])
             (directory / 'operator.yaml').write_text(yaml.safe_dump({
                 'tailnet': 'disposable.invalid', 'tailscale_api_token': 'DISPOSABLE',
                 'endpoint': 'https://100.64.0.1:6443'}))
-            with patch.object(config, 'mint', side_effect=disposable_key):
-                config.main(['worker', 'disposable-worker', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda'])
-                config.main(['controlplane', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda',
+            with patch.object(cli, 'mint', side_effect=disposable_key):
+                cli.main(['worker', 'disposable-worker', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda'])
+                cli.main(['controlplane', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda',
                              '--etcd-disk-selector', 'disk.dev_path == "/dev/vdb"'])
         print('Both operator commands built private images using upstream imager; no enrollment qualification claimed', flush=True)
 
