@@ -4,6 +4,8 @@ Use the native Kubernetes API, `kubectl`, and standard manifests to automaticall
 
 All laptops are in separate locations. Every private inter-host connection must use Tailscale. They do not share a LAN or have guaranteed sub-10 ms latency. Direct connections, relays, and temporary disconnections are expected.
 
+**Server authorization:** Do not add any extra server without the user's explicit authorization. The planned K3s server/control plane and laptop workers are the current architecture. A separate enrollment broker, authentication server, or custom coordinator requires explicit authorization, including when hosted as another service on the K3s VM or inside the cluster. Do not infer that authorization from a design discussion, existing Terraform code, or a request for automatic enrollment.
+
 Current architecture:
 
 - K3s with one control-plane/server node and local SQLite on a stable hub outside the replaceable worker pool; the laptops are agents/workers connected over Tailscale. Keep persistent storage outside the replaceable worker pool as well. The hub is infrastructure, not another disposable worker.
