@@ -152,6 +152,9 @@ def prepare(args):
             isinstance(settings.get(field), str) and settings[field].strip() and not settings[field].startswith('REPLACE_')
             for field in ('tailnet', 'tailscale_api_token')):
         raise ValueError('Fill in tailnet and tailscale_api_token in the private operator.yaml first')
+    token = settings['tailscale_api_token'].strip()
+    if not token.isascii() or any(character.isspace() for character in token):
+        raise ValueError('Use a single ASCII Tailscale API token without embedded whitespace')
     args.endpoint = 'https://127.0.0.1:6443' if args.role == 'controlplane' else settings.get('endpoint')
     args.bootstrap_controlplane = args.role == 'controlplane'
     check_node(args)
@@ -162,7 +165,7 @@ def prepare(args):
         raise ValueError(f'{node} already exists; reuse its image. Rebuilding requires revoking the old key and removing that node directory first.')
     output_directory(node)
     key = node / 'tailscale-key.json'
-    mint(settings['tailscale_api_token'], settings['tailnet'], args.role, key)
+    mint(token, settings['tailnet'], args.role, key)
     profile = generate(SimpleNamespace(
         name=args.name, role=args.role, cluster='guaranine', endpoint=args.endpoint,
         bootstrap_controlplane=args.bootstrap_controlplane, disk=args.disk,

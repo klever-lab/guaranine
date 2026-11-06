@@ -144,7 +144,8 @@ class MachineCommandTests(unittest.TestCase):
                     with self.assertRaises(ValueError): config.prepare(self.args)
                     setattr(self.args, field, original)
             original = (self.root / 'operator.yaml').read_text()
-            for content in ('tailnet: REPLACE_WITH_TAILNET\n', original.replace('100.64.0.7', '192.168.1.2')):
+            for content in ('tailnet: REPLACE_WITH_TAILNET\n', original.replace('100.64.0.7', '192.168.1.2'),
+                            original.replace('DISPOSABLE-OPERATOR-TOKEN', 'INVALID MULTILINE TOKEN')):
                 (self.root / 'operator.yaml').write_text(content)
                 with self.assertRaises(ValueError): config.prepare(self.args)
             (self.root / 'operator.yaml').write_text(original)
