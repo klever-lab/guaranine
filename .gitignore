@@ -4,3 +4,22 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Operator data belongs outside the checkout; these are a second line of defense.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+*.plan
+*.plan.json
+*.tfvars
+*.tfvars.json
+*.backend.hcl
+backend_override.tf
+crash.log
+crash.*.log
+*.pem
+*.key
+id_rsa*
+id_ed25519*

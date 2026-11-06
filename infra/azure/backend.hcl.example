@@ -1,0 +1,6 @@
+# Copy outside the checkout. These are identifiers, never keys/SAS/credentials.
+resource_group_name  = "guaranine-tfstate-rg"
+storage_account_name = "guaranineREPLACE"
+container_name       = "tfstate"
+# Separate key for the state root: state/bootstrap.tfstate
+key = "coordinator/terraform.tfstate"

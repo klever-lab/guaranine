@@ -1,4 +1,4 @@
-# Documentation validation and its dependencies, pinned for Python 3.12.
+# Documentation and infrastructure validation dependencies, pinned for Python 3.12.
 application-file-scanner==0.6.4
 application-properties==0.9.3
 columnar==1.4.1

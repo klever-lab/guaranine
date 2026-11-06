@@ -4,7 +4,7 @@ K3s for a fleet of old laptops (2–8 GB RAM each) in different locations. Use `
 
 **Every inter-host connection uses Tailscale. No shared LAN or sub-10 ms latency between laptops is assumed.**
 
-The initial implementation is the basic **K3s** installation, Tailscale networking, worker enrollment, verification, and maintenance. A custom API and LXC are excluded. KubeVirt, portable persistent storage, public domains, and full monitoring are later additions. The infrastructure is still a design and has not been implemented or deployed.
+The initial implementation is the basic **K3s** installation, Tailscale networking, worker enrollment, verification, and maintenance. A custom API and LXC are excluded. KubeVirt, portable persistent storage, public domains, and full monitoring are later additions. [Azure coordinator Terraform](infra/azure/README.md) is implemented for offline review and validation; nothing has been provisioned, and host/K3s configuration is still pending.
 
 ## Remote development
 
@@ -19,13 +19,13 @@ python3 -m pip install --requirement requirements-dev.txt
 bash scripts/validate.sh
 ```
 
-The current check lints the repository's Markdown, which is its only implementation content today. When adding Ansible, scripts, Kubernetes manifests, or an ISO build, extend validation to check and exercise those components. Passing documentation lint does not validate an undeployed cluster or an installer image.
+The shared entry point reuses Terraform from `PATH` when it matches [.terraform-version](.terraform-version); otherwise it downloads that exact version into temporary storage and verifies the archive against committed SHA-256 checksums. No system installation is required on Linux/macOS AMD64/ARM64. It lints Markdown, tests tool bootstrap, parses the OS bootstrap YAML, and runs Terraform formatting, backend-disabled initialization, validation, and mocked plan/lifecycle tests for both Azure roots. Downloads require access to HashiCorp releases and the provider registry; no Azure credentials or resources are needed. CI and Symphony run the same entry point. Future Ansible, Kubernetes manifests, and installer work must extend validation for those components. Passing offline checks does not validate a deployed cluster.
 
 ## Infrastructure as code
 
 Terraform owns the Azure resources and state backend. Ansible owns repeatable host and K3s configuration. Kubernetes manifests own deployed workloads. Version configuration and pin dependencies in this repository so environments can be recreated without portal-only changes. Live provisioning uses the documented operator credentials and preflight; repository CI validates configuration without creating Azure resources.
 
-The first implementation issue is [KIAN-972: Manage the Azure K3s coordinator VM with Terraform](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-972/manage-the-azure-k3s-coordinator-vm-with-terraform).
+The first implementation issue is [KIAN-972: Manage the Azure K3s coordinator VM with Terraform](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-972/manage-the-azure-k3s-coordinator-vm-with-terraform). See the [Azure operator guide](infra/azure/README.md) for student-subscription preflight, Entra ID state bootstrap/migration, plan/apply, Ansible handoff, reruns, teardown, and recovery. Live provisioning remains an operator action after preflight; CI and Symphony tasks use offline tests only.
 
 ## Controller choice
 
