@@ -7,13 +7,7 @@ mock_provider "azurerm" {
 variables {
   subscription_id      = "00000000-0000-0000-0000-000000000000"
   admin_ssh_public_key = file("tests/fixtures/operator.pub")
-  image = {
-    publisher = "Canonical"
-    offer     = "ubuntu-24_04-lts"
-    sku       = "server"
-    # Mock only; no claim that this image exists in any Azure region.
-    version = "24.04.202610210"
-  }
+  talos_image_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/talos-v1-14-5-fixture"
 }
 
 run "default_sizing_and_os" {
@@ -24,7 +18,7 @@ run "default_sizing_and_os" {
       azurerm_linux_virtual_machine.coordinator.size == "Standard_B2ls_v2" &&
       azurerm_linux_virtual_machine.coordinator.os_disk[0].disk_size_gb == 32 &&
       azurerm_linux_virtual_machine.coordinator.os_disk[0].storage_account_type == "StandardSSD_LRS" &&
-      azurerm_linux_virtual_machine.coordinator.source_image_reference[0].version == var.image.version
+      azurerm_linux_virtual_machine.coordinator.source_image_id == var.talos_image_id
     )
     error_message = "Defaults must remain the exact 2-vCPU / 4-GiB SKU, SSD OS disk and pinned image."
   }
@@ -32,13 +26,14 @@ run "default_sizing_and_os" {
   assert {
     condition = (
       azurerm_linux_virtual_machine.coordinator.disable_password_authentication &&
-      azurerm_linux_virtual_machine.coordinator.secure_boot_enabled &&
-      azurerm_linux_virtual_machine.coordinator.vtpm_enabled &&
-      azurerm_linux_virtual_machine.coordinator.provision_vm_agent &&
+      !azurerm_linux_virtual_machine.coordinator.secure_boot_enabled &&
+      !azurerm_linux_virtual_machine.coordinator.vtpm_enabled &&
+      !azurerm_linux_virtual_machine.coordinator.provision_vm_agent &&
+      !azurerm_linux_virtual_machine.coordinator.allow_extension_operations &&
       azurerm_linux_virtual_machine.coordinator.admin_password == null &&
-      base64decode(azurerm_linux_virtual_machine.coordinator.custom_data) == file("cloud-init.yaml")
+      azurerm_linux_virtual_machine.coordinator.custom_data == null
     )
-    error_message = "Use the versioned secret-free OS baseline and key-only administration with a VM-agent handoff."
+    error_message = "Talos must have no cloud-init, VM agent, extension operations, or credentials in Terraform custom_data."
   }
 }
 
@@ -101,14 +96,9 @@ run "explicit_configuration" {
     vm_size            = "Standard_B4ls_v2"
     os_disk_size_gib   = 64
     data_disk_size_gib = 128
-    admin_username     = "operator"
-    image = {
-      publisher = "Canonical"
-      offer     = "ubuntu-22_04-lts"
-      sku       = "server"
-      version   = "22.04.202610210"
-    }
-    tags = { cost_center = "students", project = "wrong", managed_by = "wrong" }
+
+    talos_image_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/talos-v1-14-5-fixture-alternate"
+    tags           = { cost_center = "students", project = "wrong", managed_by = "wrong" }
   }
 
   assert {
@@ -117,10 +107,8 @@ run "explicit_configuration" {
       azurerm_linux_virtual_machine.coordinator.size == "Standard_B4ls_v2" &&
       azurerm_linux_virtual_machine.coordinator.os_disk[0].disk_size_gb == 64 &&
       azurerm_managed_disk.coordinator_data.disk_size_gb == 128 &&
-      azurerm_linux_virtual_machine.coordinator.source_image_reference[0].offer == "ubuntu-22_04-lts" &&
-      azurerm_linux_virtual_machine.coordinator.source_image_reference[0].version == "22.04.202610210" &&
-      output.ansible_handoff.admin_username == "operator" &&
-      output.ansible_handoff.transport == "tailscale" &&
+      azurerm_linux_virtual_machine.coordinator.source_image_id == var.talos_image_id &&
+      output.talos_handoff.transport == "tailscale" &&
       azurerm_resource_group.coordinator.tags.project == "guaranine" &&
       azurerm_resource_group.coordinator.tags.managed_by == "terraform" &&
       azurerm_resource_group.coordinator.tags.cost_center == "students"
@@ -132,9 +120,9 @@ run "explicit_configuration" {
 run "reject_latest_image" {
   command = plan
   variables {
-    image = { publisher = "Canonical", offer = "ubuntu-24_04-lts", sku = "server", version = "latest" }
+    talos_image_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/galleries/talos/images/node/versions/latest"
   }
-  expect_failures = [var.image]
+  expect_failures = [var.talos_image_id]
 }
 
 run "reject_small_os_disk" {

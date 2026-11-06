@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import tempfile
 
-import yaml
 
 from terraform_tool import ensure_terraform
 
@@ -32,7 +31,18 @@ def terraform(root, env, *arguments, check=True):
         check=False,
     )
     if check and result.returncode:
-        raise SystemExit(result.stdout)
+        diagnostics = []
+        for line in result.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("type") == "diagnostic":
+                diagnostic = event["diagnostic"]
+                diagnostics.append(diagnostic.get("summary", "Terraform failure") + ": " + diagnostic.get("detail", ""))
+        # -verbose JSON includes the complete provider schema in each plan.
+        # Print actual diagnostics instead of megabytes of unrelated schema.
+        raise SystemExit("\n".join(diagnostics) if diagnostics else result.stdout[-4000:])
     return result
 
 
@@ -46,7 +56,7 @@ def copy_configuration(source, destination):
             continue
         if not (
             path.name.endswith((".tf", ".tftest.hcl", ".tfmock.hcl", ".pub"))
-            or path.name in (".terraform.lock.hcl", "cloud-init.yaml", "local-backend.tf.example")
+            or path.name in (".terraform.lock.hcl", "local-backend.tf.example")
         ):
             continue
         target = destination / relative
@@ -74,8 +84,8 @@ def check_lifecycle_plans(events, name):
         and all(change["actions"] == ["no-op"] for change in unchanged["output_changes"].values()),
         f"An unchanged {name} deployment must produce no resource or output changes",
     )
-    if name == "state":
-        print("  unchanged state infrastructure: no changes", flush=True)
+    if name in {"state", "image"}:
+        print(f"  unchanged {name} infrastructure: no changes", flush=True)
         return
     replacement = {
         change["address"]: change["change"]["actions"]
@@ -113,25 +123,6 @@ def check_disk_guard(root, env):
     print("  persistent disk replacement: refused by Terraform prevent_destroy", flush=True)
 
 
-def check_cloud_init():
-    configuration = yaml.safe_load(
-        (REPOSITORY / "infra/azure/coordinator/cloud-init.yaml").read_text()
-    )
-    require(
-        configuration["ssh_pwauth"] is False and configuration["disable_root"] is True,
-        "cloud-init must disable password and root SSH access",
-    )
-    ssh = next(
-        entry for entry in configuration["write_files"]
-        if entry["path"] == "/etc/ssh/sshd_config.d/00-guaranine.conf"
-    )
-    require(
-        {"PasswordAuthentication no", "KbdInteractiveAuthentication no", "PermitRootLogin no"}
-        <= set(ssh["content"].splitlines()),
-        "The OS bootstrap must enforce key-only non-root SSH",
-    )
-    print("cloud-init: YAML and SSH baseline valid", flush=True)
-
 
 def main():
     expected_version = (REPOSITORY / ".terraform-version").read_text().strip()
@@ -142,7 +133,6 @@ def main():
         if not key.startswith(("ARM_", "AZURE_", "TF_"))
     }
     env.update(TF_IN_AUTOMATION="1", CHECKPOINT_DISABLE="1")
-    check_cloud_init()
     with tempfile.TemporaryDirectory(prefix="guaranine-terraform-") as directory:
         scratch = Path(directory)
         env["GUARANINE_TERRAFORM_BINARY"] = str(ensure_terraform(expected_version, scratch, env))
@@ -154,7 +144,7 @@ def main():
             TF_PLUGIN_CACHE_DIR=str(scratch / "plugins"),
             TF_CLI_CONFIG_FILE=str(scratch / "terraform.rc"),
         )
-        for name in ("state", "coordinator"):
+        for name in ("state", "image", "coordinator"):
             print(f"Terraform {name}: format, init, validate and mock tests", flush=True)
             root = scratch / name
             copy_configuration(REPOSITORY / "infra/azure" / name, root)
@@ -170,7 +160,7 @@ def main():
             check_lifecycle_plans(events, name)
             if name == "coordinator":
                 check_disk_guard(root, env)
-            else:
+            elif name == "state":
                 # Verify that the documented first-run override selects a local
                 # backend, with all state/cache paths outside the source tree.
                 shutil.copyfile(root / "local-backend.tf.example", root / "backend_override.tf")

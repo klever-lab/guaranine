@@ -36,37 +36,21 @@ variable "vm_size" {
   }
 }
 
-variable "image" {
-  description = "Exact cloud-init-capable Linux marketplace image; select and verify a version during preflight."
-  type = object({
-    publisher = string
-    offer     = string
-    sku       = string
-    version   = string
-  })
+variable "talos_image_id" {
+  description = "Exact private Talos Azure managed-image or gallery-version ID. Machine configuration is embedded locally in its VHD, never Terraform custom_data."
+  type        = string
 
   validation {
     condition = (
-      alltrue([for value in [var.image.publisher, var.image.offer, var.image.sku] : length(trimspace(value)) > 0]) &&
-      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.image.version))
+      can(regex("^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[^/]+/providers/Microsoft.Compute/(images/[^/]+|galleries/[^/]+/images/[^/]+/versions/[0-9]+\\.[0-9]+\\.[0-9]+)$", var.talos_image_id)) &&
+      !can(regex("(?i)(^|/)latest($|/)", var.talos_image_id))
     )
-    error_message = "Use an explicit publisher/offer/SKU and numeric major.minor.patch version; latest is forbidden."
-  }
-}
-
-variable "admin_username" {
-  description = "Linux account used by the following Ansible task over Tailscale."
-  type        = string
-  default     = "guaranine"
-
-  validation {
-    condition     = can(regex("^[a-z][a-z0-9_-]{0,30}$", var.admin_username)) && var.admin_username != "root"
-    error_message = "Use a non-root Linux account name, up to 31 characters."
+    error_message = "Supply a private managed-image ID or explicit gallery image version, never a marketplace image, URL, or latest alias."
   }
 }
 
 variable "admin_ssh_public_key" {
-  description = "Operator's public SSH key only. Keep its private counterpart outside Terraform."
+  description = "Public SSH metadata required by Azure's Linux VM API. Talos does not use it or run SSH; private keys are forbidden."
   type        = string
 
   validation {
@@ -87,7 +71,7 @@ variable "os_disk_size_gib" {
 }
 
 variable "data_disk_size_gib" {
-  description = "Retained SSD capacity in GiB for future local SQLite data; only grow existing disks."
+  description = "Retained SSD capacity in GiB for Talos ETCD data; only grow existing disks."
   type        = number
   default     = 64
 

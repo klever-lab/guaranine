@@ -1,0 +1,38 @@
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+nodeIP:
+  validSubnets:
+    - 100.64.0.0/10
+---
+apiVersion: v1alpha1
+kind: KubeletConfig
+extraArgs:
+  system-reserved: cpu=100m,memory=256Mi,ephemeral-storage=1Gi
+  kube-reserved: cpu=100m,memory=256Mi,ephemeral-storage=1Gi
+---
+apiVersion: v1alpha1
+kind: NetworkDefaultActionConfig
+ingress: block
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: talos-and-kubernetes
+portSelector:
+  ports:
+    - 50000
+    - 50001
+    - 6443
+    - 10250
+  protocol: tcp
+ingress:
+  - subnet: 100.64.0.0/10
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: flannel-over-tailscale
+portSelector:
+  ports:
+    - 4789
+  protocol: udp
+ingress:
+  - subnet: 100.64.0.0/10

@@ -2,11 +2,7 @@
 subscription_id = "00000000-0000-0000-0000-000000000000"
 location        = "eastus"
 vm_size         = "Standard_B2ls_v2"
-image = {
-  publisher = "Canonical"
-  offer     = "ubuntu-24_04-lts"
-  sku       = "server"
-  version   = "REPLACE_WITH_EXACT_REGIONAL_VERSION"
-}
+# From the private Talos image root, after upload and image publication.
+talos_image_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/guaranine-talos-REPLACE-WITH-IMAGE-ID"
 os_disk_size_gib   = 32
 data_disk_size_gib = 64

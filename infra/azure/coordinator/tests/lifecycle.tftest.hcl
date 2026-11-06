@@ -5,12 +5,7 @@ mock_provider "azurerm" {
 variables {
   subscription_id      = "00000000-0000-0000-0000-000000000000"
   admin_ssh_public_key = file("tests/fixtures/operator.pub")
-  image = {
-    publisher = "Canonical"
-    offer     = "ubuntu-24_04-lts"
-    sku       = "server"
-    version   = "24.04.202610210"
-  }
+  talos_image_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/talos-v1-14-5-fixture"
 }
 
 # Mocked apply seeds Terraform's in-memory state without Azure calls.
@@ -31,8 +26,8 @@ run "replace_vm_keep_data" {
 
   assert {
     condition = (
-      azurerm_managed_disk.coordinator_data.id == run.seed_mock_state.ansible_handoff.data_disk_id &&
-      azurerm_virtual_machine_data_disk_attachment.coordinator_data.managed_disk_id == run.seed_mock_state.ansible_handoff.data_disk_id
+      azurerm_managed_disk.coordinator_data.id == run.seed_mock_state.talos_handoff.data_disk_id &&
+      azurerm_virtual_machine_data_disk_attachment.coordinator_data.managed_disk_id == run.seed_mock_state.talos_handoff.data_disk_id
     )
     error_message = "Replacing the coordinator VM must reuse the existing persistent data disk."
   }

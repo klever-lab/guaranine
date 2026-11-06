@@ -1,4 +1,4 @@
-"""Release authorization follows merged main history and exact-head CI evidence."""
+"""Release authorization accepts direct main pushes with exact-commit CI evidence."""
 
 import copy
 import json
@@ -25,12 +25,8 @@ class ReleaseRefTests(unittest.TestCase):
         self.git('add', 'source')
         self.git('commit', '-m', 'Accepted source')
         self.commit = self.git('rev-parse', 'HEAD').strip()
-        self.head = 'a' * 40
+        self.head = self.commit
         self.git('update-ref', 'refs/remotes/origin/main', self.commit)
-        self.pulls = [[{'number': 7, 'merged_at': '2026-11-06T00:00:00Z',
-                       'merge_commit_sha': self.commit,
-                       'base': {'ref': 'main', 'repo': {'full_name': REPOSITORY}},
-                       'head': {'sha': self.head}}]]
         self.checks = [{'check_runs': [
             {'id': index, 'name': name, 'head_sha': self.head, 'app': {'slug': 'github-actions'},
              'status': 'completed', 'conclusion': 'success'}
@@ -57,21 +53,19 @@ print(json.dumps(fixture[url]))
 
     def guard(self, ref='refs/tags/worker-iso-v0.1.0'):
         fixture = {
-            f'repos/{REPOSITORY}/commits/{self.commit}/pulls': self.pulls,
             f'repos/{REPOSITORY}/commits/{self.head}/check-runs?filter=all&per_page=100': self.checks,
         }
         (self.directory / 'responses.json').write_text(json.dumps(fixture))
         environment = {**os.environ, 'PATH': str(self.bin) + os.pathsep + os.environ['PATH'],
                        'RELEASE_REF': ref, 'GH_REPO': REPOSITORY, 'GH_TOKEN': 'disposable-fixture',
                        'RELEASE_FIXTURE': str(self.directory)}
-        return subprocess.run(['bash', str(ROOT / 'scripts/iso/check-release-ref.sh')],
+        return subprocess.run(['bash', str(ROOT / 'scripts/talos/check-release-ref.sh')],
                               cwd=self.directory, env=environment, capture_output=True, text=True)
 
-    def test_merged_pr_with_passing_exact_head_ci_needs_no_approval_or_review_api(self):
+    def test_direct_main_commit_with_passing_ci_needs_no_pr_or_review_api(self):
         result = self.guard()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.directory / 'calls').read_text().splitlines(), [
-            f'repos/{REPOSITORY}/commits/{self.commit}/pulls',
             f'repos/{REPOSITORY}/commits/{self.head}/check-runs?filter=all&per_page=100'])
 
     def test_missing_pending_failed_foreign_or_untrusted_checks_cannot_release(self):
@@ -107,24 +101,6 @@ print(json.dumps(fixture[url]))
         # The release workflow itself still requires its exact-image build/test.
         self.checks[0]['check_runs'] = self.checks[0]['check_runs'][:1]
         self.assertEqual(self.guard().returncode, 0)
-
-    def test_no_merged_main_pr_or_wrong_repository_cannot_release(self):
-        for mutation in ('missing', 'open', 'branch', 'commit', 'repository'):
-            with self.subTest(mutation=mutation):
-                original = copy.deepcopy(self.pulls)
-                pull = self.pulls[0][0]
-                if mutation == 'missing':
-                    self.pulls = [[]]
-                elif mutation == 'open':
-                    pull['merged_at'] = None
-                elif mutation == 'branch':
-                    pull['base']['ref'] = 'unreviewed'
-                elif mutation == 'commit':
-                    pull['merge_commit_sha'] = 'c' * 40
-                else:
-                    pull['base']['repo']['full_name'] = 'foreign/repository'
-                self.assertNotEqual(self.guard().returncode, 0)
-                self.pulls = original
 
     def test_unversioned_refs_and_commits_outside_main_fail_before_network_access(self):
         for ref in ('refs/heads/main', 'refs/tags/preview', 'refs/tags/worker-iso-v1.2'):

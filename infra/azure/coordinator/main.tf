@@ -99,31 +99,27 @@ resource "azurerm_network_interface" "coordinator" {
 }
 
 resource "azurerm_linux_virtual_machine" "coordinator" {
-  name                            = "${var.name_prefix}-coordinator"
-  computer_name                   = "${var.name_prefix}-coordinator"
-  resource_group_name             = azurerm_resource_group.coordinator.name
-  location                        = azurerm_resource_group.coordinator.location
-  size                            = var.vm_size
-  admin_username                  = var.admin_username
+  name                = "${var.name_prefix}-coordinator"
+  computer_name       = "${var.name_prefix}-coordinator"
+  resource_group_name = azurerm_resource_group.coordinator.name
+  location            = azurerm_resource_group.coordinator.location
+  size                = var.vm_size
+  # Azure requires this metadata; Talos has no user accounts or SSH daemon.
+  admin_username                  = "talos"
   disable_password_authentication = true
   network_interface_ids           = [azurerm_network_interface.coordinator.id]
-  provision_vm_agent              = true
-  allow_extension_operations      = true
-  secure_boot_enabled             = true
-  vtpm_enabled                    = true
-  custom_data                     = filebase64("${path.module}/cloud-init.yaml")
-  tags                            = local.tags
+  provision_vm_agent              = false
+  allow_extension_operations      = false
+  # The pinned upstream Azure VHD uses the ordinary, unsigned boot path.
+  # A custom Secure Boot trust setup needs separate qualification.
+  secure_boot_enabled = false
+  vtpm_enabled        = false
+  source_image_id     = var.talos_image_id
+  tags                = local.tags
 
   admin_ssh_key {
-    username   = var.admin_username
+    username   = "talos"
     public_key = trimspace(var.admin_ssh_public_key)
-  }
-
-  source_image_reference {
-    publisher = var.image.publisher
-    offer     = var.image.offer
-    sku       = var.image.sku
-    version   = var.image.version
   }
 
   os_disk {

@@ -1,8 +1,9 @@
-name: Laptop installer ISO
+name: Talos laptop ISO
 on:
   pull_request:
     paths:
       - 'images/**'
+      - 'talos/**'
       - 'provision/**'
       - 'scripts/**'
       - 'requirements-dev.txt'
@@ -22,20 +23,19 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: read
       checks: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Require a versioned tag on merged main history with passing CI
+      - name: Require a versioned tag on main history with passing CI
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REF: ${{ github.ref }}
           GH_REPO: ${{ github.repository }}
-        run: bash scripts/iso/check-release-ref.sh
+        run: bash scripts/talos/check-release-ref.sh
   build-test:
     needs: trust
     runs-on: ubuntu-24.04
@@ -51,23 +51,23 @@ jobs:
         run: |
           python3 -m pip install --requirement requirements-dev.txt
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
           sudo chmod a+rw /dev/kvm
       - name: Shared repository validation
         run: bash scripts/validate.sh
-      - name: Build the pinned public installer
+      - name: Build disposable private ISO and Azure VHD with upstream imager
+        run: python3 scripts/talos/private-smoke.py
+      - name: Fetch the pinned public Talos ISO
         run: bash images/laptop/build.sh "$RUNNER_TEMP/iso"
-      - name: Build disposable test coordinator
-        run: docker build --tag guaranine-iso-test --file scripts/iso/Test.Dockerfile scripts/iso
-      - name: Required actual-image BIOS and UEFI enrollment tests
-        run: python3 scripts/iso/qemu-test.py "$RUNNER_TEMP/iso/guaranine-worker-amd64.iso" --output "$RUNNER_TEMP/iso/qemu-results.json"
-      - name: Bind passing test and package evidence to the exact ISO
-        run: python3 scripts/iso/finalize.py "$RUNNER_TEMP/iso"
+      - name: Required actual-image BIOS and UEFI boot tests
+        run: python3 scripts/talos/qemu-test.py "$RUNNER_TEMP/iso"
+      - name: Bind passing boot evidence to the exact public ISO
+        run: python3 scripts/talos/images.py finalize "$RUNNER_TEMP/iso"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tested-worker-iso
           path: |
-            ${{ runner.temp }}/iso/guaranine-worker-amd64.iso
+            ${{ runner.temp }}/iso/guaranine-talos-amd64.iso
             ${{ runner.temp }}/iso/SHA256SUMS
             ${{ runner.temp }}/iso/build.json
             ${{ runner.temp }}/iso/qemu-results.json
@@ -95,4 +95,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
           EXPECTED_COMMIT: ${{ github.sha }}
-        run: python3 scripts/iso/publish-release.py "$RUNNER_TEMP/iso"
+        run: python3 scripts/talos/publish-release.py "$RUNNER_TEMP/iso"
