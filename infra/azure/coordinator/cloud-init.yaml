@@ -1,0 +1,24 @@
+#cloud-config
+# Terraform owns only this secret-free OS baseline. Ansible owns packages,
+# Tailscale enrollment, persistent-disk initialization/mounting and K3s.
+ssh_pwauth: false
+disable_root: true
+package_update: false
+package_upgrade: false
+write_files:
+  - path: /etc/ssh/sshd_config.d/00-guaranine.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+  - path: /etc/guaranine-bootstrap
+    owner: root:root
+    permissions: '0644'
+    content: |
+      Infrastructure only; await the versioned Ansible enrollment profile.
+      Never format an existing filesystem on the persistent disk at LUN 0.
+      All SSH and cluster endpoints must use Tailscale addresses.
+runcmd:
+  - [sh, -c, 'sshd -t && systemctl reload ssh']

@@ -1,0 +1,5 @@
+# Copy to backend_override.tf only for the FIRST bootstrap, then remove it to
+# migrate to Azure Blob. Set the absolute local state path through init.
+terraform {
+  backend "local" {}
+}
