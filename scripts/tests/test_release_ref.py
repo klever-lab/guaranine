@@ -31,6 +31,7 @@ class ReleaseRefTests(unittest.TestCase):
             {'id': index, 'name': name, 'head_sha': self.head, 'app': {'slug': 'github-actions'},
              'status': 'completed', 'conclusion': 'success'}
             for index, name in enumerate(('Clusterfork validation', 'trust', 'build-test'), start=10)]}]
+        self.responses = None
         self.bin = self.directory / 'bin'
         self.bin.mkdir()
         stub = self.bin / 'gh'
@@ -43,9 +44,17 @@ with (root / 'calls').open('a') as stream:
 fixture = json.loads((root / 'responses.json').read_text())
 if url not in fixture:
     raise SystemExit('Unexpected release API operation')
-print(json.dumps(fixture[url]))
+count = len((root / 'calls').read_text().splitlines())
+responses = fixture[url]
+print(json.dumps(responses[min(count - 1, len(responses) - 1)]))
 ''')
         stub.chmod(0o755)
+        sleep = self.bin / 'sleep'
+        sleep.write_text(f'#!{sys.executable}\n' + '''import os, pathlib, sys
+with (pathlib.Path(os.environ['RELEASE_FIXTURE']) / 'sleeps').open('a') as stream:
+    stream.write(' '.join(sys.argv[1:]) + '\\n')
+''')
+        sleep.chmod(0o755)
 
     def git(self, *arguments):
         return subprocess.check_output(['git', *arguments], cwd=self.directory,
@@ -53,7 +62,8 @@ print(json.dumps(fixture[url]))
 
     def guard(self, ref='refs/tags/worker-iso-v0.1.0'):
         fixture = {
-            f'repos/{REPOSITORY}/commits/{self.head}/check-runs?filter=all&per_page=100': self.checks,
+            f'repos/{REPOSITORY}/commits/{self.head}/check-runs?filter=all&per_page=100':
+                self.responses if self.responses is not None else [self.checks],
         }
         (self.directory / 'responses.json').write_text(json.dumps(fixture))
         environment = {**os.environ, 'PATH': str(self.bin) + os.pathsep + os.environ['PATH'],
@@ -95,6 +105,37 @@ print(json.dumps(fixture[url]))
         latest['conclusion'] = 'success'
         self.checks[0]['check_runs'][0]['conclusion'] = 'failure'
         self.assertEqual(self.guard().returncode, 0)
+
+    def test_waits_for_new_tag_validation_instead_of_accepting_an_older_success(self):
+        queued = copy.deepcopy(self.checks)
+        queued.append({'check_runs': [{**queued[0]['check_runs'][0], 'id': 100,
+                                      'status': 'queued', 'conclusion': None}]})
+        running = copy.deepcopy(queued)
+        running[-1]['check_runs'][0]['status'] = 'in_progress'
+        passed = copy.deepcopy(running)
+        passed[-1]['check_runs'][0].update(status='completed', conclusion='success')
+        self.responses = [queued, running, passed]
+        result = self.guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len((self.directory / 'calls').read_text().splitlines()), 3)
+        self.assertEqual((self.directory / 'sleeps').read_text().splitlines(), ['10', '10'])
+
+    def test_waiting_never_bypasses_a_failed_result_or_an_unfinished_check(self):
+        pending = copy.deepcopy(self.checks)
+        pending[0]['check_runs'][0].update(status='in_progress', conclusion=None)
+        failed = copy.deepcopy(pending)
+        failed[0]['check_runs'][0].update(status='completed', conclusion='failure')
+        self.responses = [pending, failed]
+        self.assertNotEqual(self.guard().returncode, 0)
+        self.assertEqual(len((self.directory / 'calls').read_text().splitlines()), 2)
+        (self.directory / 'calls').unlink()
+        (self.directory / 'sleeps').unlink()
+        self.responses = [pending]
+        result = self.guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Timed out', result.stderr)
+        self.assertEqual(len((self.directory / 'calls').read_text().splitlines()), 25)
+        self.assertEqual(len((self.directory / 'sleeps').read_text().splitlines()), 24)
 
     def test_prior_pr_image_checks_are_not_required_to_authorize_a_fresh_tag_build(self):
         # Documentation-only PRs need not trigger the path-filtered ISO workflow.
