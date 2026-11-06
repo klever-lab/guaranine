@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate private Talos machine configuration with upstream talosctl."""
+"""Prepare one machine using the pinned upstream Talos tools."""
 import argparse
 from datetime import datetime, timezone
 import ipaddress
@@ -7,12 +7,21 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
+import sys
+from types import SimpleNamespace
 import urllib.parse
 import urllib.request
 
 import yaml
 
 from common import ROOT, PINS, TAILNET, external, protected, output_directory, private_command, private_write, talosctl
+from images import private_image
+
+
+def operator_directory():
+    return external(os.environ.get('GUARANINE_OPERATOR_DIR',
+                                  Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'guaranine'))
 
 
 def endpoint(value, role, bootstrap=False):
@@ -44,36 +53,36 @@ def auth_record(path, now=None):
     return record
 
 
-def mint(args):
+def mint(token, tailnet, role, output):
     """Existing Tailscale API only; the operator credential never enters an image."""
-    token = protected(args.api_token).read_text().strip()
-    tag = 'tag:guaranine-' + args.role
+    tag = 'tag:guaranine-' + role
     request = urllib.request.Request(
-        'https://api.tailscale.com/api/v2/tailnet/' + urllib.parse.quote(args.tailnet, safe='') + '/keys',
+        'https://api.tailscale.com/api/v2/tailnet/' + urllib.parse.quote(tailnet, safe='') + '/keys',
         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
         data=json.dumps({'capabilities': {'devices': {'create': {
             'reusable': False, 'ephemeral': False, 'preauthorized': True, 'tags': [tag]}}},
-            'expirySeconds': 86400, 'description': 'Guaranine ' + args.role + ' enrollment'}).encode())
+            'expirySeconds': 86400, 'description': 'Guaranine ' + role + ' enrollment'}).encode())
     # A POST is never automatically repeated after an ambiguous transport failure.
     with urllib.request.urlopen(request, timeout=30) as response:
         record = json.load(response)
-    target = external(args.output)
-    if not target.parent.is_dir() or target.exists():
-        raise ValueError('Use a new output file inside an existing private operator directory')
-    private_write(target, json.dumps(record, indent=2) + '\n')
-    auth_record(target)
-    print('Created a protected 24-hour, single-use enrollment key; no credential printed')
+    private_write(output, json.dumps(record, indent=2) + '\n')
+    auth_record(output)
 
 
-def initialize(args):
-    directory = output_directory(args.output)
+def initialize(directory):
+    directory = output_directory(directory)
     private_command([talosctl(), 'gen', 'secrets', '--talos-version', PINS['talos'],
                      '--output-file', str(directory / 'secrets.yaml')], directory)
     (directory / 'secrets.yaml').chmod(0o600)
-    print('Created a new private Talos secrets bundle; preserve it for this cluster')
+    private_write(directory / 'operator.yaml', yaml.safe_dump({
+        'tailnet': 'REPLACE_WITH_YOUR_TAILNET',
+        'tailscale_api_token': 'REPLACE_WITH_YOUR_TAILSCALE_API_TOKEN',
+        'endpoint': None,
+    }, sort_keys=False))
+    print(f'Created cluster secrets. Edit {directory / "operator.yaml"}; keep this directory private and backed up.')
 
 
-def generate(args):
+def check_node(args):
     if not re.fullmatch(r'[a-z][a-z0-9-]{1,61}[a-z0-9]', args.name):
         raise ValueError('Use a unique lowercase DNS label with 3–63 characters')
     if not re.fullmatch(r'/dev/(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme[0-9]+n[0-9]+)', args.disk) or args.confirm_install_disk != args.disk:
@@ -82,7 +91,11 @@ def generate(args):
         raise ValueError('The control plane requires an explicit retained data-disk selector for ETCD')
     if args.role == 'worker' and (args.etcd_disk_selector or args.bootstrap_controlplane):
         raise ValueError('Workers cannot run etcd or bootstrap the control plane')
-    cluster_endpoint = endpoint(args.endpoint, args.role, args.bootstrap_controlplane)
+    return endpoint(args.endpoint, args.role, args.bootstrap_controlplane)
+
+
+def generate(args):
+    cluster_endpoint = check_node(args)
     secrets = protected(args.secrets)
     record = auth_record(args.tailscale_key)
     required_tag = 'tag:guaranine-' + args.role
@@ -119,6 +132,7 @@ def generate(args):
                      '--output', str(directory / 'machine.yaml')], directory)
     private_command([talosctl(), 'validate', '--strict', '--mode', 'metal',
                      '--config', str(directory / 'machine.yaml')], directory)
+    config.unlink()
     for file in directory.iterdir():
         if file.is_file():
             file.chmod(0o600)
@@ -126,34 +140,69 @@ def generate(args):
         'node': args.name, 'role': args.role, 'tailscale_key_id': record['id'],
         'expires': record['expires'], 'private': True,
         'scope': 'Tailscale key expiry and one tailnet registration; not hardware-bound Talos enrollment'}, indent=2) + '\n')
-    print('Generated and schema-validated private machine configuration; never publish this directory')
+    return directory / 'machine.yaml'
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def prepare(args):
+    """One local operation: key, native profile, upstream image. No daemon or API."""
+    directory = operator_directory()
+    settings = yaml.safe_load(protected(directory / 'operator.yaml').read_text())
+    secrets = protected(directory / 'secrets.yaml')
+    if not isinstance(settings, dict) or not all(
+            isinstance(settings.get(field), str) and settings[field].strip() and not settings[field].startswith('REPLACE_')
+            for field in ('tailnet', 'tailscale_api_token')):
+        raise ValueError('Fill in tailnet and tailscale_api_token in the private operator.yaml first')
+    args.endpoint = 'https://127.0.0.1:6443' if args.role == 'controlplane' else settings.get('endpoint')
+    args.bootstrap_controlplane = args.role == 'controlplane'
+    check_node(args)
+    # Check Docker before issuing a real enrollment key or creating node output.
+    private_command(['docker', 'info', '--format', '{{.OSType}}'], directory)
+    node = directory / 'nodes' / args.name
+    if node.exists():
+        raise ValueError(f'{node} already exists; reuse its image. Rebuilding requires revoking the old key and removing that node directory first.')
+    output_directory(node)
+    key = node / 'tailscale-key.json'
+    mint(settings['tailscale_api_token'], settings['tailnet'], args.role, key)
+    profile = generate(SimpleNamespace(
+        name=args.name, role=args.role, cluster='guaranine', endpoint=args.endpoint,
+        bootstrap_controlplane=args.bootstrap_controlplane, disk=args.disk,
+        confirm_install_disk=args.confirm_install_disk, secrets=secrets, tailscale_key=key,
+        etcd_disk_selector=args.etcd_disk_selector, output=node / 'config'))
+    image = private_image(SimpleNamespace(config=profile, format='azure' if args.role == 'controlplane' else 'iso',
+                                          output=node / 'image'))
+    print(f'Private image ready: {image}')
+    print('Keep it private. No Azure resource was created and no laptop was modified.')
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog='guaranine', description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    init = commands.add_parser('init', help='Create a cluster secrets bundle once, outside git')
-    init.add_argument('--output', required=True)
-    init.set_defaults(action=initialize)
-    key = commands.add_parser('mint-key', help='Mint one 24-hour key using the existing Tailscale API')
-    key.add_argument('--api-token', required=True)
-    key.add_argument('--tailnet', required=True)
-    key.add_argument('--role', choices=('controlplane', 'worker'), required=True)
-    key.add_argument('--output', required=True)
-    key.set_defaults(action=mint)
-    node = commands.add_parser('node', help='Generate a private profile for exactly one node')
-    for name in ('name', 'endpoint', 'disk', 'confirm-install-disk', 'secrets', 'tailscale-key', 'output'):
-        node.add_argument('--' + name, required=True)
-    node.add_argument('--role', choices=('controlplane', 'worker'), required=True)
-    node.add_argument('--cluster', default='guaranine')
-    node.add_argument('--bootstrap-controlplane', action='store_true')
-    node.add_argument('--etcd-disk-selector')
-    node.set_defaults(action=generate)
-    args = parser.parse_args()
+    init = commands.add_parser('init', help='Create cluster secrets and one private settings file, once')
+    init.set_defaults(action=lambda args: initialize(operator_directory()))
+    commands.add_parser('talosctl', help='Run the checksum-pinned upstream talosctl', add_help=False)
+    for role in ('worker', 'controlplane'):
+        node = commands.add_parser(role, help='Prepare one private ISO' if role == 'worker' else 'Prepare the planned Azure control-plane VHD')
+        if role == 'worker':
+            node.add_argument('name', help='Unique laptop name')
+        else:
+            node.set_defaults(name='guaranine-controlplane')
+        node.add_argument('--disk', required=True, help='Exact whole disk the image will install onto')
+        node.add_argument('--confirm-install-disk', required=True, help='Repeat the disk to authorize unattended installation')
+        if role == 'controlplane':
+            node.add_argument('--etcd-disk-selector', required=True, help='Talos selector for the retained Azure data disk at LUN 0')
+        node.set_defaults(action=prepare, role=role, etcd_disk_selector=None)
     os.umask(0o077)
     try:
+        argv = sys.argv[1:] if argv is None else argv
+        if argv[:1] == ['talosctl']:
+            binary = talosctl()
+            os.execv(binary, [binary, *argv[1:]])
+            return
+        args = parser.parse_args(argv)
         args.action(args)
-    except (OSError, ValueError, KeyError) as error:
+    except yaml.YAMLError:
+        parser.exit(1, 'Invalid private YAML; check the operator/configuration file locally.\n')
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         # HTTP response bodies and private configuration are never printed.
         parser.exit(1, f'{type(error).__name__}: {error}\n')
 

@@ -88,6 +88,7 @@ def private_image(args):
         'machine_config_sha256': digest(config), 'images': {path.name: digest(path) for path in artifacts},
         'warning': 'Contains enrollment credentials. Never publish or upload as a CI artifact.'}, indent=2) + '\n')
     print('Built a private Talos machine image; keep the entire output directory private')
+    return artifacts[0]
 
 
 def validate_public(directory):
@@ -123,11 +124,6 @@ def main():
     public = commands.add_parser('public', help='Fetch the public, credential-free ISO')
     public.add_argument('--output', required=True)
     public.set_defaults(action=public_image)
-    private = commands.add_parser('private', help='Build a private ISO or Azure VHD locally using upstream imager')
-    private.add_argument('--config', required=True)
-    private.add_argument('--format', choices=('iso', 'azure'), default='iso')
-    private.add_argument('--output', required=True)
-    private.set_defaults(action=private_image)
     final = commands.add_parser('finalize')
     final.add_argument('directory')
     final.set_defaults(action=lambda args: finalize(args.directory))

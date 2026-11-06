@@ -31,6 +31,13 @@ id_ed25519*
 *.raw
 *.fd
 enrollment.json
+operator.yaml
+secrets.yaml
+talosconfig
+machine.yaml
+*.vhd
+*.vhd.zst
+private.json
 qemu-results.json
 build.json
 SHA256SUMS

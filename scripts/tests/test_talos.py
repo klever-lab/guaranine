@@ -1,11 +1,13 @@
 """Security and publication boundaries around upstream Talos tooling."""
 from datetime import datetime, timedelta, timezone
+import contextlib
 import copy
 import hashlib
-import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import subprocess
 import sys
 import tempfile
@@ -102,6 +104,88 @@ class TalosConfigTests(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0].stat().st_mode & 0o777, 0o600)
         self.assertIn(marker, logs[0].read_text())
+
+
+class MachineCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.environment = patch.dict(os.environ, GUARANINE_OPERATOR_DIR=str(self.root))
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        common.private_write(self.root / 'operator.yaml',
+                             'tailnet: example.invalid\ntailscale_api_token: DISPOSABLE-OPERATOR-TOKEN\nendpoint: https://100.64.0.7:6443\n')
+        common.private_write(self.root / 'secrets.yaml', 'DISPOSABLE-CLUSTER-SECRETS')
+        self.args = SimpleNamespace(role='worker', name='laptop-01', disk='/dev/vda',
+                                    confirm_install_disk='/dev/vda', etcd_disk_selector=None)
+
+    def test_one_command_uses_saved_settings_and_only_embeds_the_machine_profile(self):
+        with (patch.object(config, 'mint') as mint,
+              patch.object(config, 'private_command'),
+              patch.object(config, 'generate', return_value=self.root / 'nodes/laptop-01/config/machine.yaml') as generate,
+              patch.object(config, 'private_image', return_value=self.root / 'nodes/laptop-01/image/talos.iso') as image):
+            config.main(['worker', 'laptop-01', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda'])
+        self.assertEqual(mint.call_args.args[:3], ('DISPOSABLE-OPERATOR-TOKEN', 'example.invalid', 'worker'))
+        profile = generate.call_args.args[0]
+        self.assertEqual(profile.endpoint, 'https://100.64.0.7:6443')
+        self.assertEqual(profile.secrets, self.root / 'secrets.yaml')
+        self.assertFalse(profile.bootstrap_controlplane)
+        self.assertEqual(image.call_args.args[0].config, self.root / 'nodes/laptop-01/config/machine.yaml')
+        self.assertEqual(image.call_args.args[0].format, 'iso')
+        self.assertEqual((self.root / 'nodes/laptop-01').stat().st_mode & 0o777, 0o700)
+
+    def test_bad_settings_disk_endpoint_or_existing_node_never_issue_a_key(self):
+        with (patch.object(config, 'mint') as mint, patch.object(config, 'private_command')):
+            for field, value in (('name', '../outside'), ('disk', '/dev/vda1'), ('confirm_install_disk', '/dev/vdb')):
+                with self.subTest(field=field):
+                    original = getattr(self.args, field)
+                    setattr(self.args, field, value)
+                    with self.assertRaises(ValueError): config.prepare(self.args)
+                    setattr(self.args, field, original)
+            original = (self.root / 'operator.yaml').read_text()
+            for content in ('tailnet: REPLACE_WITH_TAILNET\n', original.replace('100.64.0.7', '192.168.1.2')):
+                (self.root / 'operator.yaml').write_text(content)
+                with self.assertRaises(ValueError): config.prepare(self.args)
+            (self.root / 'operator.yaml').write_text(original)
+            common.output_directory(self.root / 'nodes/laptop-01')
+            with self.assertRaises(ValueError): config.prepare(self.args)
+            mint.assert_not_called()
+
+    def test_docker_failure_does_not_create_key_or_partial_node_output(self):
+        with (patch.object(config, 'mint') as mint,
+              patch.object(config, 'private_command', side_effect=ValueError('Docker unavailable'))):
+            with self.assertRaisesRegex(ValueError, 'Docker unavailable'): config.prepare(self.args)
+            mint.assert_not_called()
+        self.assertFalse((self.root / 'nodes').exists())
+
+    def test_malformed_private_settings_never_echo_the_api_credential(self):
+        marker = 'DISPOSABLE-SECRET-NEVER-PRINT'
+        (self.root / 'operator.yaml').write_text('tailscale_api_token: [' + marker)
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit):
+            config.main(['worker', 'laptop-01', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda'])
+        self.assertIn('Invalid private YAML', errors.getvalue())
+        self.assertNotIn(marker, errors.getvalue())
+
+    def test_controlplane_requires_an_explicit_retained_disk_and_uses_azure_format(self):
+        with (patch.object(config, 'mint') as mint,
+              patch.object(config, 'private_command'), patch.object(config, 'generate') as generate,
+              patch.object(config, 'private_image', return_value=self.root / 'controlplane.vhd.zst') as image):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                config.main(['controlplane', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda'])
+            mint.assert_not_called()
+            config.main(['controlplane', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda',
+                         '--etcd-disk-selector', 'disk.dev_path == "/dev/vdb"'])
+        self.assertEqual(generate.call_args.args[0].endpoint, 'https://127.0.0.1:6443')
+        self.assertEqual(generate.call_args.args[0].etcd_disk_selector, 'disk.dev_path == "/dev/vdb"')
+        self.assertEqual(image.call_args.args[0].format, 'azure')
+
+    def test_native_cli_passes_arguments_to_the_verified_binary_unchanged(self):
+        with patch.object(config, 'talosctl', return_value='/verified/talosctl'), patch.object(config.os, 'execv') as execute:
+            config.main(['talosctl', '--talosconfig', '/private/talosconfig', 'version', '--client'])
+        execute.assert_called_once_with('/verified/talosctl',
+            ['/verified/talosctl', '--talosconfig', '/private/talosconfig', 'version', '--client'])
 
 
 class TalosReleaseTests(unittest.TestCase):

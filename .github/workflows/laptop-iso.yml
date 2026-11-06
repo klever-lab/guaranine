@@ -4,8 +4,9 @@ on:
     paths:
       - 'images/**'
       - 'talos/**'
-      - 'provision/**'
       - 'scripts/**'
+      - 'guaranine'
+      - 'requirements.txt'
       - 'requirements-dev.txt'
       - '.github/workflows/**'
   push:
@@ -49,16 +50,14 @@ jobs:
           python-version: '3.12'
       - name: Install validation and disposable guest tools
         run: |
-          python3 -m pip install --requirement requirements-dev.txt
+          python3 -m pip install --requirement requirements.txt
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
           sudo chmod a+rw /dev/kvm
-      - name: Shared repository validation
-        run: bash scripts/validate.sh
       - name: Build disposable private ISO and Azure VHD with upstream imager
         run: python3 scripts/talos/private-smoke.py
       - name: Fetch the pinned public Talos ISO
-        run: bash images/laptop/build.sh "$RUNNER_TEMP/iso"
+        run: python3 scripts/talos/images.py public --output "$RUNNER_TEMP/iso"
       - name: Required actual-image BIOS and UEFI boot tests
         run: python3 scripts/talos/qemu-test.py "$RUNNER_TEMP/iso"
       - name: Bind passing boot evidence to the exact public ISO

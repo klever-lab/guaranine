@@ -56,7 +56,7 @@ def copy_configuration(source, destination):
             continue
         if not (
             path.name.endswith((".tf", ".tftest.hcl", ".tfmock.hcl", ".pub"))
-            or path.name in (".terraform.lock.hcl", "local-backend.tf.example")
+            or path.name == ".terraform.lock.hcl"
         ):
             continue
         target = destination / relative
@@ -84,7 +84,7 @@ def check_lifecycle_plans(events, name):
         and all(change["actions"] == ["no-op"] for change in unchanged["output_changes"].values()),
         f"An unchanged {name} deployment must produce no resource or output changes",
     )
-    if name in {"state", "image"}:
+    if name == "image":
         print(f"  unchanged {name} infrastructure: no changes", flush=True)
         return
     replacement = {
@@ -144,7 +144,7 @@ def main():
             TF_PLUGIN_CACHE_DIR=str(scratch / "plugins"),
             TF_CLI_CONFIG_FILE=str(scratch / "terraform.rc"),
         )
-        for name in ("state", "image", "coordinator"):
+        for name in ("image", "coordinator"):
             print(f"Terraform {name}: format, init, validate and mock tests", flush=True)
             root = scratch / name
             copy_configuration(REPOSITORY / "infra/azure" / name, root)
@@ -160,17 +160,17 @@ def main():
             check_lifecycle_plans(events, name)
             if name == "coordinator":
                 check_disk_guard(root, env)
-            elif name == "state":
-                # Verify that the documented first-run override selects a local
-                # backend, with all state/cache paths outside the source tree.
-                shutil.copyfile(root / "local-backend.tf.example", root / "backend_override.tf")
-                terraform(
-                    root, env, "init", "-input=false", "-lockfile=readonly", "-no-color",
-                    f"-backend-config=path={scratch / 'bootstrap.tfstate'}",
-                )
-                metadata = json.loads((Path(env["TF_DATA_DIR"]) / "terraform.tfstate").read_text())
-                require(metadata["backend"]["type"] == "local", "Bootstrap override must select local state")
-                print("  first-run local backend override: valid", flush=True)
+            state = scratch / f"{name}.tfstate"
+            terraform(
+                root, env, "init", "-input=false", "-lockfile=readonly", "-no-color",
+                f"-backend-config=path={state}",
+            )
+            metadata = json.loads((Path(env["TF_DATA_DIR"]) / "terraform.tfstate").read_text())
+            require(
+                metadata["backend"]["type"] == "local" and metadata["backend"]["config"]["path"] == str(state),
+                "State must stay in the explicit operator path, with native local locking",
+            )
+            print("  protected local state backend: valid", flush=True)
 
 
 if __name__ == "__main__":

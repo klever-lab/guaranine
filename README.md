@@ -1,58 +1,55 @@
 # guaranine
 
-Talos Linux and upstream Kubernetes for laptop workers in different locations. One stable control-plane VM uses local etcd; laptops are workers. Every private inter-host connection uses Tailscale. No shared LAN or sub-10 ms latency is assumed.
+One Talos control-plane VM on Azure, plus laptop workers anywhere. Kubernetes places applications automatically. Every private connection between machines uses Tailscale; no shared LAN or sub-10 ms connection is required.
 
-Talos replaces the former Debian/K3s/Ansible installation path. Native Kubernetes controllers schedule and manage workloads; Talos owns machine configuration and OS/Kubernetes upgrades. There is no custom fleet API, extra enrollment server, Omni deployment, SideroLink or KubeSpan.
+**Keep it simple:** prebuilt Talos images, the official Tailscale extension, native Kubernetes and Terraform. No custom platform API, enrollment server or extra management stack.
 
-## Current implementation
+## Setup
 
-- Version-pinned Talos, Kubernetes, Tailscale extension, imager and checksum-verified `talosctl`.
-- Public Talos ISO generation/release with no machine configuration, keys or node identities. BIOS/UEFI guests must boot, expose the maintenance API, and preserve an unconfigured disk before publication.
-- Private machine configuration and local ISO/Azure VHD generation using upstream Talos tooling. Both node roles are validated by the actual pinned Talos schema. Public Image Factory never receives private configuration.
-- Tailscale node addressing, Flannel on `tailscale0`, tunnel-aware MTU, restricted host ingress and a dedicated retained etcd volume. Laptop workers do not run etcd. Cluster discovery services and automatic alternate API endpoint selection are disabled.
-- Terraform for Entra-authenticated Blob state, private image upload/publication, isolated Azure networking, the one planned Talos control-plane VM and retained data disk. No Azure resources or live cluster have been deployed.
-- Existing Guaranine Linear/Symphony integration: Todo issues use shared autonomous implementation, validation and merge. This migration adds no development controller or worker workflow.
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Docker on your operator computer. Run `./guaranine init` once and fill in its private `operator.yaml`.
+2. Set up the one Azure control plane using the [Azure guide](infra/azure/README.md). Nothing is provisioned yet; this is still a one-time operator task.
+3. Save its Tailscale Kubernetes endpoint in `operator.yaml`. Prepare each laptop with one command:
 
-Private images support unattended Talos installation after an operator supplies configuration and authorizes the target disk. The stricter requested 24-hour, single-use, YubiKey-authorized enrollment policy is still incomplete; see the [image guide](images/laptop/README.md#enrollment-security-status). A Tailscale key alone is not a hardware-bound, single-use Talos authorization. Hosted tailnet operation and physical laptop hardware remain unqualified.
+   ```bash
+   ./guaranine worker laptop-01 --disk /dev/nvme0n1 --confirm-install-disk /dev/nvme0n1
+   ```
 
-## Guides
+4. Install and boot that laptop's **private** ISO. Its embedded configuration handles installation and enrollment. Use Kubernetes manifests with CPU/RAM requests to run applications; Kubernetes chooses the worker.
 
-| Topic | Guide |
+The preparation command creates a short-lived Tailscale key, generates and validates the node configuration, and runs the pinned upstream Talos imager. Its files stay in `~/.local/state/guaranine` by default. [Talos operations](talos/README.md) covers settings, bootstrap and worker removal.
+
+## What is ready
+
+Public boot media is [prebuilt and released](https://github.com/klever-lab/guaranine/releases/latest). It contains no credentials and boots into maintenance. Each unattended installer must be generated privately for its intended laptop; it cannot safely be a shared public download. See [images and enrollment limits](images/laptop/README.md).
+
+The repository has configuration, Terraform and tested image tooling. **There is no deployed cluster yet.** The full 24-hour, single-use, hardware-bound enrollment policy and YubiKey boot authorization remain unfinished. Physical hardware and live Azure/Tailscale operation still need verification.
+
+| Need | Current choice |
 | --- | --- |
-| Cluster secrets, node profiles, bootstrap, networking, maintenance, backups | [Talos operations](talos/README.md) |
-| Public ISO, local private images, release evidence, enrollment limitations | [Laptop images](images/laptop/README.md) |
-| Student credits, remote state, private Azure images, VM and disk recovery | [Azure infrastructure](infra/azure/README.md) |
+| Schedule and manage containers | Kubernetes Deployments, resource requests and standard lifecycle commands |
+| Configure and update machines | Talos configuration and `talosctl` |
+| Connect scattered machines | Official Tailscale system extension |
+| Add/remove workers | One private image command; Kubernetes cordon/drain before removal |
+| Provision the control plane | Terraform; local state on encrypted operator storage with off-machine backups |
+| Monitoring, public domains/TLS, external secrets | Later upstream integrations, only when needed |
+| Movable persistent storage and QEMU/KVM VMs | Later work; storage/fencing and KubeVirt need qualification |
+| LXC and a custom workload API | Excluded |
 
-## Platform scope
+One control plane is an availability tradeoff. A drain needs spare capacity and usable storage; local disks do not follow workloads. A disconnected laptop may still be running, so stateful failover needs fencing.
 
-| Need | Implementation |
-| --- | --- |
-| Container placement and lifecycle | Kubernetes Deployments, resource requests/limits, scheduler and controllers |
-| Host configuration and updates | Talos machine configuration and `talosctl`; no SSH or package manager |
-| Add/remove workers | Private node configuration; Kubernetes cordon/drain and replacement readiness |
-| Private inter-host traffic | Tailscale system extension; Flannel node traffic uses tailnet addresses |
-| API keys and secrets | Kubernetes access controls; external secret management remains later work |
-| Public domains/TLS | Later ingress/tunnel/DNS integration |
-| Monitoring | Later metrics, dashboards and alerting deployment |
-| Movable persistent workloads | Later shared/portable storage and fencing; local disks are not portable storage |
-| QEMU/KVM VMs | Later KubeVirt integration and hardware qualification |
-| LXC/custom workload API | Excluded |
+## Development
 
-A single control plane is an availability tradeoff: existing workloads may continue through a control-plane outage, while scheduling and recovery wait. Draining does not guarantee eviction without spare capacity and satisfiable disruption/storage constraints. Network loss does not prove a node is fenced. Container recreation and VM live migration have different guarantees.
-
-## Validation
-
-Use Python 3.12+ and the pinned dependencies. For local work, use `uv`:
+Use Python 3.12+. Run the same checks as CI:
 
 ```bash
 env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bash scripts/validate.sh
 ```
 
-This runs documentation lint, behavioral tests, real Talos schema validation for both roles, workflow/shell checks, and credential-free Terraform schema/mock/lifecycle checks for all three Azure roots. The separate ISO workflow builds both private image formats using disposable credentials, then qualifies the public ISO in BIOS/UEFI guests. Only public artifacts may leave CI. Source checks and image builds do not certify a live cluster or the full enrollment policy.
+This checks both Talos roles, machine preparation, image publication boundaries, workflows, shell and credential-free Terraform plans/lifecycle. The image workflow separately builds disposable private ISO/VHD fixtures and boots the public ISO in BIOS/UEFI. No private image leaves CI. Todo issues in the existing [Guaranine Linear project](https://linear.app/kian-finishing-zombie-granola/project/guaranine-5e147e0efbea) use the shared Clusterfork Symphony controller.
 
 ## Original design question
 
-The following is preserved verbatim from the earlier design discussion. The current platform choice is Talos-managed Kubernetes; K3s and LXC are not current implementations.
+Preserved verbatim. The current choice is Talos-managed Kubernetes; K3s and LXC are historical references.
 
 ```text
 okay be honest, should i go with a purpose built controller or k3s?
@@ -71,6 +68,4 @@ paste this exact message in the readme and the succint short answer beneath it.
 give me the proper version here
 ```
 
-Use Talos-managed Kubernetes for the fleet. Kubernetes handles applications and placement; Talos handles machines. The existing Tailscale-only and no-extra-server authorization constraints still apply.
-
-References: [Talos overview](https://docs.siderolabs.com/talos/v1.14/overview/what-is-talos), [Image Factory and local imager](https://docs.siderolabs.com/talos/v1.14/platform-specific-installations/boot-assets), [Tailscale extension](https://github.com/siderolabs/extensions/tree/main/network/tailscale), [hardware requirements](https://docs.siderolabs.com/talos/v1.14/getting-started/system-requirements).
+Use Talos-managed Kubernetes. Kubernetes manages applications; Talos manages machines. Reuse upstream components and keep the repository small.

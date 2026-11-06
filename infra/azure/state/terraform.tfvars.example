@@ -1,7 +1,0 @@
-# Copy outside the checkout; no account credentials belong in Terraform inputs.
-subscription_id      = "00000000-0000-0000-0000-000000000000"
-operator_object_id   = "11111111-1111-1111-1111-111111111111"
-location             = "eastus"
-storage_account_name = "guaranineREPLACE"
-# Replace this documentation-only address with your public egress IPv4 CIDR.
-operator_ipv4_cidrs = ["203.0.113.10/32"]

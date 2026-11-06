@@ -8,10 +8,8 @@ terraform {
     }
   }
 
-  backend "azurerm" {
-    use_azuread_auth = true
-    use_cli          = true
-  }
+  # One operator; keep state on protected storage outside the checkout.
+  backend "local" {}
 }
 
 provider "azurerm" {

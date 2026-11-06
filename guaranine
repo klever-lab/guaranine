@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+exec uv run --quiet --no-project --python '>=3.12' \
+  --with-requirements "$repo/requirements.txt" python "$repo/scripts/talos/config.py" "$@"

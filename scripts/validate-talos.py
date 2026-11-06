@@ -9,12 +9,14 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts/talos'))
-from common import PINS, fetch, talosctl
+from common import fetch
+from config import generate, initialize
 
 ACTIONLINT = {
     'linux_amd64': '023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757',
@@ -26,15 +28,12 @@ ACTIONLINT = {
 
 def main():
     os.umask(0o077)
-    binary = talosctl()
-    environment = {**os.environ, 'GUARANINE_TALOSCTL_BINARY': binary}
     schematic = yaml.safe_load((ROOT / 'talos/schematic.yaml').read_text())
     if schematic != {'customization': {'systemExtensions': {'officialExtensions': ['siderolabs/tailscale']}}}:
         raise ValueError('Public schematics may contain only the declared extension; never machine configuration or credentials')
     with tempfile.TemporaryDirectory(prefix='guaranine-talos-validation-') as scratch:
         scratch = Path(scratch)
-        cli = [sys.executable, str(ROOT / 'scripts/talos/config.py')]
-        subprocess.run([*cli, 'init', '--output', str(scratch / 'cluster')], env=environment, check=True)
+        initialize(scratch / 'cluster')
         for role in ('controlplane', 'worker'):
             now = datetime.now(timezone.utc)
             key = scratch / (role + '-key.json')
@@ -43,13 +42,12 @@ def main():
                                       'capabilities': {'devices': {'create': {'reusable': False, 'ephemeral': False,
                                                      'preauthorized': True, 'tags': ['tag:guaranine-' + role]}}}}))
             key.chmod(0o600)
-            args = [*cli, 'node', '--name', 'test-' + role, '--role', role, '--endpoint', 'https://100.64.0.1:6443',
-                    '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda',
-                    '--secrets', str(scratch / 'cluster/secrets.yaml'), '--tailscale-key', str(key),
-                    '--output', str(scratch / role)]
-            if role == 'controlplane':
-                args += ['--etcd-disk-selector', 'disk.dev_path == "/dev/vdb"']
-            subprocess.run(args, env=environment, check=True)
+            generate(SimpleNamespace(name='test-' + role, role=role, cluster='guaranine',
+                     endpoint='https://100.64.0.1:6443', bootstrap_controlplane=False,
+                     disk='/dev/vda', confirm_install_disk='/dev/vda',
+                     secrets=scratch / 'cluster/secrets.yaml', tailscale_key=key,
+                     output=scratch / role,
+                     etcd_disk_selector='disk.dev_path == "/dev/vdb"' if role == 'controlplane' else None))
             docs = list(yaml.safe_load_all((scratch / role / 'machine.yaml').read_text()))
             machine = next(doc for doc in docs if doc.get('version') == 'v1alpha1')
             assert machine['machine']['type'] == role
@@ -70,7 +68,7 @@ def main():
             executable.write_bytes(package.extractfile('actionlint').read())
             executable.chmod(0o755)
         subprocess.run([str(executable)], cwd=ROOT, check=True)
-    shell = [ROOT / 'images/laptop/build.sh', ROOT / 'scripts/talos/check-release-ref.sh', ROOT / 'scripts/validate.sh']
+    shell = [ROOT / 'guaranine', ROOT / 'scripts/talos/check-release-ref.sh', ROOT / 'scripts/validate.sh']
     subprocess.run(['shellcheck', *map(str, shell)], check=True)
     for path in ROOT.glob('scripts/talos/*.py'):
         compile(path.read_text(), str(path), 'exec')

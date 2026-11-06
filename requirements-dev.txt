@@ -1,11 +1,11 @@
 # Documentation and infrastructure validation dependencies, pinned for Python 3.12.
+-r requirements.txt
 application-file-scanner==0.6.4
 application-properties==0.9.3
 columnar==1.4.1
 py-walk==0.3.3
 pyjson5==2.0.1
 pymarkdownlnt==0.9.41
-PyYAML==6.0.3
 sly==0.5
 tomli==2.5.0
 toolz==1.2.0
