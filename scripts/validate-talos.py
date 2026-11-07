@@ -56,7 +56,11 @@ def main():
             assert next(doc for doc in docs if doc.get('kind') == 'KubeNodeConfig')['nodeIP']['validSubnets'] == ['100.64.0.0/10']
             if role == 'controlplane':
                 assert next(doc for doc in docs if doc.get('kind') == 'KubeFlannelCNIConfig')['extraArgs'] == ['--iface=tailscale0']
+                pod_api = next(doc for doc in docs if doc.get('kind') == 'NetworkRuleConfig' and doc.get('name') == 'kubernetes-api-from-pods')
+                assert pod_api['portSelector'] == {'ports': [6443], 'protocol': 'tcp'}
+                assert pod_api['ingress'] == [{'subnet': '10.244.0.0/16'}]
             if role == 'worker':
+                assert not any(doc.get('name') == 'kubernetes-api-from-pods' for doc in docs)
                 assert not machine['machine']['ca'].get('key')
                 assert not machine.get('cluster', {}).get('etcd')
         target = platform.system().lower() + '_' + {'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine().lower(), '')

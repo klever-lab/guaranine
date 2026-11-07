@@ -16,3 +16,13 @@ backendMTU: 1280
 extraArgs:
   - --iface=tailscale0
 kubeNetworkPoliciesEnabled: true
+---
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: kubernetes-api-from-pods
+portSelector:
+  ports:
+    - 6443
+  protocol: tcp
+ingress:
+  - subnet: 10.244.0.0/16

@@ -42,10 +42,10 @@ The default is `Standard_B2ls_v2` (2 vCPUs/4 GiB), a 32-GiB disposable OS SSD an
 
 ## Prepare the control-plane image
 
-Verify the actual Azure SKU's device mapping before selecting disks. These names are examples: the OS disk is disposable; Talos's `ETCD` volume owns the retained disk at LUN 0.
+Verify the actual Azure SKU's disk properties before selecting disks. For the supported 32-GiB OS disk and unique non-system 64-GiB data disk at LUN 0:
 
 ```bash
-./guaranine controlplane --disk /dev/sda --confirm-install-disk /dev/sda --etcd-disk-selector 'disk.dev_path == "/dev/sdb"'
+./guaranine controlplane --disk /dev/sda --confirm-install-disk /dev/sda --etcd-disk-selector '!system_disk && disk.size == 68719476736u'
 ```
 
 This creates a short-lived Tailscale key, validates the native machine configuration and runs the pinned upstream Talos imager locally. The private `.vhd.zst` is under `nodes/guaranine-controlplane/image/` in the operator directory. The Azure image contains an installed OS; unattended disk installation is reserved for worker ISOs. Linux disk names can change after VM replacement, so select the retained etcd disk using verified stable properties. No VM is provisioned by this command.
@@ -54,7 +54,7 @@ To finish an already-prepared control-plane configuration, run `./guaranine buil
 
 The imager stages its output in a private temporary directory on operator storage. Leave room there for the uncompressed VHD and compressed output; Docker still needs space for its container images. Temporary build files are removed after the imager exits.
 
-Decompress the VHD privately with `zstd --decompress` and check it with `qemu-img info -f vpc`. Record the actual uncompressed file size and SHA-256 for the next step. Configuration is embedded locally, never sent to public Image Factory or placed in Terraform inputs/state. The VM uses ordinary Gen2 boot with Secure Boot/vTPM disabled; this path has not been live-qualified.
+Decompress the VHD privately with `zstd --decompress` and check it with `qemu-img info -f vpc`. Record the actual uncompressed file size and SHA-256 for the next step. Configuration is embedded locally, never sent to public Image Factory or placed in Terraform inputs/state. The VM uses ordinary Gen2 boot with Secure Boot/vTPM disabled.
 
 ## Upload the image with Terraform
 
@@ -79,7 +79,7 @@ Inspect each saved plan against the authorized scope before applying. This first
 
 Follow the [official Azure direct-upload procedure](https://learn.microsoft.com/azure/virtual-machines/linux/disks-upload-vhd-to-managed-disk-cli): grant a short-lived write SAS, copy the exact VHD with AzCopy, and revoke disk access in an `EXIT` trap even if copying fails. Keep tracing off and AzCopy logs/job plans private. Neither the SAS nor VHD contents enter Terraform state.
 
-After upload and revocation, set `image_ready = true` and repeat plan/show/apply. This closes disk export access and creates the private image. Put its `talos_image_id` output into `coordinator.tfvars`. This upload remains operator work and has not been live-qualified.
+After upload and revocation, set `image_ready = true` and repeat plan/show/apply. This closes disk export access and creates the private image. Put its `talos_image_id` output into `coordinator.tfvars`. Upload and image publication remain operator work.
 
 ## Provision the control plane
 
@@ -117,7 +117,7 @@ EOF
 ./guaranine talosctl kubeconfig --merge=false "$GUARANINE_OPERATOR_DIR/kubeconfig"
 ```
 
-Bootstrap etcd once. Check Talos health, etcd and `kubectl get nodes -o wide`; node addresses must be Tailscale addresses. Set `endpoint` in the private `operator.yaml` to `https://CONTROL_PLANE_TAILSCALE_IP:6443` before preparing workers. Real Azure/Tailscale bootstrap remains unqualified.
+Bootstrap etcd once. Check Talos health, etcd and `kubectl get nodes -o wide`; node addresses must be Tailscale addresses. Set `endpoint` in the private `operator.yaml` to `https://CONTROL_PLANE_TAILSCALE_IP:6443` before preparing workers. The deployed controller has passed native Talos health checks with its etcd volume on the retained disk and its Kubernetes API reached over Tailscale. Worker enrollment and operation across locations still need qualification.
 
 ## Add a laptop
 
@@ -135,7 +135,7 @@ Existing node outputs are never overwritten. After a failed build, inspect prote
 
 ## Maintain and recover
 
-All private inter-host traffic uses Tailscale, including relayed paths. Node addresses are restricted to `100.64.0.0/10`. Flannel binds to `tailscale0`, using VXLAN UDP 4789 and tunnel MTU 1280 before encapsulation overhead. Talos API TCP 50000, trust API 50001, Kubernetes API 6443 and kubelet TCP 10250 are tailnet-only. Other host ingress is blocked; workloads still need appropriate NetworkPolicies.
+All private inter-host traffic uses Tailscale, including relayed paths. Node addresses are restricted to `100.64.0.0/10`. Flannel binds to `tailscale0`, using VXLAN UDP 4789 and tunnel MTU 1280 before encapsulation overhead. Talos API TCP 50000, trust API 50001, Kubernetes API 6443 and kubelet TCP 10250 accept tailnet traffic. The control plane also permits TCP 6443 from the default pod subnet `10.244.0.0/16` so CoreDNS and workloads can use the Kubernetes API through its ClusterIP. Remote pod traffic reaches the host through Flannel over Tailscale. Other host ingress is blocked; workloads still need appropriate NetworkPolicies.
 
 The official Tailscale extension retains its identity, uses kernel networking, and changes neither host DNS nor accepted subnet routes. Alternate API endpoint selection and external cluster discovery are disabled. Test direct paths, relays, reboots and temporary disconnections on the real network.
 

@@ -22,7 +22,7 @@ The preparation command creates a short-lived Tailscale key, generates and valid
 
 The supported installer is a private ISO generated for each laptop with `./guaranine worker`. It contains that laptop's enrollment configuration and is built directly with upstream Talos tooling. See [enrollment limits](SETUP.md#enrollment-security-status).
 
-The repository has configuration, Terraform and tested image tooling. **There is no deployed cluster yet.** The full 24-hour, single-use, hardware-bound enrollment policy and YubiKey boot authorization remain unfinished. Physical hardware and live Azure/Tailscale operation still need verification.
+**The Azure control plane is deployed.** See [SETUP.md](SETUP.md) for operation and recovery. The full 24-hour, single-use, hardware-bound enrollment policy and YubiKey boot authorization remain unfinished. Laptop installation and operation across worker locations still need verification.
 
 | Need | Current choice |
 | --- | --- |
