@@ -1,0 +1,118 @@
+{
+  "tagOwners": {
+    "tag:guaranine-controlplane": ["autogroup:admin"],
+    "tag:guaranine-worker": ["autogroup:admin"]
+  },
+  "grants": [
+    {
+      "src": ["kianbahasadri@gmail.com"],
+      "dst": ["*"],
+      "ip": ["*"]
+    },
+    {
+      "src": ["tag:guaranine-worker"],
+      "dst": ["tag:guaranine-controlplane"],
+      "ip": ["tcp:6443", "tcp:50001"]
+    },
+    {
+      "src": ["tag:guaranine-controlplane"],
+      "dst": ["tag:guaranine-worker"],
+      "ip": ["tcp:50000", "tcp:10250"]
+    },
+    {
+      "src": ["tag:guaranine-controlplane", "tag:guaranine-worker"],
+      "dst": ["tag:guaranine-controlplane", "tag:guaranine-worker"],
+      "ip": ["udp:4789"]
+    }
+  ],
+  "nodeAttrs": [
+    {
+      "target": ["autogroup:member"],
+      "attr": ["funnel"]
+    }
+  ],
+  "ssh": [
+    {
+      "action": "check",
+      "src": ["autogroup:member"],
+      "dst": ["autogroup:self"],
+      "users": ["autogroup:nonroot", "root"]
+    }
+  ],
+  "tests": [
+    {
+      "src": "kianbahasadri@gmail.com",
+      "accept": ["100.123.102.71:22", "100.123.102.71:9876"]
+    },
+    {
+      "src": "xwh256@gmail.com",
+      "deny": ["100.123.102.71:22", "100.123.102.71:9876"]
+    },
+    {
+      "src": "kianbahasadri@gmail.com",
+      "proto": "tcp",
+      "accept": [
+        "tag:guaranine-controlplane:50000", "tag:guaranine-controlplane:6443",
+        "tag:guaranine-worker:50000"
+      ]
+    },
+    {
+      "src": "tag:guaranine-worker",
+      "proto": "tcp",
+      "accept": ["tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:50001"],
+      "deny": [
+        "tag:guaranine-controlplane:22", "tag:guaranine-controlplane:2379",
+        "tag:guaranine-controlplane:2380", "tag:guaranine-controlplane:4789",
+        "tag:guaranine-controlplane:50000", "tag:guaranine-controlplane:10250",
+        "tag:guaranine-worker:22", "tag:guaranine-worker:50000",
+        "tag:guaranine-worker:50001", "tag:guaranine-worker:6443",
+        "tag:guaranine-worker:10250", "100.123.102.71:22", "100.123.102.71:9876"
+      ]
+    },
+    {
+      "src": "tag:guaranine-controlplane",
+      "proto": "tcp",
+      "accept": ["tag:guaranine-worker:50000", "tag:guaranine-worker:10250"],
+      "deny": [
+        "tag:guaranine-worker:22", "tag:guaranine-worker:2379",
+        "tag:guaranine-worker:2380", "tag:guaranine-worker:4789",
+        "tag:guaranine-worker:50001", "tag:guaranine-worker:6443",
+        "100.123.102.71:22", "100.123.102.71:9876"
+      ]
+    },
+    {
+      "src": "tag:guaranine-worker",
+      "proto": "udp",
+      "accept": ["tag:guaranine-controlplane:4789", "tag:guaranine-worker:4789"],
+      "deny": [
+        "tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:50000",
+        "tag:guaranine-controlplane:50001", "tag:guaranine-controlplane:10250",
+        "tag:guaranine-worker:50000", "tag:guaranine-worker:10250", "100.123.102.71:4789"
+      ]
+    },
+    {
+      "src": "tag:guaranine-controlplane",
+      "proto": "udp",
+      "accept": ["tag:guaranine-controlplane:4789", "tag:guaranine-worker:4789"],
+      "deny": [
+        "tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:50000",
+        "tag:guaranine-worker:50000", "tag:guaranine-worker:50001",
+        "tag:guaranine-worker:6443", "tag:guaranine-worker:10250", "100.123.102.71:4789"
+      ]
+    },
+    {
+      "src": "xwh256@gmail.com",
+      "proto": "tcp",
+      "deny": [
+        "tag:guaranine-controlplane:50000", "tag:guaranine-controlplane:50001",
+        "tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250",
+        "tag:guaranine-worker:50000", "tag:guaranine-worker:10250"
+      ]
+    },
+    {
+      "src": "xwh256@gmail.com",
+      "proto": "udp",
+      "deny": ["tag:guaranine-controlplane:4789", "tag:guaranine-worker:4789"]
+    }
+  ]
+}

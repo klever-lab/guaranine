@@ -7,7 +7,7 @@ One Talos control-plane VM on Azure, plus laptop workers anywhere. Kubernetes pl
 ## Setup
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Docker on your operator computer. Run `./guaranine init` once and fill in its private `operator.yaml`.
-2. Set up the one Azure control plane using [SETUP.md](SETUP.md). Nothing is provisioned yet; this is still a one-time operator task.
+2. Follow [SETUP.md](SETUP.md) for the one-time Azure control-plane setup.
 3. Save its Tailscale Kubernetes endpoint in `operator.yaml`. Prepare each laptop with one command:
 
    ```bash

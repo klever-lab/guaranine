@@ -5,9 +5,8 @@ mock_provider "azurerm" {
 }
 
 variables {
-  subscription_id      = "00000000-0000-0000-0000-000000000000"
-  admin_ssh_public_key = file("tests/fixtures/operator.pub")
-  talos_image_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/talos-v1-14-5-fixture"
+  subscription_id = "00000000-0000-0000-0000-000000000000"
+  talos_image_id  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/talos-v1-14-5-fixture"
 }
 
 run "default_sizing_and_os" {
@@ -16,9 +15,14 @@ run "default_sizing_and_os" {
   assert {
     condition = (
       azurerm_linux_virtual_machine.coordinator.size == "Standard_B2ls_v2" &&
-      azurerm_linux_virtual_machine.coordinator.os_disk[0].disk_size_gb == 32 &&
-      azurerm_linux_virtual_machine.coordinator.os_disk[0].storage_account_type == "StandardSSD_LRS" &&
-      azurerm_linux_virtual_machine.coordinator.source_image_id == var.talos_image_id
+      azurerm_managed_disk.coordinator_os.storage_account_type == "StandardSSD_LRS" &&
+      azurerm_managed_disk.coordinator_os.create_option == "FromImage" &&
+      azurerm_managed_disk.coordinator_os.image_reference_id == var.talos_image_id &&
+      azurerm_managed_disk.coordinator_os.disk_size_gb == 32 &&
+      azurerm_managed_disk.coordinator_os.network_access_policy == "DenyAll" &&
+      !azurerm_managed_disk.coordinator_os.public_network_access_enabled &&
+      azurerm_linux_virtual_machine.coordinator.os_managed_disk_id == azurerm_managed_disk.coordinator_os.id &&
+      azurerm_linux_virtual_machine.coordinator.source_image_id == null
     )
     error_message = "Defaults must remain the exact 2-vCPU / 4-GiB SKU, SSD OS disk and pinned image."
   }
@@ -28,9 +32,12 @@ run "default_sizing_and_os" {
       azurerm_linux_virtual_machine.coordinator.disable_password_authentication &&
       !azurerm_linux_virtual_machine.coordinator.secure_boot_enabled &&
       !azurerm_linux_virtual_machine.coordinator.vtpm_enabled &&
-      !azurerm_linux_virtual_machine.coordinator.provision_vm_agent &&
       !azurerm_linux_virtual_machine.coordinator.allow_extension_operations &&
+      length(azurerm_linux_virtual_machine.coordinator.boot_diagnostics) == 1 &&
+      azurerm_linux_virtual_machine.coordinator.boot_diagnostics[0].storage_account_uri == null &&
       azurerm_linux_virtual_machine.coordinator.admin_password == null &&
+      azurerm_linux_virtual_machine.coordinator.admin_username == null &&
+      length(azurerm_linux_virtual_machine.coordinator.admin_ssh_key) == 0 &&
       azurerm_linux_virtual_machine.coordinator.custom_data == null
     )
     error_message = "Talos must have no cloud-init, VM agent, extension operations, or credentials in Terraform custom_data."
@@ -105,9 +112,9 @@ run "explicit_configuration" {
     condition = (
       azurerm_linux_virtual_machine.coordinator.location == "westeurope" &&
       azurerm_linux_virtual_machine.coordinator.size == "Standard_B4ls_v2" &&
-      azurerm_linux_virtual_machine.coordinator.os_disk[0].disk_size_gb == 64 &&
       azurerm_managed_disk.coordinator_data.disk_size_gb == 128 &&
-      azurerm_linux_virtual_machine.coordinator.source_image_id == var.talos_image_id &&
+      azurerm_managed_disk.coordinator_os.image_reference_id == var.talos_image_id &&
+      azurerm_managed_disk.coordinator_os.disk_size_gb == 64 &&
       output.talos_handoff.transport == "tailscale" &&
       azurerm_resource_group.coordinator.tags.project == "guaranine" &&
       azurerm_resource_group.coordinator.tags.managed_by == "terraform" &&
@@ -147,14 +154,6 @@ run "reject_fractional_capacity" {
     data_disk_size_gib = 64.5
   }
   expect_failures = [var.data_disk_size_gib]
-}
-
-run "reject_private_key_input" {
-  command = plan
-  variables {
-    admin_ssh_public_key = "-----BEGIN OPENSSH PRIVATE KEY-----"
-  }
-  expect_failures = [var.admin_ssh_public_key]
 }
 
 run "reject_foreign_namespace" {

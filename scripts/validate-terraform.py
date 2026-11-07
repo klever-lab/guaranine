@@ -93,10 +93,11 @@ def check_lifecycle_plans(events, name):
     }
     require(
         replacement.get("azurerm_linux_virtual_machine.coordinator") == ["delete", "create"]
-        and replacement.get("azurerm_managed_disk.coordinator_data") == ["no-op"],
-        "A real VM replacement plan must preserve the existing data disk",
+        and replacement.get("azurerm_managed_disk.coordinator_data") == ["no-op"]
+        and replacement.get("azurerm_managed_disk.coordinator_os") == ["no-op"],
+        "A real VM replacement plan must preserve the existing boot and data disks",
     )
-    print("  unchanged deployment: no changes; VM replacement: data disk retained", flush=True)
+    print("  unchanged deployment: no changes; VM replacement: boot and data disks retained", flush=True)
 
 
 def check_disk_guard(root, env):

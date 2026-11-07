@@ -128,7 +128,7 @@ def imager_profile(config, image_format):
     return profile
 
 
-def private_image(args):
+def private_image(args, *, use_sudo=False):
     config = protected(args.config)
     documents = list(yaml.safe_load_all(config.read_text()))
     machine = next((doc for doc in documents if doc.get('version') == 'v1alpha1'), None)
@@ -142,12 +142,16 @@ def private_image(args):
     private_command([talosctl(), 'validate', '--strict', '--mode', 'metal', '--config', str(config)], directory)
     profile = yaml.safe_dump(imager_profile(config.read_text(), args.format), sort_keys=False)
     # Profile/credentials go through stdin, never shell arguments, environment,
-    # public Image Factory, a Docker build context, or a repository file. Tar
-    # output avoids root-owned bind-mount files from the privileged container.
+    # public Image Factory, a Docker build context, or a repository file. Stage
+    # large disk files on operator storage; tar output keeps final files owned
+    # by the operator instead of the privileged container.
     archive = directory / 'imager-output.tar'
     log = directory / 'imager.log'
-    with archive.open('xb') as stream, log.open('xb') as errors:
-        result = subprocess.run(['docker', 'run', '--rm', '--privileged', '--platform', 'linux/amd64', '-i', PINS['imager'], '-', '--tar-to-stdout'],
+    with (tempfile.TemporaryDirectory(prefix='imager-', dir=directory) as scratch,
+          archive.open('xb') as stream, log.open('xb') as errors):
+        result = subprocess.run((['sudo', '--'] if use_sudo else []) +
+                                ['docker', 'run', '--rm', '--privileged', '--platform', 'linux/amd64', '-i',
+                                 '--mount', f'type=bind,source={scratch},target=/out', PINS['imager'], '-', '--tar-to-stdout'],
                                 input=profile.encode(), stdout=stream, stderr=errors, timeout=900)
     archive.chmod(0o600); log.chmod(0o600)
     if result.returncode:
@@ -270,6 +274,10 @@ def generate(args):
     documents = list(yaml.safe_load_all(config.read_text()))
     # Avoid automatic endpoint selection outside the explicitly selected tailnet.
     documents = [doc for doc in documents if doc.get('kind') != 'KubePrismConfig']
+    if args.role == 'controlplane':
+        # Azure boots a prepared disk. Never reinstall onto a disk name which
+        # Azure may assign to the retained etcd volume on a later boot.
+        documents = [doc for doc in documents if doc.get('kind') != 'UnattendedInstallConfig']
     for doc in documents:
         if doc.get('kind') == 'HostnameConfig':
             doc.clear(); doc.update(apiVersion='v1alpha1', kind='HostnameConfig', hostname=args.name)
@@ -312,11 +320,11 @@ def prepare(args):
     args.endpoint = 'https://127.0.0.1:6443' if args.role == 'controlplane' else settings.get('endpoint')
     args.bootstrap_controlplane = args.role == 'controlplane'
     check_node(args)
-    # Check Docker before issuing a real enrollment key or creating node output.
-    private_command(['docker', 'info', '--format', '{{.OSType}}'], directory)
     node = directory / 'nodes' / args.name
     if node.exists():
         raise ValueError(f'{node} already exists; reuse its image. Rebuilding requires revoking the old key and removing that node directory first.')
+    # Elevate only Docker, before issuing a key or creating private node output.
+    private_command(['sudo', '--', 'docker', 'info', '--format', '{{.OSType}}'], directory)
     output_directory(node)
     key = node / 'tailscale-key.json'
     mint(token, settings['tailnet'], args.role, key)
@@ -326,9 +334,23 @@ def prepare(args):
         confirm_install_disk=args.confirm_install_disk, secrets=secrets, tailscale_key=key,
         etcd_disk_selector=args.etcd_disk_selector, output=node / 'config'))
     image = private_image(SimpleNamespace(config=profile, format='azure' if args.role == 'controlplane' else 'iso',
-                                          output=node / 'image'))
+                                          output=node / 'image'), use_sudo=True)
     print(f'Private image ready: {image}')
     print('Keep it private. No Azure resource was created and no laptop was modified.')
+
+
+def build_controlplane(args):
+    """Finish a prepared control-plane image; elevate only the upstream imager."""
+    node = operator_directory() / 'nodes/guaranine-controlplane'
+    if (node / 'image').exists():
+        raise ValueError(f'{node / "image"} already exists; inspect its image and imager.log. '
+                         'This command builds an image; Azure VM provisioning is separate.')
+    auth_record(node / 'tailscale-key.json')
+    print('Building the private control-plane image; sudo authorizes only the Docker build.', flush=True)
+    image = private_image(SimpleNamespace(config=node / 'config/machine.yaml', format='azure',
+                                          output=node / 'image'), use_sudo=True)
+    print(f'Private image ready: {image}')
+    print('Keep it private. No Azure resource was created.')
 
 
 def main(argv=None):
@@ -336,6 +358,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     init = commands.add_parser('init', help='Create cluster secrets and one private settings file, once')
     init.set_defaults(action=lambda args: initialize(operator_directory()))
+    build = commands.add_parser('build-controlplane', help='Build the prepared control-plane VHD; sudo authorizes Docker only')
+    build.set_defaults(action=build_controlplane)
     commands.add_parser('talosctl', help='Run the checksum-pinned upstream talosctl', add_help=False)
     for role in ('worker', 'controlplane'):
         node = commands.add_parser(role, help='Prepare one private ISO' if role == 'worker' else 'Prepare the planned Azure control-plane VHD')

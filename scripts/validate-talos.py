@@ -25,6 +25,7 @@ ACTIONLINT = {
 
 def main():
     os.umask(0o077)
+    json.loads((ROOT / 'tailscale/policy.json').read_text())
     schematic = yaml.safe_load((ROOT / 'talos/schematic.yaml').read_text())
     if schematic != {'customization': {'systemExtensions': {'officialExtensions': ['siderolabs/tailscale']}}}:
         raise ValueError('Public schematics may contain only the declared extension; never machine configuration or credentials')
@@ -51,6 +52,7 @@ def main():
             assert {path.name for path in (scratch / role).iterdir()} == expected_files
             assert machine['machine']['type'] == role
             assert not any(doc.get('kind') == 'KubePrismConfig' for doc in docs)
+            assert any(doc.get('kind') == 'UnattendedInstallConfig' for doc in docs) == (role == 'worker')
             assert next(doc for doc in docs if doc.get('kind') == 'KubeNodeConfig')['nodeIP']['validSubnets'] == ['100.64.0.0/10']
             if role == 'controlplane':
                 assert next(doc for doc in docs if doc.get('kind') == 'KubeFlannelCNIConfig')['extraArgs'] == ['--iface=tailscale0']
@@ -71,7 +73,7 @@ def main():
     subprocess.run(['shellcheck', *map(str, shell)], check=True)
     for path in (ROOT / 'scripts/guaranine.py', ROOT / 'scripts/test-private-images.py'):
         compile(path.read_text(), str(path), 'exec')
-    print('Talos control-plane/worker schemas, Tailscale-only profiles, workflows and shell scripts validated')
+    print('Talos roles, Tailscale-only profiles, policy JSON, workflows and shell scripts validated')
 
 
 if __name__ == '__main__':

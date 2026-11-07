@@ -1,10 +1,10 @@
 # Guaranine setup
 
-One planned Azure control plane runs Talos and local etcd; laptops join as workers over Tailscale. Nothing has been deployed. The commands below run from the repository root and prepare only the scope explicitly authorized for live provisioning.
+One Azure control plane runs Talos and local etcd; laptops join as workers over Tailscale. The commands below run from the repository root and prepare only the scope explicitly authorized for live provisioning.
 
 ## Initialize the operator computer
 
-Install `uv` and Docker with permission to run privileged Linux AMD64 containers. The launcher installs the pinned Python runtime dependency and downloads checksum-verified `talosctl` automatically. Azure provisioning also uses Terraform, Azure CLI, AzCopy, `zstd` and `qemu-img`.
+On the Linux operator computer, install `uv`, `sudo` and Docker. Run the CLI as your normal user; it requests sudo only for Docker's privileged Linux AMD64 build. The launcher installs the pinned Python runtime dependency and downloads checksum-verified `talosctl` automatically. Azure provisioning also uses Terraform, Azure CLI, AzCopy, `zstd` and `qemu-img`; cluster checks use `kubectl` matching the pinned Kubernetes version.
 
 Use encrypted operator storage with an off-machine backup. The default directory is `~/.local/state/guaranine`; set `GUARANINE_OPERATOR_DIR` before initialization to choose another location outside the checkout.
 
@@ -22,7 +22,17 @@ tailscale_api_token: YOUR_PRIVATE_TAILSCALE_API_TOKEN
 endpoint: null
 ```
 
-The API credential stays only in this private file. In your existing Tailscale policy, authorize `tag:guaranine-controlplane` and `tag:guaranine-worker` and allow the cluster ports listed below. Set `endpoint` after the control plane is bootstrapped.
+The API credential stays only in this private file. Apply the versioned tailnet policy below before preparing nodes. Set `endpoint` after the control plane is bootstrapped.
+
+Other operator VPNs must allow the Tailscale range and preserve its routes. On this laptop, Windscribe uses OpenVPN UDP on port 443 with `100.64.0.0/10` excluded in its native split-tunneling settings. Check that `ip route get CONTROL_PLANE_TAILSCALE_IP` selects `tailscale0` and authenticated Talos access works while the VPN and its firewall are enabled.
+
+## Tailscale policy
+
+[tailscale/policy.json](tailscale/policy.json) declares this account's complete tailnet policy, including existing personal-device access, SSH rules and Funnel settings. Edit this file and save its complete contents through the standard [Tailscale Access controls editor](https://console.tailscale.com/admin/acls). Tailscale validates the policy and runs its native allow/deny tests before accepting an update. The repository checks JSON syntax without credentials; it does not apply live policy from CI.
+
+Only tailnet admins own the Guaranine role tags. Workers can initiate Kubernetes API and Talos trust traffic to the control plane; the control plane can initiate Talos API and kubelet traffic to workers. Both roles can carry Flannel VXLAN between nodes. Tests reject node SSH, cross-host etcd access, worker administration of peers, access to the existing personal server and protocol mixups. The operator retains the pre-existing broad personal grant; Kubernetes workload NetworkPolicies remain separate.
+
+Before applying a change, back up the live policy on protected operator storage with its off-machine backup. If using the native Tailscale API, validate the proposed file, use the live policy's ETag in `If-Match`, and read back the result. Keep API credentials in private `operator.yaml`; no policy deployment credential belongs in git or CI.
 
 ## Check Azure credit and quota
 
@@ -38,9 +48,13 @@ Verify the actual Azure SKU's device mapping before selecting disks. These names
 ./guaranine controlplane --disk /dev/sda --confirm-install-disk /dev/sda --etcd-disk-selector 'disk.dev_path == "/dev/sdb"'
 ```
 
-This creates a short-lived Tailscale key, validates the native machine configuration and runs the pinned upstream Talos imager locally. The private `.vhd.zst` is under `nodes/guaranine-controlplane/image/` in the operator directory. No VM is provisioned by this command.
+This creates a short-lived Tailscale key, validates the native machine configuration and runs the pinned upstream Talos imager locally. The private `.vhd.zst` is under `nodes/guaranine-controlplane/image/` in the operator directory. The Azure image contains an installed OS; unattended disk installation is reserved for worker ISOs. Linux disk names can change after VM replacement, so select the retained etcd disk using verified stable properties. No VM is provisioned by this command.
 
-Decompress the VHD privately with `zstd --decompress` and check it with `qemu-img info`. Record the uncompressed file size and SHA-256 for the next step. Configuration is embedded locally, never sent to public Image Factory or placed in Terraform inputs/state. The VM uses ordinary Gen2 boot with Secure Boot/vTPM disabled; this path has not been live-qualified.
+To finish an already-prepared control-plane configuration, run `./guaranine build-controlplane` as your normal operator user. It reuses the existing unexpired registration key and configuration, requests sudo only for the pinned Docker build, and extracts the VHD with private permissions under your ownership. Existing image outputs are never overwritten.
+
+The imager stages its output in a private temporary directory on operator storage. Leave room there for the uncompressed VHD and compressed output; Docker still needs space for its container images. Temporary build files are removed after the imager exits.
+
+Decompress the VHD privately with `zstd --decompress` and check it with `qemu-img info -f vpc`. Record the actual uncompressed file size and SHA-256 for the next step. Configuration is embedded locally, never sent to public Image Factory or placed in Terraform inputs/state. The VM uses ordinary Gen2 boot with Secure Boot/vTPM disabled; this path has not been live-qualified.
 
 ## Upload the image with Terraform
 
@@ -69,11 +83,10 @@ After upload and revocation, set `image_ready = true` and repeat plan/show/apply
 
 ## Provision the control plane
 
-Azure requires public SSH metadata even though Talos has no SSH daemon or users. Supply only a public key; Terraform never needs its private counterpart. The private image already contains the machine configuration. There is no cloud-init, custom data, VM agent or extension service.
+Terraform first creates a managed boot disk from the private image, then attaches that prepared disk to the VM. This uses Azure's existing-OS path and avoids the generalized-guest provisioning handshake that Talos skips with a complete embedded configuration. No SSH metadata, cloud-init, custom data, VM agent or extension service is needed. Azure-managed boot diagnostics provide protected console logs for failed boots.
 
 ```bash
 export TF_DATA_DIR="$GUARANINE_OPERATOR_DIR/terraform/coordinator-cache"
-export TF_VAR_admin_ssh_public_key="$(cat "$GUARANINE_OPERATOR_DIR/azure-api-metadata.pub")"
 terraform -chdir=infra/azure/coordinator init -lockfile=readonly \
   -backend-config="path=$GUARANINE_OPERATOR_DIR/terraform/coordinator.tfstate"
 terraform -chdir=infra/azure/coordinator plan -var-file="$GUARANINE_OPERATOR_DIR/coordinator.tfvars" \
@@ -83,7 +96,7 @@ terraform -chdir=infra/azure/coordinator apply "$GUARANINE_OPERATOR_DIR/coordina
 terraform -chdir=infra/azure/coordinator plan -var-file="$GUARANINE_OPERATOR_DIR/coordinator.tfvars" -detailed-exitcode
 ```
 
-Require a no-change rerun. The NSG denies physical inbound traffic and direct VNet egress. Its public IP supplies explicit internet egress for Tailscale/DERP and downloads. Azure IPs are never cluster endpoints. The `talos_handoff` output records resource/image/disk identifiers and LUN.
+Require a no-change rerun. The NSG denies physical inbound traffic and direct VNet egress. Its public IP supplies explicit internet egress for Tailscale/DERP and downloads. Azure IPs are never cluster endpoints. The `talos_handoff` output records resource/image/disk identifiers and LUN. VM replacement reuses both disks, preserving the installed machine identity. The image seeds a boot disk once; use native Talos upgrades for an installed OS.
 
 ## Bootstrap the control plane once
 
@@ -101,7 +114,7 @@ endpoint: https://$GUARANINE_CONTROL_IP:6443
 EOF
 ./guaranine talosctl patch machineconfig --patch @"$GUARANINE_OPERATOR_DIR/endpoint.patch.yaml"
 ./guaranine talosctl bootstrap
-./guaranine talosctl kubeconfig "$GUARANINE_OPERATOR_DIR"
+./guaranine talosctl kubeconfig --merge=false "$GUARANINE_OPERATOR_DIR/kubeconfig"
 ```
 
 Bootstrap etcd once. Check Talos health, etcd and `kubectl get nodes -o wide`; node addresses must be Tailscale addresses. Set `endpoint` in the private `operator.yaml` to `https://CONTROL_PLANE_TAILSCALE_IP:6443` before preparing workers. Real Azure/Tailscale bootstrap remains unqualified.
@@ -144,4 +157,4 @@ The pinned AMD64 release needs x86-64-v2, compatible storage/NIC hardware and at
 
 Run repository validation as described in [README.md](README.md#development). It validates both native Talos roles, restricts admin output to the control plane and tests credentials, workflows, shell and Terraform. The private-image workflow builds ISO/VHD fixtures with disposable keys and discards them. These are construction tests, not proof of successful installation or real enrollment.
 
-Update [Talos pins](talos/versions.json) from official checksums, extension metadata and OCI digests, then run repository validation and both private builds. Keep [the public schematic](talos/schematic.yaml) for the Tailscale-enabled installer referenced by generated profiles; it contains only the extension name. Private configuration goes to the local imager through stdin, never to public Image Factory. There is no public ISO publishing workflow; earlier public releases are historical boot media.
+Update [Talos pins](talos/versions.json) from official checksums, extension metadata and OCI digests, then run repository validation and both private builds. Keep [the public schematic](talos/schematic.yaml) for the Tailscale-enabled installer referenced by generated profiles; it contains only the extension name. Private configuration goes to the local imager through stdin, never to public Image Factory. There is no public ISO publishing workflow or published installer release.

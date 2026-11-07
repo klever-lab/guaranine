@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -119,17 +120,19 @@ class MachineCommandTests(unittest.TestCase):
 
     def test_one_command_uses_saved_settings_and_only_embeds_the_machine_profile(self):
         with (patch.object(cli, 'mint') as mint,
-              patch.object(cli, 'private_command'),
+              patch.object(cli, 'private_command') as docker,
               patch.object(cli, 'generate', return_value=self.root / 'nodes/laptop-01/config/machine.yaml') as generate,
               patch.object(cli, 'private_image', return_value=self.root / 'nodes/laptop-01/image/talos.iso') as image):
             cli.main(['worker', 'laptop-01', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda'])
         self.assertEqual(mint.call_args.args[:3], ('DISPOSABLE-OPERATOR-TOKEN', 'example.invalid', 'worker'))
+        docker.assert_called_once_with(['sudo', '--', 'docker', 'info', '--format', '{{.OSType}}'], self.root)
         profile = generate.call_args.args[0]
         self.assertEqual(profile.endpoint, 'https://100.64.0.7:6443')
         self.assertEqual(profile.secrets, self.root / 'secrets.yaml')
         self.assertFalse(profile.bootstrap_controlplane)
         self.assertEqual(image.call_args.args[0].config, self.root / 'nodes/laptop-01/config/machine.yaml')
         self.assertEqual(image.call_args.args[0].format, 'iso')
+        self.assertTrue(image.call_args.kwargs['use_sudo'])
         self.assertEqual((self.root / 'nodes/laptop-01').stat().st_mode & 0o777, 0o700)
 
     def test_bad_settings_disk_endpoint_or_existing_node_never_issue_a_key(self):
@@ -178,12 +181,121 @@ class MachineCommandTests(unittest.TestCase):
         self.assertEqual(generate.call_args.args[0].endpoint, 'https://127.0.0.1:6443')
         self.assertEqual(generate.call_args.args[0].etcd_disk_selector, 'disk.dev_path == "/dev/vdb"')
         self.assertEqual(image.call_args.args[0].format, 'azure')
+        self.assertTrue(image.call_args.kwargs['use_sudo'])
 
     def test_native_cli_passes_arguments_to_the_verified_binary_unchanged(self):
         with patch.object(cli, 'talosctl', return_value='/verified/talosctl'), patch.object(cli.os, 'execv') as execute:
             cli.main(['talosctl', '--talosconfig', '/private/talosconfig', 'version', '--client'])
         execute.assert_called_once_with('/verified/talosctl',
             ['/verified/talosctl', '--talosconfig', '/private/talosconfig', 'version', '--client'])
+
+
+class PreparedControlPlaneBuildTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.node = self.root / 'nodes/guaranine-controlplane'
+        (self.node / 'config').mkdir(parents=True)
+        self.config = self.node / 'config/machine.yaml'
+        cli.private_write(self.config, 'version: v1alpha1\nmachine:\n  type: controlplane\n'
+                          '---\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: tailscale\n'
+                          'environment:\n  - TS_AUTHKEY=tskey-auth-DISPOSABLE-BUILD\n')
+        self.record = {'key': 'tskey-auth-DISPOSABLE-BUILD',
+                       'created': datetime.now(timezone.utc).isoformat(),
+                       'expires': (datetime.now(timezone.utc) + timedelta(hours=23)).isoformat(),
+                       'capabilities': {'devices': {'create': {'reusable': False, 'ephemeral': False,
+                                                              'preauthorized': True}}}}
+        cli.private_write(self.node / 'tailscale-key.json', json.dumps(self.record))
+        self.environment = patch.dict(os.environ, GUARANINE_OPERATOR_DIR=str(self.root))
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def test_named_command_elevates_only_docker_and_keeps_private_operator_owned_outputs(self):
+        def imager(command, **kwargs):
+            scratch = next(path for path in (self.node / 'image').glob('imager-*') if path.is_dir())
+            self.assertTrue(scratch.is_dir())
+            self.assertEqual(scratch.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(list(scratch.iterdir()), [])
+            self.assertEqual(command, ['sudo', '--', 'docker', 'run', '--rm', '--privileged',
+                                       '--platform', 'linux/amd64', '-i', '--mount',
+                                       f'type=bind,source={scratch},target=/out', cli.PINS['imager'], '-', '--tar-to-stdout'])
+            self.assertIn(b'tskey-auth-DISPOSABLE-BUILD', kwargs['input'])
+            self.assertNotIn('tskey-auth-DISPOSABLE-BUILD', repr(command))
+            # The native imager leaves output files in /out; only the streamed
+            # archive is promoted to operator-owned final files.
+            staged = scratch / 'azure-amd64.vhd.zst'
+            staged.write_bytes(b'DISPOSABLE IMAGE FIXTURE')
+            staged.chmod(0o400)
+            with tarfile.open(fileobj=kwargs['stdout'], mode='w') as archive:
+                member = tarfile.TarInfo('azure-amd64.vhd.zst')
+                content = b'DISPOSABLE IMAGE FIXTURE'
+                member.size = len(content)
+                archive.addfile(member, io.BytesIO(content))
+            return subprocess.CompletedProcess(command, 0)
+
+        with (patch.object(cli, 'mint') as mint, patch.object(cli, 'talosctl', return_value='/verified/talosctl'),
+              patch.object(cli, 'private_command') as validate, patch.object(cli.subprocess, 'run', side_effect=imager),
+              contextlib.redirect_stdout(io.StringIO())):
+            cli.main(['build-controlplane'])
+        mint.assert_not_called()
+        validate.assert_called_once_with(['/verified/talosctl', 'validate', '--strict', '--mode', 'metal',
+                                          '--config', str(self.config)], self.node / 'image')
+        output = self.node / 'image/azure-amd64.vhd.zst'
+        self.assertEqual(output.read_bytes(), b'DISPOSABLE IMAGE FIXTURE')
+        self.assertEqual(output.stat().st_uid, os.geteuid())
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(output.parent.stat().st_mode & 0o777, 0o700)
+        self.assertFalse((output.parent / 'imager-output.tar').exists())
+        self.assertEqual((output.parent / 'imager.log').stat().st_mode & 0o777, 0o600)
+        self.assertEqual({path.name for path in output.parent.iterdir()}, {'azure-amd64.vhd.zst', 'imager.log'})
+
+    def test_expired_key_or_existing_output_never_starts_sudo_or_mints_another_key(self):
+        terminal = io.StringIO()
+        with (patch.object(cli, 'mint') as mint, patch.object(cli.subprocess, 'run') as run,
+              patch.object(cli, 'talosctl', return_value='/verified/talosctl'),
+              contextlib.redirect_stderr(terminal), contextlib.redirect_stdout(terminal)):
+            cli.output_directory(self.node / 'image')
+            cli.private_write(self.node / 'image/imager.log', 'DISPOSABLE PRIVATE DIAGNOSTIC')
+            with self.assertRaises(SystemExit):
+                cli.main(['build-controlplane'])
+            self.assertIn('Azure VM provisioning is separate', terminal.getvalue())
+            self.assertNotIn('Building the private control-plane image', terminal.getvalue())
+            self.assertNotIn('DISPOSABLE PRIVATE DIAGNOSTIC', terminal.getvalue())
+            self.assertEqual((self.node / 'image/imager.log').read_text(), 'DISPOSABLE PRIVATE DIAGNOSTIC')
+            (self.node / 'image/imager.log').unlink()
+            (self.node / 'image').rmdir()
+            now = datetime.now(timezone.utc)
+            self.record['created'] = (now - timedelta(days=2)).isoformat()
+            self.record['expires'] = (now - timedelta(days=1)).isoformat()
+            (self.node / 'tailscale-key.json').write_text(json.dumps(self.record))
+            with self.assertRaises(SystemExit):
+                cli.main(['build-controlplane'])
+            mint.assert_not_called()
+            run.assert_not_called()
+        self.assertFalse((self.node / 'image').exists())
+
+    def test_sudo_failure_keeps_diagnostics_private_and_preserves_the_prepared_identity(self):
+        before = self.config.read_bytes()
+
+        def denied(command, **kwargs):
+            scratch = next(path for path in (self.node / 'image').glob('imager-*') if path.is_dir())
+            (scratch / 'partial.vhd').write_bytes(b'DISPOSABLE PARTIAL IMAGE')
+            kwargs['stderr'].write(b'DISPOSABLE PRIVATE DIAGNOSTIC')
+            return subprocess.CompletedProcess(command, 1)
+
+        terminal = io.StringIO()
+        with (patch.object(cli, 'talosctl', return_value='/verified/talosctl'),
+              patch.object(cli, 'private_command'), patch.object(cli.subprocess, 'run', side_effect=denied),
+              contextlib.redirect_stdout(terminal), contextlib.redirect_stderr(terminal),
+              self.assertRaises(SystemExit)):
+            cli.main(['build-controlplane'])
+        self.assertNotIn('DISPOSABLE PRIVATE DIAGNOSTIC', terminal.getvalue())
+        self.assertEqual(self.config.read_bytes(), before)
+        log = self.node / 'image/imager.log'
+        self.assertIn('DISPOSABLE PRIVATE DIAGNOSTIC', log.read_text())
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertFalse(list(log.parent.glob('imager-*/')))
 
 
 if __name__ == '__main__':

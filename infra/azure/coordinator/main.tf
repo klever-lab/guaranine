@@ -21,7 +21,8 @@ provider "azurerm" {
       prevent_deletion_if_contains_resources = true
     }
     virtual_machine {
-      delete_os_disk_on_deletion = true
+      # The OS disk is a separate Terraform resource and survives VM replacement.
+      delete_os_disk_on_deletion = false
     }
   }
 }
@@ -74,16 +75,6 @@ variable "talos_image_id" {
       !can(regex("(?i)(^|/)latest($|/)", var.talos_image_id))
     )
     error_message = "Supply a private managed-image ID or explicit gallery image version, never a marketplace image, URL, or latest alias."
-  }
-}
-
-variable "admin_ssh_public_key" {
-  description = "Public SSH metadata required by Azure's Linux VM API. Talos does not use it or run SSH; private keys are forbidden."
-  type        = string
-
-  validation {
-    condition     = can(regex("^ssh-(rsa|ed25519) [A-Za-z0-9+/=]+( .*)?$", trimspace(var.admin_ssh_public_key)))
-    error_message = "Supply an OpenSSH RSA or Ed25519 public key, never a private key."
   }
 }
 
@@ -215,36 +206,50 @@ resource "azurerm_network_interface" "coordinator" {
   depends_on = [azurerm_subnet_network_security_group_association.coordinator]
 }
 
+# Seed the boot disk once, then let Talos own its installed state and identity.
+# Attaching it avoids Azure's generalized-guest provisioning handshake, which
+# upstream Talos skips when a complete machine configuration is embedded.
+resource "azurerm_managed_disk" "coordinator_os" {
+  name                          = "${var.name_prefix}-os"
+  resource_group_name           = azurerm_resource_group.coordinator.name
+  location                      = azurerm_resource_group.coordinator.location
+  storage_account_type          = "StandardSSD_LRS"
+  create_option                 = "FromImage"
+  image_reference_id            = var.talos_image_id
+  os_type                       = "Linux"
+  hyper_v_generation            = "V2"
+  disk_size_gb                  = var.os_disk_size_gib
+  network_access_policy         = "DenyAll"
+  public_network_access_enabled = false
+  tags                          = local.tags
+
+  lifecycle {
+    # Creation metadata is not an OS upgrade mechanism. This also permits
+    # adoption of Azure-created boot disks whose origin is an image snapshot.
+    ignore_changes = [create_option, image_reference_id, source_resource_id]
+  }
+}
+
 resource "azurerm_linux_virtual_machine" "coordinator" {
-  name                = "${var.name_prefix}-coordinator"
-  computer_name       = "${var.name_prefix}-coordinator"
-  resource_group_name = azurerm_resource_group.coordinator.name
-  location            = azurerm_resource_group.coordinator.location
-  size                = var.vm_size
-  # Azure requires this metadata; Talos has no user accounts or SSH daemon.
-  admin_username                  = "talos"
+  name                            = "${var.name_prefix}-coordinator"
+  resource_group_name             = azurerm_resource_group.coordinator.name
+  location                        = azurerm_resource_group.coordinator.location
+  size                            = var.vm_size
   disable_password_authentication = true
   network_interface_ids           = [azurerm_network_interface.coordinator.id]
-  provision_vm_agent              = false
   allow_extension_operations      = false
   # The pinned upstream Azure VHD uses the ordinary, unsigned boot path.
   # A custom Secure Boot trust setup needs separate qualification.
   secure_boot_enabled = false
   vtpm_enabled        = false
-  source_image_id     = var.talos_image_id
+  os_managed_disk_id  = azurerm_managed_disk.coordinator_os.id
   tags                = local.tags
 
-  admin_ssh_key {
-    username   = "talos"
-    public_key = trimspace(var.admin_ssh_public_key)
+  os_disk {
+    caching = "ReadWrite"
   }
 
-  os_disk {
-    name                 = "${var.name_prefix}-os"
-    caching              = "ReadWrite"
-    storage_account_type = "StandardSSD_LRS"
-    disk_size_gb         = var.os_disk_size_gib
-  }
+  boot_diagnostics {}
 }
 
 # Independent of VM identity/image/size. Terraform must refuse deletion or
@@ -281,6 +286,7 @@ output "talos_handoff" {
     vm_name         = azurerm_linux_virtual_machine.coordinator.name
     vm_id           = azurerm_linux_virtual_machine.coordinator.id
     talos_image_id  = var.talos_image_id
+    os_disk_id      = azurerm_managed_disk.coordinator_os.id
     data_disk_id    = azurerm_managed_disk.coordinator_data.id
     data_disk_lun   = azurerm_virtual_machine_data_disk_attachment.coordinator_data.lun
     transport       = "tailscale"
