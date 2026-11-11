@@ -61,6 +61,17 @@ class TalosConfigTests(unittest.TestCase):
         self.record['expires'] = (NOW+timedelta(hours=24)).isoformat(); self.write()
         with self.assertRaises(ValueError): cli.auth_record(self.key, NOW+timedelta(hours=24))
 
+    def test_key_creation_tolerates_subsecond_clock_skew_without_extending_expiry(self):
+        for reusable in (False, True):
+            self.record['capabilities']['devices']['create']['reusable'] = reusable
+            self.write()
+            with self.subTest(reusable=reusable):
+                self.assertEqual(cli.auth_record(self.key, NOW - timedelta(seconds=0.4), reusable=reusable)['id'], 'fixture')
+                with self.assertRaises(ValueError):
+                    cli.auth_record(self.key, NOW - timedelta(seconds=6), reusable=reusable)
+                with self.assertRaises(ValueError):
+                    cli.auth_record(self.key, NOW + timedelta(hours=24), reusable=reusable)
+
     def test_world_readable_symlink_and_in_checkout_inputs_are_rejected(self):
         self.key.chmod(0o644)
         with self.assertRaises(ValueError): cli.protected(self.key)
@@ -167,6 +178,28 @@ class MachineCommandTests(unittest.TestCase):
         self.assertNotIn('DISPOSABLE-OPERATOR-TOKEN', (self.root / 'installer/boot.yaml').read_text())
         self.assertEqual((self.root / 'installer').stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.root / 'installer/boot.yaml').stat().st_mode & 0o777, 0o600)
+
+    def test_iso_retry_reuses_the_saved_key_and_never_overwrites_build_outputs(self):
+        installer = cli.output_directory(self.root / 'installer')
+        key = installer / 'tailscale-key.json'
+        now = datetime.now(timezone.utc)
+        expires = (now + timedelta(hours=23)).isoformat()
+        cli.private_write(key, json.dumps({
+            'key': 'tskey-auth-DISPOSABLE-SAVED-BATCH', 'created': now.isoformat(), 'expires': expires,
+            'capabilities': {'devices': {'create': {'reusable': True, 'ephemeral': False, 'preauthorized': True}}}}))
+        saved = key.read_bytes()
+        output = io.StringIO()
+        with (patch.object(cli, 'mint') as mint, patch.object(cli, 'private_command'),
+              patch.object(cli, 'private_image', return_value=installer / 'image/talos.iso') as image,
+              contextlib.redirect_stdout(output)):
+            cli.main(['iso'])
+            with self.assertRaisesRegex(ValueError, 'already exists'):
+                cli.prepare_iso(None)
+        mint.assert_not_called()
+        image.assert_called_once()
+        self.assertEqual(key.read_bytes(), saved)
+        self.assertIn(expires, output.getvalue())
+        self.assertIn('tskey-auth-DISPOSABLE-SAVED-BATCH', (installer / 'boot.yaml').read_text())
 
     def test_bad_settings_disk_endpoint_or_existing_node_never_issue_a_key(self):
         with (patch.object(cli, 'mint') as mint, patch.object(cli, 'private_command')):

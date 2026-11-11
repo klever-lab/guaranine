@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare private Talos installers using pinned upstream tools."""
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import io
 import ipaddress
@@ -262,8 +262,9 @@ def auth_record(path, now=None, *, reusable=False):
     expires = datetime.fromisoformat(record['expires'].replace('Z', '+00:00'))
     now = now or datetime.now(timezone.utc)
     capability = record['capabilities']['devices']['create']
+    # Tolerate small API/operator clock differences without extending expiry.
     if not (created.tzinfo and expires.tzinfo and 0 < (expires-created).total_seconds() <= 86400
-            and created <= now < expires and capability['reusable'] is reusable
+            and created <= now + timedelta(seconds=5) and now < expires and capability['reusable'] is reusable
             and capability['ephemeral'] is False and capability['preauthorized'] is True
             and isinstance(record['key'], str) and record['key'].startswith('tskey-auth-')):
         use = 'reusable' if reusable else 'single-use'
@@ -398,12 +399,13 @@ def prepare_iso(_args):
     directory = operator_directory()
     settings = operator_settings()
     installer = directory / 'installer'
-    if installer.exists():
+    key = installer / 'tailscale-key.json'
+    if installer.exists() and set(installer.iterdir()) != {key}:
         raise ValueError(f'{installer} already exists; reuse its ISO. Revoke the batch key before removing it to build another ISO.')
     private_command(['sudo', '--', 'docker', 'info', '--format', '{{.OSType}}'], directory)
-    output_directory(installer)
-    key = installer / 'tailscale-key.json'
-    mint(settings['tailscale_api_token'].strip(), settings['tailnet'], 'worker', key, reusable=True)
+    if not installer.exists():
+        output_directory(installer)
+        mint(settings['tailscale_api_token'].strip(), settings['tailnet'], 'worker', key, reusable=True)
     record = auth_record(key, reusable=True)
     config = installer / 'boot.yaml'
     private_write(config, boot_config(record['key']))

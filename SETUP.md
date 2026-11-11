@@ -133,7 +133,7 @@ The pinned Tailscale extension normally waits for CRI and stores state under `/v
 
 Outputs are under `installer/` in the operator directory: `tailscale-key.json` records the batch key, `boot.yaml` contains the maintenance configuration, and `image/` holds the ISO and protected logs. Files use mode 0600 in mode-0700 directories. Keep the ISO private; it authorizes new Tailscale registrations during its window. It must never be published or uploaded as a CI artifact.
 
-Existing installer outputs are never overwritten. After a failed build, inspect protected logs and revoke the issued key before removing `installer/` and retrying. To start another batch, revoke the old key and archive or remove its `installer/` directory before running `./guaranine iso` again. Revoking or expiring an auth key does not remove devices already registered with it.
+Existing installer outputs are never overwritten. If only `tailscale-key.json` was saved, rerun `./guaranine iso` to reuse that unexpired key with its original expiry. After a later build failure, inspect protected logs and revoke the issued key before removing `installer/` and retrying. To start another batch, revoke the old key and archive or remove its `installer/` directory before running `./guaranine iso` again. Revoking or expiring an auth key does not remove devices already registered with it.
 
 ## Add a laptop
 
