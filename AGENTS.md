@@ -11,6 +11,7 @@ Read [README.md](README.md) first, then [SETUP.md](SETUP.md).
 - Use prebuilt upstream components and standard interfaces; prefer deleting code, options and steps over adding abstractions.
 - Add only minimum glue for current requirements; exclude speculative services, dependencies, Terraform roots, frameworks, plugins, fallback matrices and operator procedures.
 - Every private inter-host connection must use Tailscale; support separate sites, direct/relayed paths and outages without LAN or low-latency assumptions.
+- Laptop workers must support built-in Wi-Fi from initial boot through installation and normal operation, without requiring Ethernet, adapters or external bridges. Verify OS, installer and driver support for the target laptops before recommending a platform or building installation media.
 - Terraform owns infrastructure, Talos configuration owns the OS and Kubernetes, and Kubernetes manifests own workloads.
 - Keep README.md short, operational details solely in SETUP.md, the CLI in `scripts/guaranine.py`, and each Terraform root in one `main.tf`.
 - Avoid helper-file proliferation, duplicate metadata and repeated operational facts; maintain each fact in its owning guide.
