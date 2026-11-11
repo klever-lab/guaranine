@@ -39,11 +39,8 @@ jobs:
       - name: Install the disposable boot-test hypervisor
         timeout-minutes: 5
         run: |
-          cat /etc/resolv.conf
-          timeout 20 getent ahostsv4 archive.ubuntu.com
-          curl --fail --head --max-time 20 https://archive.ubuntu.com/ubuntu/dists/noble/InRelease
-          echo 'https://archive.ubuntu.com/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
-          sudo apt-get update
+          echo 'https://mirrors.edge.kernel.org/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
+          sudo apt-get update --error-on=any
           sudo apt-get install --yes --no-install-recommends qemu-system-x86
       - name: Build disposable ISO/VHD and boot the same ISO in two isolated guests
         run: python3 scripts/test-private-images.py
