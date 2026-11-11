@@ -45,7 +45,7 @@
       "accept": ["100.123.102.71:22", "100.123.102.71:9876"]
     },
     {
-      "src": "xwh256@gmail.com",
+      "src": "user@example.com",
       "deny": ["100.123.102.71:22", "100.123.102.71:9876"]
     },
     {
@@ -101,7 +101,7 @@
       ]
     },
     {
-      "src": "xwh256@gmail.com",
+      "src": "user@example.com",
       "proto": "tcp",
       "deny": [
         "tag:guaranine-controlplane:50000", "tag:guaranine-controlplane:50001",
@@ -110,7 +110,7 @@
       ]
     },
     {
-      "src": "xwh256@gmail.com",
+      "src": "user@example.com",
       "proto": "udp",
       "deny": ["tag:guaranine-controlplane:4789", "tag:guaranine-worker:4789"]
     }

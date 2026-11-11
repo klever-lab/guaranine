@@ -48,7 +48,7 @@ Verify the actual Azure SKU's disk properties before selecting disks. For the su
 ./guaranine controlplane --disk /dev/sda --confirm-install-disk /dev/sda --etcd-disk-selector '!system_disk && disk.size == 68719476736u'
 ```
 
-This creates a short-lived Tailscale key, validates the native machine configuration and runs the pinned upstream Talos imager locally. The private `.vhd.zst` is under `nodes/guaranine-controlplane/image/` in the operator directory. The Azure image contains an installed OS; unattended disk installation is reserved for worker ISOs. Linux disk names can change after VM replacement, so select the retained etcd disk using verified stable properties. No VM is provisioned by this command.
+This creates a short-lived, single-use Tailscale key, validates the native machine configuration and runs the pinned upstream Talos imager locally. The private `.vhd.zst` is under `nodes/guaranine-controlplane/image/` in the operator directory. The Azure image contains an installed OS. Linux disk names can change after VM replacement, so select the retained etcd disk using verified stable properties. No VM is provisioned by this command.
 
 To finish an already-prepared control-plane configuration, run `./guaranine build-controlplane` as your normal operator user. It reuses the existing unexpired registration key and configuration, requests sudo only for the pinned Docker build, and extracts the VHD with private permissions under your ownership. Existing image outputs are never overwritten.
 
@@ -119,19 +119,39 @@ EOF
 
 Bootstrap etcd once. Check Talos health, etcd and `kubectl get nodes -o wide`; node addresses must be Tailscale addresses. Set `endpoint` in the private `operator.yaml` to `https://CONTROL_PLANE_TAILSCALE_IP:6443` before preparing workers. The deployed controller has passed native Talos health checks with its etcd volume on the retained disk and its Kubernetes API reached over Tailscale. Worker enrollment and operation across locations still need qualification.
 
-## Add a laptop
+## Prepare a shared laptop ISO
 
-Verify the target disk and choose a unique name:
+With Docker running, build the private boot media once on the operator computer:
 
 ```bash
-./guaranine worker laptop-01 --disk /dev/nvme0n1 --confirm-install-disk /dev/nvme0n1
+./guaranine iso
 ```
 
-This checks Docker, requests a 24-hour single-use Tailscale key, generates and validates the worker profile, and builds a private ISO. Write the printed ISO to installation media and boot the intended laptop. Its embedded configuration authorizes unattended installation onto the selected disk and enrollment into the running cluster.
+This checks Docker, requests one preauthorized, reusable, non-ephemeral Tailscale key with a 24-hour lifetime and builds one ISO with the pinned upstream Talos imager. Reuse that same ISO on multiple laptops during the registration window; the command prints its actual expiry. Worker names and target disks are not selected at build time. The boot configuration contains only a generated hostname, Tailscale registration and ingress rules: no disk-install instruction, cluster join credentials or machine identity.
 
-Outputs live under `nodes/laptop-01/`: `tailscale-key.json` records the key response, `config/machine.yaml` is the node profile, and `image/` contains the installer and protected build log. Only the control plane generates an admin `talosconfig`; worker profiles contain no operator API credential or cluster signing keys. Private files use mode 0600 in mode-0700 directories and must never be published or uploaded as CI artifacts.
+The pinned Tailscale extension normally waits for CRI and stores state under `/var/lib`, which are unavailable in maintenance mode. For this boot ISO only, the build exports the pinned upstream extension with Docker, removes the CRI dependency and persistent-state mount, and uses its existing `/var/run/tailscale` mount for RAM state. Its binaries and other settings stay upstream. The imager consumes this local tar archive through its native `tarballPath` input. Installed workers use the ordinary upstream Tailscale-enabled installer with persistent state. Docker removes the stopped export container afterward.
 
-Existing node outputs are never overwritten. After a failed build, inspect protected diagnostics and revoke the Tailscale key before removing that node directory and preparing it again. Installed workers normally retain their identity across reboots and do not need another installer. Kubernetes schedules applications from resource requests without manual host selection.
+Outputs are under `installer/` in the operator directory: `tailscale-key.json` records the batch key, `boot.yaml` contains the maintenance configuration, and `image/` holds the ISO and protected logs. Files use mode 0600 in mode-0700 directories. Keep the ISO private; it authorizes new Tailscale registrations during its window. It must never be published or uploaded as a CI artifact.
+
+Existing installer outputs are never overwritten. After a failed build, inspect protected logs and revoke the issued key before removing `installer/` and retrying. To start another batch, revoke the old key and archive or remove its `installer/` directory before running `./guaranine iso` again. Revoking or expiring an auth key does not remove devices already registered with it.
+
+## Add a laptop
+
+Write the shared ISO to a USB drive and boot a laptop with Ethernet or USB Ethernet and internet access. The laptop stays in maintenance mode; booting the ISO does not authorize installation or erasure. Its host firewall permits the maintenance API only from the Tailscale range, and the tailnet policy limits who can reach it. An existing installed Talos system causes this ISO to halt rather than reuse its disks automatically.
+
+Run this on the operator computer for each laptop:
+
+```bash
+./guaranine worker
+```
+
+The command asks for the laptop's Tailscale IPv4 address and the Talos certificate fingerprint shown on its screen. It pins that certificate for every native maintenance API request. Choose a unique lowercase worker name, then select a disk from the laptop's detected model, size, serial, transport and device path. No disk is preselected. The command displays the name, laptop address and disk, then requires the exact displayed `ERASE NAME /dev/DISK` phrase. Cancelling before that confirmation sends no installation configuration. The selected disk's contents will be destroyed when the confirmed configuration is applied.
+
+After confirmation, the command checks the disk again, generates and validates the native worker configuration using the existing cluster secrets and batch key, and applies it with `talosctl`. The chosen name becomes both the Kubernetes node name and Tailscale hostname. Configuration is saved privately under `nodes/NAME/config/machine.yaml`; there is no per-worker ISO build. Worker profiles contain neither the operator API credential, an admin `talosconfig` nor cluster signing keys. Existing worker output is never overwritten.
+
+The command reports that configuration was sent, not that enrollment succeeded. Installation and reboot take time. Remove the USB when the laptop reboots and find its installed identity in Tailscale; its address can change when the in-memory registration is replaced by persistent state. Verify `kubectl get node NAME -o wide` reports Ready and its address is in the Tailscale range. Remove a leftover offline installer identity only after identifying it separately from the installed worker. If applying configuration reports a connection failure, inspect the laptop before retrying: the installation might already have started.
+
+Installed workers normally retain their identity across reboots and do not need another ISO. Kubernetes schedules applications from resource requests without manual host selection. Physical installation, identity handoff and operation across laptop locations still need qualification.
 
 ## Maintain and recover
 
@@ -147,14 +167,14 @@ For cluster recovery, fence the old control plane and follow [native etcd recove
 
 ## Enrollment security status
 
-The requested behavior is unattended enrollment for one laptop, with unused authority expiring after 24 hours, potentially authorized by a YubiKey 5 NFC. The current key is preauthorized, non-ephemeral and single-use with a 24-hour lifetime. Enrolled devices retain their own identity after key expiry.
+The current requested flow reuses one private ISO across multiple laptops within 24 hours, with per-laptop name and disk confirmation on the operator computer. Its Tailscale key is preauthorized, non-ephemeral and reusable with a 24-hour lifetime. The control-plane key remains single-use. Each laptop generates its own identity; registered devices remain authorized after the auth key expires. A maintenance-mode device already connected before expiry can also remain connected afterward.
 
-**The full policy is unfinished.** Talos cluster join authority is separate from Tailscale registration. A copied unused installer can race the intended laptop; it is not hardware-bound. YubiKey boot authorization is not implemented. An ISO stays copyable and bootable after 24 hours; a local clock check cannot securely expire it. No additional enrollment/authentication server is authorized.
+**The full policy is unfinished.** Tailscale registration expiry is separate from Talos cluster join authority. The shared ISO contains no cluster join configuration; the operator sends that only after confirming a laptop's name and disk. The command checks the saved batch expiry before sending a new worker configuration, but a local clock check cannot securely expire copied worker configuration or already-issued cluster credentials. A copied ISO can register additional devices during the window; it is not hardware-bound. YubiKey boot authorization is not implemented. The ISO itself stays copyable and bootable after 24 hours. No additional enrollment/authentication server is authorized.
 
 ## Hardware and validation
 
 The pinned AMD64 release needs x86-64-v2, compatible storage/NIC hardware and at least 1 GiB RAM for a worker before application capacity. Start with Ethernet or USB Ethernet. Physical laptops, Wi-Fi/firmware, lid/power behavior and live WAN operation still need qualification.
 
-Run repository validation as described in [README.md](README.md#development). It validates both native Talos roles, restricts admin output to the control plane and tests credentials, workflows, shell and Terraform. The private-image workflow builds ISO/VHD fixtures with disposable keys and discards them. These are construction tests, not proof of successful installation or real enrollment.
+Run repository validation as described in [README.md](README.md#development). It validates the maintenance configuration and both native Talos roles, restricts admin output to the control plane and tests the name/disk prompts, cancellation, certificate pinning, credentials, workflows, shell and Terraform. The private-image workflow builds shared-ISO/VHD fixtures with disposable keys, boots the same ISO in two isolated QEMU guests, then discards the outputs. It checks maintenance mode, Tailscale kernel-network startup, distinct certificates and unchanged guest disks. Synthetic guest networking and invalid keys exercise startup without authorizing a real tailnet device. These are construction and maintenance-boot tests, not proof of successful installation or real enrollment.
 
 Update [Talos pins](talos/versions.json) from official checksums, extension metadata and OCI digests, then run repository validation and both private builds. Keep [the public schematic](talos/schematic.yaml) for the Tailscale-enabled installer referenced by generated profiles; it contains only the extension name. Private configuration goes to the local imager through stdin, never to public Image Factory. There is no public ISO publishing workflow or published installer release.

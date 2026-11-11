@@ -3,6 +3,7 @@
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import io
 import ipaddress
 import json
 import os
@@ -24,6 +25,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 PINS = json.loads((ROOT / 'talos/versions.json').read_text())
 TAILNET = '100.64.0.0/10'
+DISK_PATH = r'/dev/(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme[0-9]+n[0-9]+|mmcblk[0-9]+)'
 
 
 def digest(path):
@@ -114,7 +116,7 @@ def private_command(arguments, directory, *, data=None):
     return result.stdout
 
 
-def imager_profile(config, image_format):
+def imager_profile(config, image_format, *, maintenance=False):
     profile = {'baseProfileName': 'azure' if image_format == 'azure' else 'iso',
                'arch': 'amd64', 'version': PINS['talos'].removeprefix('v'),
                'platform': 'azure' if image_format == 'azure' else 'metal',
@@ -122,25 +124,81 @@ def imager_profile(config, image_format):
                'input': {'systemExtensions': [{'imageRef': PINS['tailscale_extension']}],
                          'baseInstaller': {'imageRef': PINS['installer_base']}},
                'output': {'kind': 'iso' if image_format == 'iso' else 'image'}}
+    if maintenance:
+        profile['input']['systemExtensions'] = [{'tarballPath': '/out/tailscale-maintenance.tar'}]
+        profile['customization']['extraKernelArgs'] = ['talos.halt_if_installed=1']
     if image_format == 'azure':
         profile['output'].update(imageOptions={'diskFormat': 'vhd', 'diskFormatOptions': 'subformat=fixed,force_size',
                                                'diskSize': 11736711168, 'bootloader': 'dual-boot'}, outFormat='.zst')
     return profile
 
 
-def private_image(args, *, use_sudo=False):
+def maintenance_extension(directory, docker):
+    """Run the pinned Tailscale binary with RAM state before installation."""
+    container = private_command([*docker, 'create', '--platform', 'linux/amd64', '--entrypoint', '/unused',
+                                 PINS['tailscale_extension']], directory.parent).strip()
+    original = directory / 'tailscale-upstream.tar'
+    try:
+        log = directory.parent / 'tailscale-maintenance.log'
+        with original.open('xb') as stream, log.open('xb') as errors:
+            result = subprocess.run([*docker, 'export', container], stdout=stream,
+                                    stderr=errors, timeout=300)
+        log.chmod(0o600)
+        if result.returncode:
+            raise ValueError(f'Could not export the pinned Tailscale extension; inspect {log}')
+    finally:
+        private_command([*docker, 'rm', container], directory.parent)
+    changed = False
+    with tarfile.open(original) as source, tarfile.open(directory / 'tailscale-maintenance.tar', 'w') as output:
+        for member in source:
+            if member.name != 'manifest.yaml' and member.name != 'rootfs' and not member.name.startswith('rootfs/'):
+                # Docker's container metadata is not part of the system extension.
+                continue
+            content = source.extractfile(member) if member.isfile() else None
+            if member.name == 'rootfs/usr/local/etc/containers/tailscale.yaml':
+                spec = yaml.safe_load(content.read())
+                if spec['depends'].count({'service': 'cri'}) != 1:
+                    raise ValueError('The pinned Tailscale service dependency changed; review its maintenance support')
+                spec['depends'].remove({'service': 'cri'})
+                environment = spec['container']['environment']
+                if environment.count('TS_STATE_DIR=/var/lib/tailscale') != 1:
+                    raise ValueError('The pinned Tailscale state directory changed; review its maintenance support')
+                environment[environment.index('TS_STATE_DIR=/var/lib/tailscale')] = 'TS_STATE_DIR=/var/run/tailscale'
+                mounts = spec['container']['mounts']
+                state_mounts = [mount for mount in mounts if mount['source'] == '/var/lib/tailscale']
+                if len(state_mounts) != 1 or state_mounts[0]['destination'] != '/var/lib/tailscale':
+                    raise ValueError('The pinned Tailscale state mount changed; review its maintenance support')
+                mounts.remove(state_mounts[0])
+                data = yaml.safe_dump(spec, sort_keys=False).encode()
+                member.size = len(data)
+                content = io.BytesIO(data)
+                changed = True
+            output.addfile(member, content)
+            if content is not None:
+                content.close()
+    if not changed:
+        raise ValueError('The pinned extension did not contain its expected Tailscale service')
+    original.unlink()
+
+
+def private_image(args, *, use_sudo=False, maintenance=False):
     config = protected(args.config)
     documents = list(yaml.safe_load_all(config.read_text()))
     machine = next((doc for doc in documents if doc.get('version') == 'v1alpha1'), None)
-    if not machine or machine.get('machine', {}).get('type') not in ('controlplane', 'worker'):
+    if maintenance:
+        allowed = {'HostnameConfig', 'ExtensionServiceConfig', 'NetworkDefaultActionConfig', 'NetworkRuleConfig'}
+        if args.format != 'iso' or any(doc.get('kind') not in allowed for doc in documents):
+            raise ValueError('The shared ISO must contain only maintenance networking, never installation or cluster authority')
+    elif not machine or machine.get('machine', {}).get('type') != 'controlplane':
         raise ValueError('A complete private Talos machine configuration is required')
-    if args.format == 'azure' and machine['machine']['type'] != 'controlplane':
-        raise ValueError('Only the one planned control-plane VM is in scope for Azure images')
+    elif args.format != 'azure':
+        raise ValueError('Worker installations use the shared maintenance ISO')
     if not any(doc.get('kind') == 'ExtensionServiceConfig' and doc.get('name') == 'tailscale' for doc in documents):
         raise ValueError('The image must include the Tailscale enrollment configuration')
     directory = output_directory(args.output)
     private_command([talosctl(), 'validate', '--strict', '--mode', 'metal', '--config', str(config)], directory)
-    profile = yaml.safe_dump(imager_profile(config.read_text(), args.format), sort_keys=False)
+    profile = yaml.safe_dump(imager_profile(config.read_text(), args.format, maintenance=maintenance), sort_keys=False)
+    docker = (['sudo', '--'] if use_sudo else []) + ['docker']
     # Profile/credentials go through stdin, never shell arguments, environment,
     # public Image Factory, a Docker build context, or a repository file. Stage
     # large disk files on operator storage; tar output keeps final files owned
@@ -149,8 +207,9 @@ def private_image(args, *, use_sudo=False):
     log = directory / 'imager.log'
     with (tempfile.TemporaryDirectory(prefix='imager-', dir=directory) as scratch,
           archive.open('xb') as stream, log.open('xb') as errors):
-        result = subprocess.run((['sudo', '--'] if use_sudo else []) +
-                                ['docker', 'run', '--rm', '--privileged', '--platform', 'linux/amd64', '-i',
+        if maintenance:
+            maintenance_extension(Path(scratch), docker)
+        result = subprocess.run([*docker, 'run', '--rm', '--privileged', '--platform', 'linux/amd64', '-i',
                                  '--mount', f'type=bind,source={scratch},target=/out', PINS['imager'], '-', '--tar-to-stdout'],
                                 input=profile.encode(), stdout=stream, stderr=errors, timeout=900)
     archive.chmod(0o600); log.chmod(0o600)
@@ -197,34 +256,35 @@ def endpoint(value, role, bootstrap=False):
     return value.rstrip('/')
 
 
-def auth_record(path, now=None):
+def auth_record(path, now=None, *, reusable=False):
     record = json.loads(protected(path).read_text())
     created = datetime.fromisoformat(record['created'].replace('Z', '+00:00'))
     expires = datetime.fromisoformat(record['expires'].replace('Z', '+00:00'))
     now = now or datetime.now(timezone.utc)
     capability = record['capabilities']['devices']['create']
     if not (created.tzinfo and expires.tzinfo and 0 < (expires-created).total_seconds() <= 86400
-            and created <= now < expires and capability['reusable'] is False
+            and created <= now < expires and capability['reusable'] is reusable
             and capability['ephemeral'] is False and capability['preauthorized'] is True
             and isinstance(record['key'], str) and record['key'].startswith('tskey-auth-')):
-        raise ValueError('Require an unexpired, preauthorized, non-ephemeral, single-use Tailscale key with at most 24 hours lifetime')
+        use = 'reusable' if reusable else 'single-use'
+        raise ValueError(f'Require an unexpired, preauthorized, non-ephemeral, {use} Tailscale key with at most 24 hours lifetime')
     return record
 
 
-def mint(token, tailnet, role, output):
+def mint(token, tailnet, role, output, *, reusable=False):
     """Existing Tailscale API only; the operator credential never enters an image."""
     tag = 'tag:guaranine-' + role
     request = urllib.request.Request(
         'https://api.tailscale.com/api/v2/tailnet/' + urllib.parse.quote(tailnet, safe='') + '/keys',
         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
         data=json.dumps({'capabilities': {'devices': {'create': {
-            'reusable': False, 'ephemeral': False, 'preauthorized': True, 'tags': [tag]}}},
+            'reusable': reusable, 'ephemeral': False, 'preauthorized': True, 'tags': [tag]}}},
             'expirySeconds': 86400, 'description': 'Guaranine ' + role + ' enrollment'}).encode())
     # A POST is never automatically repeated after an ambiguous transport failure.
     with urllib.request.urlopen(request, timeout=30) as response:
         record = json.load(response)
     private_write(output, json.dumps(record, indent=2) + '\n')
-    auth_record(output)
+    auth_record(output, reusable=reusable)
 
 
 def initialize(directory):
@@ -240,10 +300,14 @@ def initialize(directory):
     print(f'Created cluster secrets. Edit {directory / "operator.yaml"}; keep this directory private and backed up.')
 
 
-def check_node(args):
-    if not re.fullmatch(r'[a-z][a-z0-9-]{1,61}[a-z0-9]', args.name):
+def check_name(name):
+    if not re.fullmatch(r'[a-z][a-z0-9-]{1,61}[a-z0-9]', name):
         raise ValueError('Use a unique lowercase DNS label with 3–63 characters')
-    if not re.fullmatch(r'/dev/(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme[0-9]+n[0-9]+)', args.disk) or args.confirm_install_disk != args.disk:
+
+
+def check_node(args):
+    check_name(args.name)
+    if not re.fullmatch(DISK_PATH, args.disk) or args.confirm_install_disk != args.disk:
         raise ValueError('Select the exact target disk and repeat it with --confirm-install-disk')
     if args.role == 'controlplane' and not args.etcd_disk_selector:
         raise ValueError('The control plane requires an explicit retained data-disk selector for ETCD')
@@ -252,10 +316,10 @@ def check_node(args):
     return endpoint(args.endpoint, args.role, args.bootstrap_controlplane)
 
 
-def generate(args):
+def generate(args, *, reusable=False):
     cluster_endpoint = check_node(args)
     secrets = protected(args.secrets)
-    record = auth_record(args.tailscale_key)
+    record = auth_record(args.tailscale_key, reusable=reusable)
     required_tag = 'tag:guaranine-' + args.role
     if required_tag not in record['capabilities']['devices']['create'].get('tags', []):
         raise ValueError('The enrollment key must carry the tag for this node role')
@@ -305,11 +369,9 @@ def generate(args):
     return directory / 'machine.yaml'
 
 
-def prepare(args):
-    """One local operation: key, native profile, upstream image. No daemon or API."""
+def operator_settings():
     directory = operator_directory()
     settings = yaml.safe_load(protected(directory / 'operator.yaml').read_text())
-    secrets = protected(directory / 'secrets.yaml')
     if not isinstance(settings, dict) or not all(
             isinstance(settings.get(field), str) and settings[field].strip() and not settings[field].startswith('REPLACE_')
             for field in ('tailnet', 'tailscale_api_token')):
@@ -317,8 +379,110 @@ def prepare(args):
     token = settings['tailscale_api_token'].strip()
     if not token.isascii() or any(character.isspace() for character in token):
         raise ValueError('Use a single ASCII Tailscale API token without embedded whitespace')
-    args.endpoint = 'https://127.0.0.1:6443' if args.role == 'controlplane' else settings.get('endpoint')
-    args.bootstrap_controlplane = args.role == 'controlplane'
+    return settings
+
+
+def boot_config(key):
+    return yaml.safe_dump_all([
+        {'apiVersion': 'v1alpha1', 'kind': 'HostnameConfig', 'auto': 'stable'},
+        {'apiVersion': 'v1alpha1', 'kind': 'ExtensionServiceConfig', 'name': 'tailscale',
+         'environment': ['TS_AUTHKEY=' + key, 'TS_AUTH_ONCE=true', 'TS_USERSPACE=false',
+                         'TS_ACCEPT_DNS=false', 'TS_EXTRA_ARGS=--accept-routes=false']},
+        {'apiVersion': 'v1alpha1', 'kind': 'NetworkDefaultActionConfig', 'ingress': 'block'},
+        {'apiVersion': 'v1alpha1', 'kind': 'NetworkRuleConfig', 'name': 'maintenance-over-tailscale',
+         'portSelector': {'ports': [50000], 'protocol': 'tcp'}, 'ingress': [{'subnet': TAILNET}]},
+    ], sort_keys=False)
+
+
+def prepare_iso(_args):
+    directory = operator_directory()
+    settings = operator_settings()
+    installer = directory / 'installer'
+    if installer.exists():
+        raise ValueError(f'{installer} already exists; reuse its ISO. Revoke the batch key before removing it to build another ISO.')
+    private_command(['sudo', '--', 'docker', 'info', '--format', '{{.OSType}}'], directory)
+    output_directory(installer)
+    key = installer / 'tailscale-key.json'
+    mint(settings['tailscale_api_token'].strip(), settings['tailnet'], 'worker', key, reusable=True)
+    record = auth_record(key, reusable=True)
+    config = installer / 'boot.yaml'
+    private_write(config, boot_config(record['key']))
+    image = private_image(SimpleNamespace(config=config, format='iso', output=installer / 'image'),
+                          use_sudo=True, maintenance=True)
+    print(f'Private shared ISO ready: {image}')
+    print(f'New Tailscale registrations expire at {record["expires"]}. Booting this ISO does not authorize disk installation.')
+    print('After booting a laptop, run ./guaranine worker on the operator computer to choose its name and disk.')
+
+
+def read_disks(connection, directory):
+    raw = private_command([talosctl(), 'get', 'disks', *connection, '--output', 'json'], directory)
+    disks = []
+    # talosctl streams one JSON object per resource, without an enclosing array.
+    decoder = json.JSONDecoder()
+    while raw.strip():
+        resource, end = decoder.raw_decode(raw.lstrip())
+        raw = raw.lstrip()[end:]
+        spec = resource['spec']
+        if re.fullmatch(DISK_PATH, spec.get('dev_path', '')) and not spec.get('readonly', True) and not spec.get('cdrom', True):
+            disks.append(spec)
+    return sorted(disks, key=lambda disk: disk['dev_path'])
+
+
+def install_worker(_args):
+    directory = operator_directory()
+    settings = operator_settings()
+    cluster_endpoint = endpoint(settings.get('endpoint'), 'worker')
+    secrets = protected(directory / 'secrets.yaml')
+    key = directory / 'installer/tailscale-key.json'
+    auth_record(key, reusable=True)
+    address = input('Laptop Tailscale IPv4 address: ').strip()
+    if ipaddress.ip_address(address) not in ipaddress.ip_network(TAILNET):
+        raise ValueError('Use the target laptop\'s Tailscale IPv4 address')
+    fingerprint = input('Talos certificate fingerprint from that laptop\'s screen: ').strip()
+    if not fingerprint:
+        raise ValueError('Copy the certificate fingerprint from the target laptop before installing')
+    name = input('Worker name: ').strip()
+    check_name(name)
+    node = directory / 'nodes' / name
+    if node.exists():
+        raise ValueError(f'{node} already exists; use a new worker name')
+    connection = ['--insecure', '--nodes', address, '--cert-fingerprint', fingerprint]
+    disks = read_disks(connection, directory)
+    if not disks:
+        raise ValueError('The laptop reported no supported writable installation disks')
+    for number, disk in enumerate(disks, 1):
+        print(f'{number}. {disk.get("model", "Unknown model")} | {disk.get("pretty_size", disk["size"])} | '
+              f'{disk.get("serial", "No serial")} | {disk.get("transport", "Unknown transport")} | {disk["dev_path"]}')
+    choice = input('Installation disk number (no default): ').strip()
+    if not choice.isdecimal() or not 1 <= int(choice) <= len(disks):
+        raise ValueError('Select one of the listed disk numbers; nothing was installed')
+    selected = disks[int(choice) - 1]
+    disk = selected['dev_path']
+    confirmation = f'ERASE {name} {disk}'
+    print(f'Install worker {name} on {address}; ALL DATA on {disk} will be erased.')
+    if input(f'Type {confirmation} to install, or anything else to cancel: ').strip() != confirmation:
+        raise ValueError('Installation cancelled; no configuration was applied')
+    if selected not in read_disks(connection, directory):
+        raise ValueError('The selected disk changed; inspect the laptop again before installing')
+    auth_record(key, reusable=True)
+    output_directory(node)
+    profile = generate(SimpleNamespace(
+        name=name, role='worker', cluster='guaranine', endpoint=cluster_endpoint,
+        bootstrap_controlplane=False, disk=disk, confirm_install_disk=disk,
+        secrets=secrets, tailscale_key=key, etcd_disk_selector=None, output=node / 'config'), reusable=True)
+    auth_record(key, reusable=True)
+    private_command([talosctl(), 'apply-config', *connection, '--file', str(profile)], node)
+    print(f'Installation configuration sent for {name}. The laptop will install and reboot; remove the USB when it reboots.')
+    print(f'Its Tailscale address may change. Verify kubectl get node {name} reports Ready before using it.')
+
+
+def prepare(args):
+    """Prepare the one control-plane VHD with the pinned upstream tools."""
+    directory = operator_directory()
+    settings = operator_settings()
+    secrets = protected(directory / 'secrets.yaml')
+    args.endpoint = 'https://127.0.0.1:6443'
+    args.bootstrap_controlplane = True
     check_node(args)
     node = directory / 'nodes' / args.name
     if node.exists():
@@ -327,13 +491,13 @@ def prepare(args):
     private_command(['sudo', '--', 'docker', 'info', '--format', '{{.OSType}}'], directory)
     output_directory(node)
     key = node / 'tailscale-key.json'
-    mint(token, settings['tailnet'], args.role, key)
+    mint(settings['tailscale_api_token'].strip(), settings['tailnet'], args.role, key)
     profile = generate(SimpleNamespace(
         name=args.name, role=args.role, cluster='guaranine', endpoint=args.endpoint,
         bootstrap_controlplane=args.bootstrap_controlplane, disk=args.disk,
         confirm_install_disk=args.confirm_install_disk, secrets=secrets, tailscale_key=key,
         etcd_disk_selector=args.etcd_disk_selector, output=node / 'config'))
-    image = private_image(SimpleNamespace(config=profile, format='azure' if args.role == 'controlplane' else 'iso',
+    image = private_image(SimpleNamespace(config=profile, format='azure',
                                           output=node / 'image'), use_sudo=True)
     print(f'Private image ready: {image}')
     print('Keep it private. No Azure resource was created and no laptop was modified.')
@@ -360,18 +524,14 @@ def main(argv=None):
     init.set_defaults(action=lambda args: initialize(operator_directory()))
     build = commands.add_parser('build-controlplane', help='Build the prepared control-plane VHD; sudo authorizes Docker only')
     build.set_defaults(action=build_controlplane)
+    commands.add_parser('iso', help='Build one private maintenance ISO for a 24-hour laptop batch').set_defaults(action=prepare_iso)
+    commands.add_parser('worker', help='Choose a booted laptop\'s worker name and installation disk').set_defaults(action=install_worker)
     commands.add_parser('talosctl', help='Run the checksum-pinned upstream talosctl', add_help=False)
-    for role in ('worker', 'controlplane'):
-        node = commands.add_parser(role, help='Prepare one private ISO' if role == 'worker' else 'Prepare the planned Azure control-plane VHD')
-        if role == 'worker':
-            node.add_argument('name', help='Unique laptop name')
-        else:
-            node.set_defaults(name='guaranine-controlplane')
-        node.add_argument('--disk', required=True, help='Exact whole disk the image will install onto')
-        node.add_argument('--confirm-install-disk', required=True, help='Repeat the disk to authorize unattended installation')
-        if role == 'controlplane':
-            node.add_argument('--etcd-disk-selector', required=True, help='Talos selector for the retained Azure data disk at LUN 0')
-        node.set_defaults(action=prepare, role=role, etcd_disk_selector=None)
+    node = commands.add_parser('controlplane', help='Prepare the planned Azure control-plane VHD')
+    node.add_argument('--disk', required=True, help='Exact whole OS disk')
+    node.add_argument('--confirm-install-disk', required=True, help='Repeat the disk to confirm the choice')
+    node.add_argument('--etcd-disk-selector', required=True, help='Talos selector for the retained Azure data disk at LUN 0')
+    node.set_defaults(action=prepare, role='controlplane', name='guaranine-controlplane')
     os.umask(0o077)
     try:
         argv = sys.argv[1:] if argv is None else argv
@@ -383,6 +543,8 @@ def main(argv=None):
         args.action(args)
     except yaml.YAMLError:
         parser.exit(1, 'Invalid private YAML; check the operator/configuration file locally.\n')
+    except (EOFError, KeyboardInterrupt):
+        parser.exit(1, 'Cancelled. If configuration was already sent, check the laptop before retrying.\n')
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         # HTTP response bodies and private configuration are never printed.
         parser.exit(1, f'{type(error).__name__}: {error}\n')

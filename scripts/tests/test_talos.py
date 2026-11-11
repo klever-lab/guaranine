@@ -79,6 +79,28 @@ class TalosConfigTests(unittest.TestCase):
             self.assertNotIn('latest', json.dumps(profile))
             self.assertEqual(profile['platform'], 'azure' if image_format == 'azure' else 'metal')
 
+    def test_shared_boot_profile_has_no_install_disk_cluster_authority_or_fixed_identity(self):
+        boot = cli.boot_config('tskey-auth-DISPOSABLE-SHARED')
+        docs = list(cli.yaml.safe_load_all(boot))
+        self.assertEqual({doc['kind'] for doc in docs},
+                         {'HostnameConfig', 'ExtensionServiceConfig', 'NetworkDefaultActionConfig', 'NetworkRuleConfig'})
+        self.assertEqual(next(doc for doc in docs if doc['kind'] == 'HostnameConfig')['auto'], 'stable')
+        self.assertNotIn('TS_HOSTNAME', boot)
+        self.assertNotIn('disk', boot)
+        self.assertNotIn('cluster', boot)
+        rule = next(doc for doc in docs if doc['kind'] == 'NetworkRuleConfig')
+        self.assertEqual(rule['portSelector'], {'ports': [50000], 'protocol': 'tcp'})
+        self.assertEqual(rule['ingress'], [{'subnet': cli.TAILNET}])
+        profile = cli.imager_profile(boot, 'iso', maintenance=True)
+        self.assertEqual(profile['input']['systemExtensions'], [{'tarballPath': '/out/tailscale-maintenance.tar'}])
+
+    def test_only_an_explicit_batch_accepts_a_reusable_key(self):
+        self.record['capabilities']['devices']['create']['reusable'] = True
+        self.write()
+        self.assertEqual(cli.auth_record(self.key, NOW, reusable=True)['id'], 'fixture')
+        with self.assertRaises(ValueError): cli.auth_record(self.key, NOW)
+        with self.assertRaises(ValueError): cli.auth_record(self.key, NOW + timedelta(hours=24), reusable=True)
+
     def test_corrupt_download_never_replaces_the_destination(self):
         import io
         class Response(io.BytesIO):
@@ -115,25 +137,36 @@ class MachineCommandTests(unittest.TestCase):
         cli.private_write(self.root / 'operator.yaml',
                              'tailnet: example.invalid\ntailscale_api_token: DISPOSABLE-OPERATOR-TOKEN\nendpoint: https://100.64.0.7:6443\n')
         cli.private_write(self.root / 'secrets.yaml', 'DISPOSABLE-CLUSTER-SECRETS')
-        self.args = SimpleNamespace(role='worker', name='laptop-01', disk='/dev/vda',
-                                    confirm_install_disk='/dev/vda', etcd_disk_selector=None)
+        self.args = SimpleNamespace(role='controlplane', name='guaranine-controlplane', disk='/dev/vda',
+                                    confirm_install_disk='/dev/vda', etcd_disk_selector='disk.dev_path == "/dev/vdb"')
 
-    def test_one_command_uses_saved_settings_and_only_embeds_the_machine_profile(self):
-        with (patch.object(cli, 'mint') as mint,
+    def test_one_iso_command_embeds_networking_and_a_batch_key_without_reading_cluster_secrets(self):
+        (self.root / 'secrets.yaml').unlink()
+
+        def create_key(token, tailnet, role, output, *, reusable=False):
+            now = datetime.now(timezone.utc)
+            cli.private_write(output, json.dumps({
+                'id': 'batch', 'key': 'tskey-auth-DISPOSABLE-BATCH', 'created': now.isoformat(),
+                'expires': (now + timedelta(hours=24)).isoformat(),
+                'capabilities': {'devices': {'create': {'reusable': reusable, 'ephemeral': False,
+                                 'preauthorized': True, 'tags': ['tag:guaranine-' + role]}}}}))
+
+        with (patch.object(cli, 'mint', side_effect=create_key) as mint,
               patch.object(cli, 'private_command') as docker,
-              patch.object(cli, 'generate', return_value=self.root / 'nodes/laptop-01/config/machine.yaml') as generate,
-              patch.object(cli, 'private_image', return_value=self.root / 'nodes/laptop-01/image/talos.iso') as image):
-            cli.main(['worker', 'laptop-01', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda'])
+              patch.object(cli, 'generate') as generate,
+              patch.object(cli, 'private_image', return_value=self.root / 'installer/image/talos.iso') as image,
+              contextlib.redirect_stdout(io.StringIO())):
+            cli.main(['iso'])
         self.assertEqual(mint.call_args.args[:3], ('DISPOSABLE-OPERATOR-TOKEN', 'example.invalid', 'worker'))
+        self.assertEqual(mint.call_args.kwargs, {'reusable': True})
         docker.assert_called_once_with(['sudo', '--', 'docker', 'info', '--format', '{{.OSType}}'], self.root)
-        profile = generate.call_args.args[0]
-        self.assertEqual(profile.endpoint, 'https://100.64.0.7:6443')
-        self.assertEqual(profile.secrets, self.root / 'secrets.yaml')
-        self.assertFalse(profile.bootstrap_controlplane)
-        self.assertEqual(image.call_args.args[0].config, self.root / 'nodes/laptop-01/config/machine.yaml')
+        generate.assert_not_called()
+        self.assertEqual(image.call_args.args[0].config, self.root / 'installer/boot.yaml')
         self.assertEqual(image.call_args.args[0].format, 'iso')
-        self.assertTrue(image.call_args.kwargs['use_sudo'])
-        self.assertEqual((self.root / 'nodes/laptop-01').stat().st_mode & 0o777, 0o700)
+        self.assertEqual(image.call_args.kwargs, {'use_sudo': True, 'maintenance': True})
+        self.assertNotIn('DISPOSABLE-OPERATOR-TOKEN', (self.root / 'installer/boot.yaml').read_text())
+        self.assertEqual((self.root / 'installer').stat().st_mode & 0o777, 0o700)
+        self.assertEqual((self.root / 'installer/boot.yaml').stat().st_mode & 0o777, 0o600)
 
     def test_bad_settings_disk_endpoint_or_existing_node_never_issue_a_key(self):
         with (patch.object(cli, 'mint') as mint, patch.object(cli, 'private_command')):
@@ -144,12 +177,12 @@ class MachineCommandTests(unittest.TestCase):
                     with self.assertRaises(ValueError): cli.prepare(self.args)
                     setattr(self.args, field, original)
             original = (self.root / 'operator.yaml').read_text()
-            for content in ('tailnet: REPLACE_WITH_TAILNET\n', original.replace('100.64.0.7', '192.168.1.2'),
+            for content in ('tailnet: REPLACE_WITH_TAILNET\n',
                             original.replace('DISPOSABLE-OPERATOR-TOKEN', 'INVALID MULTILINE TOKEN')):
                 (self.root / 'operator.yaml').write_text(content)
                 with self.assertRaises(ValueError): cli.prepare(self.args)
             (self.root / 'operator.yaml').write_text(original)
-            cli.output_directory(self.root / 'nodes/laptop-01')
+            cli.output_directory(self.root / 'nodes/guaranine-controlplane')
             with self.assertRaises(ValueError): cli.prepare(self.args)
             mint.assert_not_called()
 
@@ -165,7 +198,7 @@ class MachineCommandTests(unittest.TestCase):
         (self.root / 'operator.yaml').write_text('tailscale_api_token: [' + marker)
         errors = io.StringIO()
         with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit):
-            cli.main(['worker', 'laptop-01', '--disk', '/dev/vda', '--confirm-install-disk', '/dev/vda'])
+            cli.main(['iso'])
         self.assertIn('Invalid private YAML', errors.getvalue())
         self.assertNotIn(marker, errors.getvalue())
 
@@ -188,6 +221,164 @@ class MachineCommandTests(unittest.TestCase):
             cli.main(['talosctl', '--talosconfig', '/private/talosconfig', 'version', '--client'])
         execute.assert_called_once_with('/verified/talosctl',
             ['/verified/talosctl', '--talosconfig', '/private/talosconfig', 'version', '--client'])
+
+
+class WorkerInstallationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        environment = patch.dict(os.environ, GUARANINE_OPERATOR_DIR=str(self.root))
+        environment.start()
+        self.addCleanup(environment.stop)
+        cli.private_write(self.root / 'operator.yaml', 'tailnet: example.invalid\ntailscale_api_token: DISPOSABLE-OPERATOR\n'
+                          'endpoint: https://100.64.0.7:6443\n')
+        cli.private_write(self.root / 'secrets.yaml', 'DISPOSABLE-CLUSTER-SECRETS')
+        cli.output_directory(self.root / 'installer')
+        now = datetime.now(timezone.utc)
+        self.key = {'key': 'tskey-auth-DISPOSABLE-BATCH', 'created': now.isoformat(),
+                    'expires': (now + timedelta(hours=24)).isoformat(),
+                    'capabilities': {'devices': {'create': {'reusable': True, 'ephemeral': False,
+                                     'preauthorized': True, 'tags': ['tag:guaranine-worker']}}}}
+        cli.private_write(self.root / 'installer/tailscale-key.json', json.dumps(self.key))
+        self.disk = {'dev_path': '/dev/nvme0n1', 'size': 512000000000, 'pretty_size': '512 GB',
+                     'readonly': False, 'cdrom': False, 'model': 'Fixture SSD', 'serial': 'DISPOSABLE-DISK-1', 'transport': 'nvme'}
+        self.resources = [{'spec': self.disk},
+                          {'spec': {**self.disk, 'dev_path': '/dev/sda', 'model': 'Fixture USB', 'transport': 'usb'}},
+                          {'spec': {**self.disk, 'dev_path': '/dev/sr0', 'cdrom': True}},
+                          {'spec': {**self.disk, 'dev_path': '/dev/loop0', 'readonly': True}},
+                          {'spec': {**self.disk, 'dev_path': '/dev/nvme0n1p1'}}]
+        self.raw = '\n'.join(json.dumps(resource, indent=2) for resource in self.resources)
+        self.answers = ['100.64.0.8', 'SHA256:DISPOSABLE-FINGERPRINT', 'garage-01', '1', 'ERASE garage-01 /dev/nvme0n1']
+
+    def test_name_and_discovered_disk_are_applied_together_with_pinned_peer_certificate(self):
+        calls = []
+
+        def command(args, directory, **kwargs):
+            calls.append(args)
+            return self.raw if 'get' in args else ''
+
+        console = io.StringIO()
+        with (patch('builtins.input', side_effect=self.answers), patch.object(cli, 'private_command', side_effect=command),
+              patch.object(cli, 'talosctl', return_value='/verified/talosctl'), patch.object(cli, 'mint') as mint,
+              patch.object(cli, 'private_image') as image, patch.object(cli, 'generate', return_value=self.root / 'worker.yaml') as generate,
+              contextlib.redirect_stdout(console)):
+            cli.main(['worker'])
+        profile = generate.call_args.args[0]
+        self.assertEqual(profile.name, 'garage-01')
+        self.assertEqual(profile.disk, '/dev/nvme0n1')
+        self.assertEqual(profile.confirm_install_disk, profile.disk)
+        self.assertEqual(profile.endpoint, 'https://100.64.0.7:6443')
+        self.assertEqual(profile.tailscale_key, self.root / 'installer/tailscale-key.json')
+        self.assertEqual(generate.call_args.kwargs, {'reusable': True})
+        self.assertEqual(calls[-1], ['/verified/talosctl', 'apply-config', '--insecure', '--nodes', '100.64.0.8',
+                                    '--cert-fingerprint', self.answers[1], '--file', str(self.root / 'worker.yaml')])
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all('--cert-fingerprint' in command for command in calls))
+        mint.assert_not_called()
+        image.assert_not_called()
+        self.assertIn('Fixture SSD', console.getvalue())
+        self.assertIn('Fixture USB', console.getvalue())
+        self.assertNotIn('/dev/loop0', console.getvalue())
+        self.assertNotIn('DISPOSABLE-CLUSTER-SECRETS', console.getvalue())
+        self.assertNotIn('tskey-auth-', console.getvalue())
+
+    def test_no_default_disk_cancellation_and_changed_disk_never_apply_or_generate_configuration(self):
+        for answers, reports in [
+            (self.answers[:3] + [''], [self.raw]),
+            (self.answers[:3] + ['3'], [self.raw]),
+            (self.answers[:-1] + ['no'], [self.raw]),
+            (self.answers, [self.raw, json.dumps({'spec': {**self.disk, 'serial': 'DIFFERENT-DISK'}})]),
+        ]:
+            with (self.subTest(answers=answers), patch('builtins.input', side_effect=answers),
+                  patch.object(cli, 'private_command', side_effect=reports) as command,
+                  patch.object(cli, 'talosctl', return_value='/verified/talosctl'), patch.object(cli, 'generate') as generate,
+                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()),
+                  self.assertRaises(SystemExit)):
+                cli.main(['worker'])
+            generate.assert_not_called()
+            self.assertTrue(all('apply-config' not in call.args[0] for call in command.call_args_list))
+            self.assertFalse((self.root / 'nodes').exists())
+
+    def test_invalid_names_addresses_and_missing_fingerprint_fail_before_querying_a_machine(self):
+        for answers in [['192.168.1.4'], ['100.64.0.8', ''], self.answers[:2] + ['../outside'],
+                        self.answers[:2] + ['HAS SPACES']]:
+            with (self.subTest(answers=answers), patch('builtins.input', side_effect=answers),
+                  patch.object(cli, 'private_command') as command, contextlib.redirect_stdout(io.StringIO()),
+                  contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit)):
+                cli.main(['worker'])
+            command.assert_not_called()
+
+    def test_batch_expiring_during_profile_generation_never_sends_installation_configuration(self):
+        def expired_during_generation(*args, **kwargs):
+            now = datetime.now(timezone.utc)
+            self.key['created'] = (now - timedelta(hours=1)).isoformat()
+            self.key['expires'] = (now - timedelta(seconds=1)).isoformat()
+            (self.root / 'installer/tailscale-key.json').write_text(json.dumps(self.key))
+            return self.root / 'worker.yaml'
+
+        with (patch('builtins.input', side_effect=self.answers), patch.object(cli, 'private_command', return_value=self.raw) as command,
+              patch.object(cli, 'talosctl', return_value='/verified/talosctl'),
+              patch.object(cli, 'generate', side_effect=expired_during_generation),
+              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit)):
+            cli.main(['worker'])
+        self.assertTrue(all('apply-config' not in call.args[0] for call in command.call_args_list))
+
+    def test_expired_batch_and_existing_worker_name_never_modify_the_laptop(self):
+        cli.output_directory(self.root / 'nodes/garage-01')
+        with (patch('builtins.input', side_effect=self.answers[:3]), patch.object(cli, 'private_command') as command,
+              contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit)):
+            cli.main(['worker'])
+        command.assert_not_called()
+        self.key['created'] = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        self.key['expires'] = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        (self.root / 'installer/tailscale-key.json').write_text(json.dumps(self.key))
+        with (patch('builtins.input') as prompt, patch.object(cli, 'private_command') as command,
+              contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit)):
+            cli.main(['worker'])
+        prompt.assert_not_called()
+        command.assert_not_called()
+
+
+class MaintenanceExtensionTests(unittest.TestCase):
+    def test_maintenance_uses_ram_state_without_cri_and_preserves_the_pinned_binary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / 'scratch'
+            directory.mkdir()
+            service = {'name': 'tailscale', 'depends': [{'service': 'cri'}, {'configuration': True}],
+                       'container': {'entrypoint': '/usr/local/bin/containerboot',
+                                     'environment': ['TS_STATE_DIR=/var/lib/tailscale'],
+                                     'mounts': [{'source': '/var/lib/tailscale', 'destination': '/var/lib/tailscale'},
+                                                {'source': '/var/run/tailscale', 'destination': '/var/run/tailscale'}]}}
+            original = directory / 'fixture.tar'
+            with tarfile.open(original, 'w') as archive:
+                for name, data in [('rootfs/usr/local/etc/containers/tailscale.yaml', cli.yaml.safe_dump(service).encode()),
+                                   ('rootfs/usr/local/bin/containerboot', b'PINNED UPSTREAM BINARY')]:
+                    member = tarfile.TarInfo(name); member.size = len(data)
+                    archive.addfile(member, io.BytesIO(data))
+
+            def export(command, **kwargs):
+                self.assertEqual(command, ['docker', 'export', 'fixture-container'])
+                kwargs['stdout'].write(original.read_bytes())
+                return subprocess.CompletedProcess(command, 0)
+
+            with (patch.object(cli, 'private_command', side_effect=['fixture-container\n', '']) as command,
+                  patch.object(cli.subprocess, 'run', side_effect=export)):
+                cli.maintenance_extension(directory, ['docker'])
+            self.assertEqual(command.call_args_list[0].args[0],
+                             ['docker', 'create', '--platform', 'linux/amd64', '--entrypoint', '/unused', cli.PINS['tailscale_extension']])
+            self.assertEqual(command.call_args_list[1].args[0], ['docker', 'rm', 'fixture-container'])
+            with tarfile.open(directory / 'tailscale-maintenance.tar') as archive:
+                adjusted = cli.yaml.safe_load(archive.extractfile('rootfs/usr/local/etc/containers/tailscale.yaml').read())
+                self.assertEqual(adjusted['depends'], [{'configuration': True}])
+                self.assertEqual(adjusted['container']['environment'], ['TS_STATE_DIR=/var/run/tailscale'])
+                self.assertEqual(adjusted['container']['mounts'], [{'source': '/var/run/tailscale', 'destination': '/var/run/tailscale'}])
+                adjusted['depends'].insert(0, {'service': 'cri'})
+                adjusted['container']['environment'] = service['container']['environment']
+                adjusted['container']['mounts'] = service['container']['mounts']
+                self.assertEqual(adjusted, service)
+                self.assertEqual(archive.extractfile('rootfs/usr/local/bin/containerboot').read(), b'PINNED UPSTREAM BINARY')
+            self.assertFalse((directory / 'tailscale-upstream.tar').exists())
 
 
 class PreparedControlPlaneBuildTests(unittest.TestCase):

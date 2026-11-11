@@ -36,5 +36,11 @@ jobs:
           python-version: '3.12'
       - name: Install runtime dependency
         run: python3 -m pip install --requirement requirements.txt
-      - name: Build disposable private ISO and Azure VHD with upstream imager
+      - name: Install the disposable boot-test hypervisor
+        timeout-minutes: 5
+        run: |
+          echo 'https://mirrors.edge.kernel.org/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
+          sudo apt-get update --error-on=any
+          sudo apt-get install --yes --no-install-recommends qemu-system-x86
+      - name: Build disposable ISO/VHD and boot the same ISO in two isolated guests
         run: python3 scripts/test-private-images.py
