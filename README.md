@@ -16,13 +16,11 @@ One Talos control-plane VM on Azure, plus laptop workers anywhere. Kubernetes pl
 
 4. Boot each laptop from that ISO. On the operator computer, run `./guaranine worker` to choose its name, select from its detected disks and explicitly confirm erasure. See [SETUP.md](SETUP.md#add-a-laptop) for the prompts and verification. Use Kubernetes manifests with CPU/RAM requests to run applications; Kubernetes chooses the worker.
 
-The ISO command runs the pinned upstream Talos imager locally. Private files stay in `~/.local/state/guaranine` by default. [SETUP.md](SETUP.md) owns batch renewal, enrollment limits, bootstrap and worker removal.
-
 ## What is ready
 
 The shared private ISO boots into maintenance mode. Each laptop receives its name, disk choice and cluster configuration only after the operator confirms installation. See [enrollment limits](SETUP.md#enrollment-security-status).
 
-**The Azure control plane is deployed.** See [SETUP.md](SETUP.md) for operation and recovery. Hardware-bound enrollment, enforceable expiry of all cluster join authority and YubiKey boot authorization remain unfinished. Physical laptop installation and operation across worker locations still need verification.
+**The Azure control plane is deployed.** Hardware-bound enrollment, enforceable expiry of all cluster join authority and YubiKey boot authorization remain unfinished. Physical laptop installation and operation across worker locations still need verification.
 
 | Need | Current choice |
 | --- | --- |
@@ -45,11 +43,9 @@ Use Python 3.12+. Run the same checks as CI:
 env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bash scripts/validate.sh
 ```
 
-This checks both Talos roles, machine preparation, credential boundaries, workflows, shell and credential-free Terraform plans/lifecycle. The [private-image workflow](.github/workflows/private-images.yml) separately builds disposable private ISO/VHD fixtures and discards them. It publishes no images. Todo issues in the existing [Guaranine Linear project](https://linear.app/kian-finishing-zombie-granola/project/guaranine-5e147e0efbea) use the shared Clusterfork Symphony controller.
+Todo issues in the existing [Guaranine Linear project](https://linear.app/kian-finishing-zombie-granola/project/guaranine-5e147e0efbea) use the shared Clusterfork Symphony controller.
 
 ## Original design question
-
-Preserved verbatim. The current choice is Talos-managed Kubernetes; K3s and LXC are historical references.
 
 ```text
 okay be honest, should i go with a purpose built controller or k3s?
