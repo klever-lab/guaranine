@@ -37,7 +37,9 @@ jobs:
       - name: Install runtime dependency
         run: python3 -m pip install --requirement requirements.txt
       - name: Install the disposable boot-test hypervisor
+        timeout-minutes: 5
         run: |
+          echo 'https://archive.ubuntu.com/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends qemu-system-x86
       - name: Build disposable ISO/VHD and boot the same ISO in two isolated guests
