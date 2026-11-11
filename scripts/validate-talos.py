@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-from guaranine import fetch, generate, initialize
+from guaranine import boot_config, fetch, generate, initialize, talosctl
 
 ACTIONLINT = {
     'linux_amd64': '023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757',
@@ -32,6 +32,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix='guaranine-talos-validation-') as scratch:
         scratch = Path(scratch)
         initialize(scratch / 'cluster')
+        boot = scratch / 'boot.yaml'
+        boot.write_text(boot_config('tskey-auth-DISPOSABLE-MAINTENANCE'))
+        boot.chmod(0o600)
+        subprocess.run([talosctl(), 'validate', '--strict', '--mode', 'metal', '--config', str(boot)], check=True)
         for role in ('controlplane', 'worker'):
             now = datetime.now(timezone.utc)
             key = scratch / (role + '-key.json')
@@ -51,6 +55,8 @@ def main():
             expected_files = {'machine.yaml', 'talosconfig'} if role == 'controlplane' else {'machine.yaml'}
             assert {path.name for path in (scratch / role).iterdir()} == expected_files
             assert machine['machine']['type'] == role
+            assert next(doc for doc in docs if doc.get('kind') == 'HostnameConfig')['hostname'] == 'test-' + role
+            assert 'TS_HOSTNAME=test-' + role in next(doc for doc in docs if doc.get('kind') == 'ExtensionServiceConfig')['environment']
             assert not any(doc.get('kind') == 'KubePrismConfig' for doc in docs)
             assert any(doc.get('kind') == 'UnattendedInstallConfig' for doc in docs) == (role == 'worker')
             assert next(doc for doc in docs if doc.get('kind') == 'KubeNodeConfig')['nodeIP']['validSubnets'] == ['100.64.0.0/10']

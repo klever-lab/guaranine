@@ -8,28 +8,28 @@ One Talos control-plane VM on Azure, plus laptop workers anywhere. Kubernetes pl
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Docker on your operator computer. Run `./guaranine init` once and fill in its private `operator.yaml`.
 2. Follow [SETUP.md](SETUP.md) for the one-time Azure control-plane setup.
-3. Save its Tailscale Kubernetes endpoint in `operator.yaml`. Prepare each laptop with one command:
+3. Save its Tailscale Kubernetes endpoint in `operator.yaml`. Build one private ISO for the laptop batch:
 
    ```bash
-   ./guaranine worker laptop-01 --disk /dev/nvme0n1 --confirm-install-disk /dev/nvme0n1
+   ./guaranine iso
    ```
 
-4. Install and boot that laptop's **private** ISO. Its embedded configuration handles installation and enrollment. Use Kubernetes manifests with CPU/RAM requests to run applications; Kubernetes chooses the worker.
+4. Boot each laptop from that ISO. On the operator computer, run `./guaranine worker` to choose its name, select from its detected disks and explicitly confirm erasure. See [SETUP.md](SETUP.md#add-a-laptop) for the prompts and verification. Use Kubernetes manifests with CPU/RAM requests to run applications; Kubernetes chooses the worker.
 
-The preparation command creates a short-lived Tailscale key, generates and validates the node configuration, and runs the pinned upstream Talos imager. Its files stay in `~/.local/state/guaranine` by default. [SETUP.md](SETUP.md) covers settings, bootstrap and worker removal.
+The ISO command runs the pinned upstream Talos imager locally. Private files stay in `~/.local/state/guaranine` by default. [SETUP.md](SETUP.md) owns batch renewal, enrollment limits, bootstrap and worker removal.
 
 ## What is ready
 
-The supported installer is a private ISO generated for each laptop with `./guaranine worker`. It contains that laptop's enrollment configuration and is built directly with upstream Talos tooling. See [enrollment limits](SETUP.md#enrollment-security-status).
+The shared private ISO boots into maintenance mode. Each laptop receives its name, disk choice and cluster configuration only after the operator confirms installation. See [enrollment limits](SETUP.md#enrollment-security-status).
 
-**The Azure control plane is deployed.** See [SETUP.md](SETUP.md) for operation and recovery. The full 24-hour, single-use, hardware-bound enrollment policy and YubiKey boot authorization remain unfinished. Laptop installation and operation across worker locations still need verification.
+**The Azure control plane is deployed.** See [SETUP.md](SETUP.md) for operation and recovery. Hardware-bound enrollment, enforceable expiry of all cluster join authority and YubiKey boot authorization remain unfinished. Physical laptop installation and operation across worker locations still need verification.
 
 | Need | Current choice |
 | --- | --- |
 | Schedule and manage containers | Kubernetes Deployments, resource requests and standard lifecycle commands |
 | Configure and update machines | Talos configuration and `talosctl` |
 | Connect scattered machines | Official Tailscale system extension |
-| Add/remove workers | One private image command; Kubernetes cordon/drain before removal |
+| Add/remove workers | Shared private ISO, then one name/disk confirmation command per laptop; Kubernetes cordon/drain before removal |
 | Provision the control plane | Terraform; local state on encrypted operator storage with off-machine backups |
 | Monitoring, public domains/TLS, external secrets | Later upstream integrations, only when needed |
 | Movable persistent storage and QEMU/KVM VMs | Later work; storage/fencing and KubeVirt need qualification |
