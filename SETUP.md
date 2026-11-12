@@ -39,7 +39,7 @@ Only admins own the node tags. Workers reach the server on TCP 6443; the server 
 
 ## Cloud preflight
 
-Verify the selected Azure for Students subscription, remaining credit, expiry, spending limit, region/SKU availability, quota and complete cost before provisioning. Do not apply with unknown credit/cost/quota or select an automatic paid fallback. Existing Azure services and the shared Clusterfork controller remain separate.
+Verify the selected Azure for Students subscription, remaining credit, expiry, spending limit, region/SKU availability, quota and complete cost before provisioning. Do not apply with unknown credit/cost/quota or select an automatic paid fallback. Keep existing Azure services separate.
 
 The Terraform default is `Standard_B2ls_v2` (2 vCPUs/4 GiB), a 32-GiB OS SSD and a retained 64-GiB data SSD at LUN 0. Account for compute, both disks, image/upload storage, public IPv4 and outbound traffic. Stopped VMs can still incur disk/image/IP costs.
 

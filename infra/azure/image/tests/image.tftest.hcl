@@ -55,6 +55,6 @@ run "reject_unaligned_vhd" {
 
 run "reject_foreign_image_namespace" {
   command = plan
-  variables { image_name = "symphony-image" }
+  variables { image_name = "unrelated-image" }
   expect_failures = [var.image_name]
 }

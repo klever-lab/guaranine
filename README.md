@@ -25,8 +25,6 @@ env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bas
 
 The private-image workflow builds and boots disposable fixtures without publishing images or using real credentials. Laptop hardware and live WAN operation require separate verification.
 
-Todo issues in the existing [Guaranine Linear project](https://linear.app/kian-finishing-zombie-granola/project/guaranine-5e147e0efbea) use the shared Clusterfork Symphony controller.
-
 ## Original design question
 
 ```text

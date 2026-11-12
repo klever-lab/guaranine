@@ -159,7 +159,7 @@ run "reject_fractional_capacity" {
 run "reject_foreign_namespace" {
   command = plan
   variables {
-    name_prefix = "symphony"
+    name_prefix = "unrelated"
   }
   expect_failures = [var.name_prefix]
 }

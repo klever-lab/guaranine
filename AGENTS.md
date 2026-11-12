@@ -4,11 +4,13 @@ Read [README.md](README.md) first, then [SETUP.md](SETUP.md).
 
 ## Rules
 
+- Work directly on `main` unless the user explicitly asks for another branch.
 - The controller (K3s control plane) must run in a cloud VM.
 - Only update this file when the user instructs you to.
 - Azure is temporary hosting; preserve an exit and restore path to another cloud VM.
 - **Keep this repo KISS as fuck: stupid easy to use and boring to maintain. Complexity alone is enough to veto an idea.**
 - Use prebuilt upstream components and standard interfaces; prefer deleting code, options and steps over adding abstractions.
+- Accept breaking changes to keep code simple. Replace superseded implementations and remove their code and options; avoid compatibility layers and legacy fallbacks.
 - Add only minimum glue for current requirements; exclude speculative services, dependencies, Terraform roots, frameworks, plugins, fallback matrices and operator procedures.
 - Every private inter-host connection must use Tailscale; support separate sites, direct/relayed paths and outages without LAN or low-latency assumptions.
 - Laptop workers must support built-in Wi-Fi from initial boot through installation and normal operation, without requiring Ethernet, adapters or external bridges. Verify OS, installer and driver support for the target laptops before recommending a platform or building installation media.
