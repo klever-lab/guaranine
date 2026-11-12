@@ -48,7 +48,7 @@ def boot(image, directory, number, *, cloud=False):
                '-netdev', 'user,id=n0,restrict=on', '-device', 'virtio-net-pci,netdev=n0']
     if cloud:
         pairs = [code for root in ('/usr/share/OVMF', '/usr/share/edk2/x64') for code in Path(root).glob('*CODE*.fd')
-                 if 'secboot' not in code.name and Path(str(code).replace('CODE', 'VARS')).exists()]
+                 if 'secboot' not in code.resolve().name and Path(str(code).replace('CODE', 'VARS')).exists()]
         if not pairs:
             raise ValueError('Install OVMF to boot the Gen2 VHD fixture')
         code = pairs[0]
