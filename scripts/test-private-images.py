@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -85,15 +86,24 @@ def boot(image, directory, number, *, cloud=False):
 
 def main():
     os.umask(0o077)
-    with tempfile.TemporaryDirectory(prefix='guaranine-image-tests-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='guaranine-image-tests-', ignore_cleanup_errors=True) as temporary:
         directory = Path(temporary)
-        source = cli.build_base(directory)
-        iso = cli.build_image(fixture(), 'iso', directory / 'iso', source)
-        keys = {boot(iso, directory, 1), boot(iso, directory, 2)}
-        if len(keys) != 2:
-            raise ValueError('The same shared ISO reused an SSH host identity')
-        vhd = cli.build_image(fixture('controlplane'), 'vhd', directory / 'vhd', source)
-        boot(vhd, directory, 3, cloud=True)
+        try:
+            source = cli.build_base(directory)
+            iso = cli.build_image(fixture(), 'iso', directory / 'iso', source)
+            keys = {boot(iso, directory, 1), boot(iso, directory, 2)}
+            if len(keys) != 2:
+                raise ValueError('The same shared ISO reused an SSH host identity')
+            vhd = cli.build_image(fixture('controlplane'), 'vhd', directory / 'vhd', source)
+            boot(vhd, directory, 3, cloud=True)
+        except Exception:
+            # This harness creates disposable credentials only. Keep failed CI diagnosable.
+            logs = [*directory.glob('error-*.log'), *directory.glob('boot-*.log'),
+                    directory / 'iso/build.log', directory / 'vhd/build.log']
+            for log in logs:
+                if log.exists():
+                    print(f'Fixture diagnostics ({log.name}):\n{log.read_text(errors="replace")[-8000:]}', file=sys.stderr)
+            raise
     print('Disposable ISO booted twice with distinct identities; VHD booted with missing data mount blocked; guest disks unchanged')
 
 

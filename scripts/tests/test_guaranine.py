@@ -75,6 +75,7 @@ class PrivateConfigTests(unittest.TestCase):
         wifi = 'update_config=0\nnetwork={\n ssid=74657374\n key_mgmt=NONE\n}\n'
         live = cli.machine_config('tskey-auth-LIVE', 'ssh-ed25519 PUBLIC', wifi=wifi)
         self.assertEqual(live['install'], {'auto': False})
+        self.assertEqual(live['users'][0]['groups'], ['admin'])
         self.assertNotIn('k3s', cli.cloud_yaml(live))
         self.assertNotIn('device:', cli.cloud_yaml(live))
         worker = cli.machine_config('tskey-auth-WORKER', 'ssh-ed25519 PUBLIC', name='worker-one',

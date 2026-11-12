@@ -309,7 +309,7 @@ def machine_config(key, public_key, *, name=None, role=None, cluster_endpoint=No
             command = 'server'
             k3s.update({'agent-token': agent_token.strip(), 'flannel-backend': 'vxlan',
                         'secrets-encryption': True, 'write-kubeconfig-mode': '0600',
-                        'disable': ['traefik', 'servicelb', 'local-storage', 'metrics-server'],
+                        'disable': ['traefik', 'servicelb', 'local-storage', 'metrics-server', 'gateway-api-crd'],
                         'node-taint': ['node-role.kubernetes.io/control-plane=true:NoSchedule'],
                         'kube-apiserver-arg': ['admission-control-config-file=/etc/rancher/k3s/admission.yaml']})
             admission = {'apiVersion': 'apiserver.config.k8s.io/v1', 'kind': 'AdmissionConfiguration', 'plugins': [{
@@ -380,13 +380,13 @@ cat > /work/config.yaml
 if [ "$1" = iso ]; then
   auroraboot build-iso --arch amd64 --cloud-config /work/config.yaml --output /work/images --override-name guaranine-kairos "$2" > /work/build.log 2>&1 || { cat /work/build.log >&2; exit 1; }
 else
-  auroraboot --cloud-config /work/config.yaml --set "container_image=$2" --set disable_http_server=true --set disable_netboot=true --set disable_iso=true --set disk.vhd=true --set disk.boot_active=true --set disk.size=24576 --set state_dir=/work/images > /work/build.log 2>&1 || { cat /work/build.log >&2; exit 1; }
+  auroraboot --cloud-config /work/config.yaml --set "container_image=$2" --set disable_http_server=true --set disable_netboot=true --set disable_iso=true --set disk.vhd=true --set disk.boot_active=true --set disk.size=8192 --set state_dir=/work/images > /work/build.log 2>&1 || { cat /work/build.log >&2; exit 1; }
 fi
 cd /work/images
 if [ "$1" = iso ]; then set -- ./*.iso; else set -- ./*.vhd; fi
 test "$#" -eq 1
 test -s "$1"
-tar --sparse -cf - "$1"
+tar --sparse --hole-detection=raw -cf - "$1"
 '''
     print(f'Building private Kairos {image_format.upper()}…', flush=True)
     container = 'guaranine-build-' + secrets.token_hex(8)
@@ -573,7 +573,8 @@ def bootstrap(_args):
         initialize_data(connection, directory)
         private_command([*connection, 'systemctl start var-lib-rancher-k3s.mount && '
             'mountpoint -q /var/lib/rancher/k3s && systemctl start --no-block k3s'], directory)
-        raw = private_command([*connection, 'timeout 180 sh -ec \'until k3s kubectl get --raw=/readyz >/dev/null 2>&1; '
+        raw = private_command([*connection, 'timeout 180 sh -ec \'until k3s kubectl wait --for=condition=Ready '
+            'node/guaranine-controlplane --timeout=10s >/dev/null 2>&1; '
             'do sleep 2; done; cat /etc/rancher/k3s/k3s.yaml\''], directory)
         kubeconfig = yaml.safe_load(raw)
         cluster_endpoint = 'https://' + address + ':6443'

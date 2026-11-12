@@ -102,7 +102,7 @@ export KUBECONFIG="$GUARANINE_OPERATOR_DIR/kubeconfig"
 kubectl get nodes -o wide
 ```
 
-The server is tainted against ordinary application placement. Workers receive the secure CA-pinned agent token, never the server token. Traefik, ServiceLB, local-path storage and metrics-server are disabled; add workloads only through repository manifests when needed.
+The server is tainted against ordinary application placement. Workers receive the secure CA-pinned agent token, never the server token. Traefik, ServiceLB, local-path storage, metrics-server and Gateway API CRDs are disabled; add workloads only through repository manifests when needed.
 
 ## Shared laptop ISO
 
