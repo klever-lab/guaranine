@@ -2,7 +2,8 @@ name: Private image builds
 on:
   pull_request:
     paths:
-      - 'talos/**'
+      - 'kairos/**'
+      - 'kubernetes/**'
       - 'scripts/guaranine.py'
       - 'scripts/test-private-images.py'
       - 'guaranine'
@@ -11,7 +12,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'talos/**'
+      - 'kairos/**'
+      - 'kubernetes/**'
       - 'scripts/guaranine.py'
       - 'scripts/test-private-images.py'
       - 'guaranine'
@@ -26,7 +28,7 @@ concurrency:
 jobs:
   build-test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -39,8 +41,7 @@ jobs:
       - name: Install the disposable boot-test hypervisor
         timeout-minutes: 5
         run: |
-          echo 'https://mirrors.edge.kernel.org/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
           sudo apt-get update --error-on=any
-          sudo apt-get install --yes --no-install-recommends qemu-system-x86
+          sudo apt-get install --yes --no-install-recommends qemu-system-x86 ovmf
       - name: Build disposable ISO/VHD and boot the same ISO in two isolated guests
         run: python3 scripts/test-private-images.py

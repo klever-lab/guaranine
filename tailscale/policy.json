@@ -12,17 +12,17 @@
     {
       "src": ["tag:guaranine-worker"],
       "dst": ["tag:guaranine-controlplane"],
-      "ip": ["tcp:6443", "tcp:50001"]
+      "ip": ["tcp:6443"]
     },
     {
       "src": ["tag:guaranine-controlplane"],
       "dst": ["tag:guaranine-worker"],
-      "ip": ["tcp:50000", "tcp:10250"]
+      "ip": ["tcp:10250"]
     },
     {
       "src": ["tag:guaranine-controlplane", "tag:guaranine-worker"],
       "dst": ["tag:guaranine-controlplane", "tag:guaranine-worker"],
-      "ip": ["udp:4789"]
+      "ip": ["udp:8472"]
     }
   ],
   "nodeAttrs": [
@@ -51,68 +51,41 @@
     {
       "src": "kianbahasadri@gmail.com",
       "proto": "tcp",
-      "accept": [
-        "tag:guaranine-controlplane:50000", "tag:guaranine-controlplane:6443",
-        "tag:guaranine-worker:50000"
-      ]
+      "accept": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22"]
     },
     {
       "src": "tag:guaranine-worker",
       "proto": "tcp",
-      "accept": ["tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:50001"],
-      "deny": [
-        "tag:guaranine-controlplane:22", "tag:guaranine-controlplane:2379",
-        "tag:guaranine-controlplane:2380", "tag:guaranine-controlplane:4789",
-        "tag:guaranine-controlplane:50000", "tag:guaranine-controlplane:10250",
-        "tag:guaranine-worker:22", "tag:guaranine-worker:50000",
-        "tag:guaranine-worker:50001", "tag:guaranine-worker:6443",
-        "tag:guaranine-worker:10250", "100.123.102.71:22", "100.123.102.71:9876"
-      ]
+      "accept": ["tag:guaranine-controlplane:6443"],
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:8472", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:22", "tag:guaranine-worker:6443", "tag:guaranine-worker:10250", "100.123.102.71:22", "100.123.102.71:9876"]
     },
     {
       "src": "tag:guaranine-controlplane",
       "proto": "tcp",
-      "accept": ["tag:guaranine-worker:50000", "tag:guaranine-worker:10250"],
-      "deny": [
-        "tag:guaranine-worker:22", "tag:guaranine-worker:2379",
-        "tag:guaranine-worker:2380", "tag:guaranine-worker:4789",
-        "tag:guaranine-worker:50001", "tag:guaranine-worker:6443",
-        "100.123.102.71:22", "100.123.102.71:9876"
-      ]
+      "accept": ["tag:guaranine-worker:10250"],
+      "deny": ["tag:guaranine-worker:22", "tag:guaranine-worker:8472", "tag:guaranine-worker:6443", "100.123.102.71:22", "100.123.102.71:9876"]
     },
     {
       "src": "tag:guaranine-worker",
       "proto": "udp",
-      "accept": ["tag:guaranine-controlplane:4789", "tag:guaranine-worker:4789"],
-      "deny": [
-        "tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:50000",
-        "tag:guaranine-controlplane:50001", "tag:guaranine-controlplane:10250",
-        "tag:guaranine-worker:50000", "tag:guaranine-worker:10250", "100.123.102.71:4789"
-      ]
+      "accept": ["tag:guaranine-controlplane:8472", "tag:guaranine-worker:8472"],
+      "deny": ["tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:10250", "100.123.102.71:8472"]
     },
     {
       "src": "tag:guaranine-controlplane",
       "proto": "udp",
-      "accept": ["tag:guaranine-controlplane:4789", "tag:guaranine-worker:4789"],
-      "deny": [
-        "tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:50000",
-        "tag:guaranine-worker:50000", "tag:guaranine-worker:50001",
-        "tag:guaranine-worker:6443", "tag:guaranine-worker:10250", "100.123.102.71:4789"
-      ]
+      "accept": ["tag:guaranine-controlplane:8472", "tag:guaranine-worker:8472"],
+      "deny": ["tag:guaranine-controlplane:6443", "tag:guaranine-worker:6443", "tag:guaranine-worker:10250", "100.123.102.71:8472"]
     },
     {
       "src": "user@example.com",
       "proto": "tcp",
-      "deny": [
-        "tag:guaranine-controlplane:50000", "tag:guaranine-controlplane:50001",
-        "tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250",
-        "tag:guaranine-worker:50000", "tag:guaranine-worker:10250"
-      ]
+      "deny": ["tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:10250", "tag:guaranine-controlplane:22", "tag:guaranine-worker:22"]
     },
     {
       "src": "user@example.com",
       "proto": "udp",
-      "deny": ["tag:guaranine-controlplane:4789", "tag:guaranine-worker:4789"]
+      "deny": ["tag:guaranine-controlplane:8472", "tag:guaranine-worker:8472"]
     }
   ]
 }

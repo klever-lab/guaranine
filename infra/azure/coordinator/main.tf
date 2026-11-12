@@ -46,7 +46,7 @@ variable "location" {
 variable "name_prefix" {
   description = "Guaranine-only resource namespace; do not reuse another service's resource group."
   type        = string
-  default     = "guaranine"
+  default     = "guaranine-kairos"
 
   validation {
     condition     = can(regex("^guaranine(-[a-z0-9]+)?$", var.name_prefix)) && length(var.name_prefix) <= 32
@@ -65,14 +65,14 @@ variable "vm_size" {
   }
 }
 
-variable "talos_image_id" {
-  description = "Exact private Talos Azure managed-image or gallery-version ID. Machine configuration is embedded locally in its VHD, never Terraform custom_data."
+variable "image_id" {
+  description = "Exact private Kairos Azure managed-image or gallery-version ID. Machine configuration is embedded locally in its VHD, never Terraform custom_data."
   type        = string
 
   validation {
     condition = (
-      can(regex("^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[^/]+/providers/Microsoft.Compute/(images/[^/]+|galleries/[^/]+/images/[^/]+/versions/[0-9]+\\.[0-9]+\\.[0-9]+)$", var.talos_image_id)) &&
-      !can(regex("(?i)(^|/)latest($|/)", var.talos_image_id))
+      can(regex("^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[^/]+/providers/Microsoft.Compute/(images/[^/]+|galleries/[^/]+/images/[^/]+/versions/[0-9]+\\.[0-9]+\\.[0-9]+)$", var.image_id)) &&
+      !can(regex("(?i)(^|/)latest($|/)", var.image_id))
     )
     error_message = "Supply a private managed-image ID or explicit gallery image version, never a marketplace image, URL, or latest alias."
   }
@@ -90,7 +90,7 @@ variable "os_disk_size_gib" {
 }
 
 variable "data_disk_size_gib" {
-  description = "Retained SSD capacity in GiB for Talos ETCD data; only grow existing disks."
+  description = "Retained SSD capacity in GiB for K3s data; only grow existing disks."
   type        = number
   default     = 64
 
@@ -206,16 +206,15 @@ resource "azurerm_network_interface" "coordinator" {
   depends_on = [azurerm_subnet_network_security_group_association.coordinator]
 }
 
-# Seed the boot disk once, then let Talos own its installed state and identity.
-# Attaching it avoids Azure's generalized-guest provisioning handshake, which
-# upstream Talos skips when a complete machine configuration is embedded.
+# Seed the boot disk once; Kairos owns installed state and native OS upgrades.
+# Attach the prepared Gen2 disk without Azure guest provisioning or a VM agent.
 resource "azurerm_managed_disk" "coordinator_os" {
   name                          = "${var.name_prefix}-os"
   resource_group_name           = azurerm_resource_group.coordinator.name
   location                      = azurerm_resource_group.coordinator.location
   storage_account_type          = "StandardSSD_LRS"
   create_option                 = "FromImage"
-  image_reference_id            = var.talos_image_id
+  image_reference_id            = var.image_id
   os_type                       = "Linux"
   hyper_v_generation            = "V2"
   disk_size_gb                  = var.os_disk_size_gib
@@ -278,14 +277,14 @@ resource "azurerm_virtual_machine_data_disk_attachment" "coordinator_data" {
   caching            = "None"
 }
 
-output "talos_handoff" {
-  description = "Non-secret Talos inventory. Discover the node's tailnet address after boot; Azure IPs are never cluster/API endpoints."
+output "handoff" {
+  description = "Non-secret Kairos inventory. Discover the node's tailnet address after boot; Azure IPs are never cluster/API endpoints."
   value = {
     subscription_id = var.subscription_id
     resource_group  = azurerm_resource_group.coordinator.name
     vm_name         = azurerm_linux_virtual_machine.coordinator.name
     vm_id           = azurerm_linux_virtual_machine.coordinator.id
-    talos_image_id  = var.talos_image_id
+    image_id        = var.image_id
     os_disk_id      = azurerm_managed_disk.coordinator_os.id
     data_disk_id    = azurerm_managed_disk.coordinator_data.id
     data_disk_lun   = azurerm_virtual_machine_data_disk_attachment.coordinator_data.lun

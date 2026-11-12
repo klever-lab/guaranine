@@ -1,47 +1,29 @@
 # guaranine
 
-One Talos control-plane VM on Azure, plus laptop workers anywhere. Kubernetes places applications automatically. Every private connection between machines uses Tailscale; no shared LAN or sub-10 ms connection is required.
+One cloud K3s server and laptop workers, all running the same immutable Kairos/Hadron image. Private inter-host traffic uses Tailscale, including across separate sites and relayed connections.
 
-**Keep it simple:** the official Talos imager and Tailscale extension, native Kubernetes and Terraform. No custom platform API, enrollment server or extra management stack.
+Use upstream components and ordinary Kubernetes manifests. Keep the repository small: one CLI, one image recipe and two Terraform roots. No custom management API or enrollment service.
 
 ## Setup
 
-1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Docker on your operator computer. Run `./guaranine init` once and fill in its private `operator.yaml`.
-2. Follow [SETUP.md](SETUP.md) for the one-time Azure control-plane setup.
-3. Save its Tailscale Kubernetes endpoint in `operator.yaml`. Build one private ISO for the laptop batch:
+1. Follow [SETUP.md](SETUP.md) to initialize private operator files and prepare the cloud controller.
+2. Provide the laptop models so their built-in Wi-Fi driver/firmware coverage can be checked.
+3. Run `./guaranine iso` on the operator computer while connected to the desired Wi-Fi. It captures that network, builds private media and offers USB flashing.
+4. Boot a laptop, then run `./guaranine worker` to verify its identity, choose its name and explicitly confirm its installation disk.
 
-   ```bash
-   ./guaranine iso
-   ```
+The ISO contains network access but no cluster join token or automatic disk installation. Installed workers receive their configuration only after confirmation. Operational commands, security limits and recovery are in [SETUP.md](SETUP.md).
 
-4. Boot each laptop from that ISO. On the operator computer, run `./guaranine worker` to choose its name, select from its detected disks and explicitly confirm erasure. See [SETUP.md](SETUP.md#add-a-laptop) for the prompts and verification. Use Kubernetes manifests with CPU/RAM requests to run applications; Kubernetes chooses the worker.
-
-## What is ready
-
-The shared private ISO boots into maintenance mode. Each laptop receives its name, disk choice and cluster configuration only after the operator confirms installation. See [enrollment limits](SETUP.md#enrollment-security-status).
-
-**The Azure control plane is deployed.** Hardware-bound enrollment, enforceable expiry of all cluster join authority and YubiKey boot authorization remain unfinished. Physical laptop installation and operation across worker locations still need verification.
-
-| Need | Current choice |
-| --- | --- |
-| Schedule and manage containers | Kubernetes Deployments, resource requests and standard lifecycle commands |
-| Configure and update machines | Talos configuration and `talosctl` |
-| Connect scattered machines | Official Tailscale system extension |
-| Add/remove workers | Shared private ISO, then one name/disk confirmation command per laptop; Kubernetes cordon/drain before removal |
-| Provision the control plane | Terraform; local state on encrypted operator storage with off-machine backups |
-| Monitoring, public domains/TLS, external secrets | Later upstream integrations, only when needed |
-| Movable persistent storage and QEMU/KVM VMs | Later work; storage/fencing and KubeVirt need qualification |
-| LXC and a custom workload API | Excluded |
-
-One control plane is an availability tradeoff. A drain needs spare capacity and usable storage; local disks do not follow workloads. A disconnected laptop may still be running, so stateful failover needs fencing.
+One server is an availability tradeoff. Disconnected workers can continue running; stateful failover requires fencing, spare capacity and suitable storage. Local disks do not follow workloads.
 
 ## Development
 
-Use Python 3.12+. Run the same checks as CI:
+Use Python 3.12+ and run the same checks as CI:
 
 ```bash
 env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bash scripts/validate.sh
 ```
+
+The private-image workflow builds and boots disposable fixtures without publishing images or using real credentials. Laptop hardware and live WAN operation require separate verification.
 
 Todo issues in the existing [Guaranine Linear project](https://linear.app/kian-finishing-zombie-granola/project/guaranine-5e147e0efbea) use the shared Clusterfork Symphony controller.
 
@@ -64,4 +46,4 @@ paste this exact message in the readme and the succint short answer beneath it.
 give me the proper version here
 ```
 
-Use Talos-managed Kubernetes. Kubernetes manages applications; Talos manages machines. Reuse upstream components and keep the repository small.
+Use Kairos/Hadron with K3s. Kairos manages the OS; Kubernetes manages applications. Connect machines through Tailscale and reuse upstream components.

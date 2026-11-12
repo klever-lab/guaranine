@@ -32,7 +32,6 @@ id_ed25519*
 *.fd
 operator.yaml
 secrets.yaml
-talosconfig
 machine.yaml
 *.vhd
 *.vhd.zst

@@ -2,14 +2,14 @@ mock_provider "azurerm" {
   override_during = plan
   mock_resource "azurerm_managed_disk" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/disks/guaranine-talos-fixture"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/disks/guaranine-kairos-fixture"
     }
   }
 }
 
 variables {
   subscription_id = "00000000-0000-0000-0000-000000000000"
-  image_name      = "guaranine-talos-fixture"
+  image_name      = "guaranine-kairos-fixture"
   vhd_size_bytes  = 11736711680
   vhd_sha256      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 }
@@ -21,7 +21,7 @@ run "prepare_upload" {
       azurerm_managed_disk.upload.create_option == "Upload" &&
       azurerm_managed_disk.upload.upload_size_bytes == var.vhd_size_bytes &&
       azurerm_managed_disk.upload.hyper_v_generation == "V2" &&
-      length(azurerm_image.talos) == 0 && output.talos_image_id == null
+      length(azurerm_image.kairos) == 0 && output.image_id == null
     )
     error_message = "Prepare a Gen2 upload disk without publishing an incomplete image."
   }
@@ -32,8 +32,8 @@ run "publish_after_upload" {
   variables { image_ready = true }
   assert {
     condition = (
-      length(azurerm_image.talos) == 1 &&
-      azurerm_image.talos[0].os_disk[0].managed_disk_id == azurerm_managed_disk.upload.id &&
+      length(azurerm_image.kairos) == 1 &&
+      azurerm_image.kairos[0].os_disk[0].managed_disk_id == azurerm_managed_disk.upload.id &&
       azurerm_managed_disk.upload.network_access_policy == "DenyAll" &&
       !azurerm_managed_disk.upload.public_network_access_enabled
     )

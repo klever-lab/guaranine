@@ -1,8 +1,9 @@
 # Copy outside the checkout. No enrollment credentials or private key content.
 subscription_id = "00000000-0000-0000-0000-000000000000"
 location        = "eastus"
+name_prefix     = "guaranine-kairos"
 vm_size         = "Standard_B2ls_v2"
-# From the private Talos image root, after upload and image publication.
-talos_image_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/guaranine-talos-REPLACE-WITH-IMAGE-ID"
+# From the private Kairos image root, after upload and image publication.
+image_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/guaranine-kairos-REPLACE-WITH-IMAGE-ID"
 os_disk_size_gib   = 32
 data_disk_size_gib = 64

@@ -1,5 +1,0 @@
-# Public image customization only. Never put machine configuration or keys here.
-customization:
-  systemExtensions:
-    officialExtensions:
-      - siderolabs/tailscale

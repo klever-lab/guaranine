@@ -1,0 +1,199 @@
+#cloud-config
+name: Guaranine host configuration
+stages:
+  rootfs.before:
+    - name: Load private ISO configuration into RAM
+      if: '[ -f /run/initramfs/live/config.yaml ]'
+      commands:
+        - mkdir -p /oem
+        - mount -t tmpfs -o mode=0700 tmpfs /oem
+        - cp /run/initramfs/live/config.yaml /oem/99_guaranine.yaml
+        - chmod 0600 /oem/99_guaranine.yaml
+  rootfs:
+    - name: Keep live media state in RAM
+      if: '[ -f /run/initramfs/live/config.yaml ]'
+      environment_file: /run/cos/cos-layout.env
+      environment:
+        VOLUMES: ""
+        PERSISTENT_STATE_PATHS: ""
+  initramfs:
+    - name: Configure host networking and services
+      files:
+        - path: /etc/ssh/sshd_config.d/00-guaranine.conf
+          permissions: 0644
+          content: |
+            PasswordAuthentication no
+            KbdInteractiveAuthentication no
+            PermitRootLogin prohibit-password
+            AllowTcpForwarding no
+            X11Forwarding no
+        - path: /etc/nftables.conf
+          permissions: 0600
+          content: |
+            table inet guaranine {
+              set local_networks {
+                type ipv4_addr; flags interval;
+                elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 }
+              }
+              chain input {
+                type filter hook input priority 0; policy drop;
+                iifname "lo" accept
+                ct state established,related accept
+                ip protocol icmp accept
+                meta l4proto ipv6-icmp accept
+                udp sport 67 udp dport 68 accept
+                udp sport 547 udp dport 546 accept
+                udp dport 41641 accept
+                iifname "tailscale0" tcp dport { 22, 6443, 10250 } accept
+                iifname "tailscale0" udp dport 8472 accept
+                iifname { "cni0", "flannel.1" } ip saddr 10.42.0.0/16 tcp dport 6443 accept
+              }
+              chain output {
+                type filter hook output priority -10; policy accept;
+                oifname { "lo", "tailscale0", "cni0", "flannel.1" } accept
+                meta mark & 0xff0000 == 0x80000 accept
+                udp sport 68 udp dport 67 accept
+                udp sport 546 udp dport 547 accept
+                meta l4proto ipv6-icmp accept
+                udp dport 53 accept
+                tcp dport 53 accept
+                ip daddr @local_networks reject
+                ip6 daddr { fc00::/7, fe80::/10, fec0::/10, ff00::/8 } reject
+              }
+              chain forward {
+                type filter hook forward priority -10; policy accept;
+                oifname { "tailscale0", "cni0", "flannel.1" } accept
+                ip daddr @local_networks reject
+                ip6 daddr { fc00::/7, fe80::/10, fec0::/10, ff00::/8 } reject
+              }
+            }
+        - path: /etc/systemd/network/20-wifi.network
+          permissions: 0644
+          content: |
+            [Match]
+            Name=wl*
+            [Network]
+            DHCP=ipv4
+            IPv6AcceptRA=no
+            [DHCPv4]
+            ClientIdentifier=mac
+        - path: /etc/systemd/system/wpa_supplicant@.service
+          permissions: 0644
+          content: |
+            [Unit]
+            Description=Guaranine Wi-Fi on %I
+            Before=network-online.target
+            ConditionPathExists=/etc/guaranine/wifi.conf
+            [Service]
+            ExecStart=/usr/lib/guaranine-network/ld-musl-x86_64.so.1 --library-path /usr/lib/guaranine-network /usr/lib/guaranine-network/wpa_supplicant -Dnl80211 -i%I -c/etc/guaranine/wifi.conf
+            Restart=on-failure
+            RestartSec=5
+            CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            [Install]
+            WantedBy=multi-user.target
+        - path: /etc/systemd/system/guaranine-firewall.service
+          permissions: 0644
+          content: |
+            [Unit]
+            Description=Guaranine host firewall
+            DefaultDependencies=no
+            Before=network-pre.target
+            Wants=network-pre.target
+            After=local-fs.target
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/usr/lib/guaranine-network/ld-musl-x86_64.so.1 --library-path /usr/lib/guaranine-network /usr/lib/guaranine-network/nft -f /etc/nftables.conf
+            [Install]
+            WantedBy=multi-user.target
+        - path: /etc/systemd/system/guaranine-tailscale.service
+          permissions: 0644
+          content: |
+            [Unit]
+            Description=Register Guaranine with Tailscale
+            Requires=tailscaled.service
+            After=tailscaled.service network.target
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/bin/sh /etc/guaranine/tailscale-start
+            TimeoutStartSec=0
+            Restart=on-failure
+            RestartSec=10
+            [Install]
+            WantedBy=multi-user.target
+        - path: /etc/guaranine/tailscale-start
+          permissions: 0700
+          content: |
+            #!/bin/sh
+            set -eu
+            set -- --hostname="$(hostname)" --accept-dns=false --accept-routes=false --ssh=false --timeout=30s
+            if tailscale status --json | grep -Eq '"BackendState": "(NeedsLogin|NoState)"'; then
+              set -- "$@" --auth-key=file:/etc/guaranine/tailscale-key
+            fi
+            exec tailscale up "$@"
+        - path: /etc/guaranine/k3s-start
+          permissions: 0700
+          content: |
+            #!/bin/sh
+            set -eu
+            ip=$(tailscale ip -4)
+            test -n "$ip"
+            if [ "$K3S_ROLE" = server ]; then
+              mountpoint -q /var/lib/rancher/k3s
+              install -Dm0600 /etc/rancher/k3s/network-policy.yaml /var/lib/rancher/k3s/server/manifests/guaranine-network.yaml
+              exec /usr/bin/k3s server --node-ip "$ip" --advertise-address "$ip" --tls-san "$ip"
+            fi
+            exec /usr/bin/k3s agent --node-ip "$ip"
+        - path: /etc/modules-load.d/guaranine.conf
+          permissions: 0644
+          content: |
+            overlay
+            br_netfilter
+        - path: /etc/systemd/system/sshd.service.d/guaranine.conf
+          permissions: 0644
+          content: |
+            [Unit]
+            Requires=guaranine-firewall.service
+            After=guaranine-firewall.service
+        - path: /etc/sysctl.d/90-guaranine.conf
+          permissions: 0644
+          content: |
+            net.ipv4.ip_forward=1
+            net.bridge.bridge-nf-call-iptables=1
+        - path: /etc/kairos/agent.yaml
+          permissions: 0600
+          content: |
+            webui:
+              disable: true
+        - path: /etc/profile.d/guaranine.sh
+          permissions: 0644
+          content: |
+            if test -f /run/cos/live_mode; then
+              echo 'Guaranine live media. Wi-Fi connects to the network captured on the operator computer.'
+              tailscale ip -4 2>/dev/null || true
+              echo 'SSH host fingerprint (compare on the operator computer):'
+              ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+            fi
+      commands:
+        - systemctl enable systemd-networkd.service systemd-resolved.service tailscaled.service guaranine-firewall.service sshd.service
+        - systemctl mask kairos-agent.service kairos-installer.service kairos-webui.service
+    - name: Show a local shell on live media
+      if: '[ -f /run/cos/live_mode ]'
+      commands:
+        - systemctl unmask getty@tty1.service
+        - systemctl enable getty@tty1.service
+  boot:
+    - name: Start Wi-Fi on detected wireless interfaces
+      commands:
+        - systemctl daemon-reload
+        - >-
+          for path in /sys/class/net/*/wireless; do
+          test -d "$path" || continue;
+          interface=${path%/wireless};
+          systemctl start --no-block "wpa_supplicant@${interface##*/}.service";
+          done

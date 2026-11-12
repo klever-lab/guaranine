@@ -4,7 +4,7 @@ Read [README.md](README.md) first, then [SETUP.md](SETUP.md).
 
 ## Rules
 
-- The controller (Talos control plane) must run in a cloud VM.
+- The controller (K3s control plane) must run in a cloud VM.
 - Only update this file when the user instructs you to.
 - Azure is temporary hosting; preserve an exit and restore path to another cloud VM.
 - **Keep this repo KISS as fuck: stupid easy to use and boring to maintain. Complexity alone is enough to veto an idea.**
@@ -12,6 +12,6 @@ Read [README.md](README.md) first, then [SETUP.md](SETUP.md).
 - Add only minimum glue for current requirements; exclude speculative services, dependencies, Terraform roots, frameworks, plugins, fallback matrices and operator procedures.
 - Every private inter-host connection must use Tailscale; support separate sites, direct/relayed paths and outages without LAN or low-latency assumptions.
 - Laptop workers must support built-in Wi-Fi from initial boot through installation and normal operation, without requiring Ethernet, adapters or external bridges. Verify OS, installer and driver support for the target laptops before recommending a platform or building installation media.
-- Terraform owns infrastructure, Talos configuration owns the OS and Kubernetes, and Kubernetes manifests own workloads.
+- Terraform owns infrastructure, Kairos configuration owns the OS and K3s setup, and Kubernetes manifests own workloads.
 - Keep README.md short, operational details solely in SETUP.md, the CLI in `scripts/guaranine.py`, and each Terraform root in one `main.tf`.
 - Avoid helper-file proliferation, duplicate metadata and repeated operational facts; maintain each fact in its owning guide.

@@ -44,8 +44,8 @@ variable "image_name" {
   type        = string
   description = "Unique artifact identity; use a new name/state for new private image contents."
   validation {
-    condition     = can(regex("^guaranine-talos-[a-z0-9-]+$", var.image_name)) && length(var.image_name) <= 48
-    error_message = "Use guaranine-talos-<version>-<node>-<hash>, never a shared/latest image name."
+    condition     = can(regex("^guaranine-kairos-[a-z0-9-]+$", var.image_name)) && length(var.image_name) <= 48
+    error_message = "Use guaranine-kairos-<version>-<node>-<hash>, never a shared/latest image name."
   }
 }
 
@@ -73,9 +73,9 @@ variable "image_ready" {
   description = "Explicitly set true only after VHD upload completes and its write SAS is revoked."
 }
 
-# Private Talos VHD upload staging and image publication; no VM/server is created.
+# Private Kairos VHD upload staging and image publication; no VM/server is created.
 resource "azurerm_resource_group" "image" {
-  name     = "guaranine-images-rg"
+  name     = "${var.image_name}-${substr(var.vhd_sha256, 0, 12)}-rg"
   location = var.location
   tags     = { project = "guaranine", managed_by = "terraform" }
 }
@@ -95,13 +95,13 @@ resource "azurerm_managed_disk" "upload" {
     project    = "guaranine"
     managed_by = "terraform"
     vhd_sha256 = var.vhd_sha256
-    contains   = "private-talos-machine-configuration"
+    contains   = "private-kairos-machine-configuration"
   }
 }
 
 # image_ready is set only after an operator uploads the VHD and revokes its
 # short-lived write SAS. Neither the SAS nor VHD contents enter Terraform.
-resource "azurerm_image" "talos" {
+resource "azurerm_image" "kairos" {
   count               = var.image_ready ? 1 : 0
   name                = "${var.image_name}-${substr(var.vhd_sha256, 0, 12)}"
   resource_group_name = azurerm_resource_group.image.name
@@ -121,6 +121,6 @@ output "upload_disk_id" {
   value = azurerm_managed_disk.upload.id
 }
 
-output "talos_image_id" {
-  value = var.image_ready ? azurerm_image.talos[0].id : null
+output "image_id" {
+  value = var.image_ready ? azurerm_image.kairos[0].id : null
 }

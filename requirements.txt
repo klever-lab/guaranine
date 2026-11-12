@@ -1,2 +1,2 @@
-# Runtime dependency for local Talos configuration and upstream image profiles.
+# Runtime dependency for native Kairos configuration.
 PyYAML==6.0.3

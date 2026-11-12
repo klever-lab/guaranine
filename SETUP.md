@@ -1,68 +1,61 @@
 # Guaranine setup
 
-One Azure control plane runs Talos and local etcd; laptops join as workers over Tailscale. The commands below run from the repository root.
+The cloud controller and laptop workers use the same Kairos/Hadron base. One K3s server uses SQLite on a retained data disk; laptop agents connect over Tailscale. Commands run from the repository root on the Linux operator computer.
 
-## Initialize the operator computer
+## Operator files
 
-On the Linux operator computer, install `uv`, `sudo` and Docker. Run the CLI as your normal user; it requests sudo only for Docker's privileged Linux AMD64 build. The launcher installs the pinned Python runtime dependency and downloads checksum-verified `talosctl` automatically. Azure provisioning also uses Terraform, Azure CLI, AzCopy, `zstd` and `qemu-img`; cluster checks use `kubectl` matching the pinned Kubernetes version.
+Install `uv`, Docker and `sudo`; image building needs a privileged Docker container. USB flashing also uses sudo. Install `nmcli` on the operator to capture its active Wi-Fi connection. Azure operations use the pinned Terraform version, Azure CLI, AzCopy and `qemu-img`; cluster checks use a matching `kubectl`.
 
-Use encrypted operator storage with an off-machine backup. The default directory is `~/.local/state/guaranine`; set `GUARANINE_OPERATOR_DIR` before initialization to choose another location outside the checkout.
+Keep private files on encrypted storage with an off-machine backup. The default is `~/.local/state/guaranine-kairos`; `GUARANINE_OPERATOR_DIR` may select another directory outside the checkout. Existing operator files are never overwritten.
 
 ```bash
 umask 077
-export GUARANINE_OPERATOR_DIR="${GUARANINE_OPERATOR_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/guaranine}"
+export GUARANINE_OPERATOR_DIR="${GUARANINE_OPERATOR_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/guaranine-kairos}"
 ./guaranine init
 ```
 
-This creates a mode-0700 directory, cluster secrets and one mode-0600 `operator.yaml`. It refuses to overwrite an existing directory or regenerate cluster secrets. Preserve `secrets.yaml` for every node in this cluster. Fill in the private settings:
+Initialization creates an SSH key pair, separate K3s server/agent tokens and `operator.yaml`. Directories are mode 0700 and private files mode 0600. Fill in:
 
 ```yaml
-tailnet: your-tailnet-name
+tailnet: YOUR_TAILNET
 tailscale_api_token: YOUR_PRIVATE_TAILSCALE_API_TOKEN
 endpoint: null
+laptop_models: []
 ```
 
-The API credential stays only in this private file. Apply the versioned tailnet policy below before preparing nodes. Set `endpoint` after the control plane is bootstrapped.
+The API token stays on the operator. Set laptop models after checking their driver/firmware coverage; the physical ISO command refuses an empty list. Model variants still need a boot test. The image carries upstream firmware for common Intel, Atheros/Qualcomm, Realtek, MediaTek and Broadcom families; adding firmware cannot supply a missing kernel driver.
 
-Other operator VPNs must allow the Tailscale range and preserve its routes. On this laptop, Windscribe uses OpenVPN UDP on port 443 with `100.64.0.0/10` excluded in its native split-tunneling settings. Check that `ip route get CONTROL_PLANE_TAILSCALE_IP` selects `tailscale0` and authenticated Talos access works while the VPN and its firewall are enabled.
+## Migrating the existing controller
+
+Create a fresh K3s cluster with a new `guaranine-kairos` resource prefix and fresh Terraform state. Preserve the existing deployment, state, cluster secrets, boot/data disks and an off-machine datastore backup for rollback. Do not point the new configuration at the old state or format its data disk. Kubernetes manifests and application data need explicit migration; an OS image replacement does not migrate a cluster.
+
+Fence the previous controller before restoring its cluster elsewhere. Keep its recovery copy until the replacement and backups are verified. Cleanup of retained disks requires deliberate scope and verified backups; never bypass retention by deleting Terraform state or targeting resources.
 
 ## Tailscale policy
 
-[tailscale/policy.json](tailscale/policy.json) declares this account's complete tailnet policy, including existing personal-device access, SSH rules and Funnel settings. Edit this file and save its complete contents through the standard [Tailscale Access controls editor](https://console.tailscale.com/admin/acls). Tailscale validates the policy and runs its native allow/deny tests before accepting an update. The repository checks JSON syntax without credentials; it does not apply live policy from CI.
+[tailscale/policy.json](tailscale/policy.json) owns the complete policy for this tailnet, including existing personal access and Funnel rules. Back up the live policy outside the checkout before updating it through the standard [Access controls editor](https://console.tailscale.com/admin/acls). For API updates, validate first, use the live ETag with `If-Match`, and read back the result. CI checks syntax without credentials and never applies live policy.
 
-Only tailnet admins own the Guaranine role tags. Workers can initiate Kubernetes API and Talos trust traffic to the control plane; the control plane can initiate Talos API and kubelet traffic to workers. Both roles can carry Flannel VXLAN between nodes. Tests reject node SSH, cross-host etcd access, worker administration of peers, access to the existing personal server and protocol mixups. The operator retains the pre-existing broad personal grant; Kubernetes workload NetworkPolicies remain separate.
+Only admins own the node tags. Workers reach the server on TCP 6443; the server reaches kubelets on TCP 10250. Both roles carry Flannel VXLAN on UDP 8472. Operator SSH uses TCP 22 over Tailscale with ordinary SSH keys and physically verified host fingerprints. Nodes cannot administer peers. Private Azure/LAN addresses are never cluster endpoints. Other operator VPNs must preserve the `100.64.0.0/10` routes.
 
-Before applying a change, back up the live policy on protected operator storage with its off-machine backup. If using the native Tailscale API, validate the proposed file, use the live policy's ETag in `If-Match`, and read back the result. Keep API credentials in private `operator.yaml`; no policy deployment credential belongs in git or CI.
+## Cloud preflight
 
-## Check Azure credit and quota
+Verify the selected Azure for Students subscription, remaining credit, expiry, spending limit, region/SKU availability, quota and complete cost before provisioning. Do not apply with unknown credit/cost/quota or select an automatic paid fallback. Existing Azure services and the shared Clusterfork controller remain separate.
 
-Before provisioning, verify the selected Azure for Students subscription, region/SKU availability, vCPU quota, remaining credit, expiry and complete cost. Keep the spending limit enabled. Do not apply while credit, quota or cost is unknown or choose an automatic paid fallback. Confirm Compute/Network provider registration and resource permissions, using an existing Azure CLI login for that subscription.
+The Terraform default is `Standard_B2ls_v2` (2 vCPUs/4 GiB), a 32-GiB OS SSD and a retained 64-GiB data SSD at LUN 0. Account for compute, both disks, image/upload storage, public IPv4 and outbound traffic. Stopped VMs can still incur disk/image/IP costs.
 
-The default is `Standard_B2ls_v2` (2 vCPUs/4 GiB), a 32-GiB disposable OS SSD and a retained 64-GiB etcd SSD at LUN 0. Include compute, both SSDs, image/upload storage, public IPv4 and outbound traffic in the estimate. Existing Azure services and the shared Clusterfork controller remain independent. See [Azure for Students](https://azure.microsoft.com/free/students/) and [credit expiry/exhaustion](https://learn.microsoft.com/azure/cost-management-billing/manage/azurestudents-subscription-disabled).
-
-## Prepare the control-plane image
-
-Verify the actual Azure SKU's disk properties before selecting disks. For the supported 32-GiB OS disk and unique non-system 64-GiB data disk at LUN 0:
+## Controller image and Terraform
 
 ```bash
-./guaranine controlplane --disk /dev/sda --confirm-install-disk /dev/sda --etcd-disk-selector '!system_disk && disk.size == 68719476736u'
+./guaranine controlplane
 ```
 
-This creates a short-lived, single-use Tailscale key, validates the native machine configuration and runs the pinned upstream Talos imager locally. The private `.vhd.zst` is under `nodes/guaranine-controlplane/image/` in the operator directory. The Azure image contains an installed OS. Linux disk names can change after VM replacement, so select the retained etcd disk using verified stable properties. No VM is provisioned by this command.
+This builds the shared public base before issuing a single-use Tailscale registration key valid for at most 24 hours. Private configuration is fed to pinned AuroraBoot through stdin, outside Docker layers, git and public image services. The VHD appears under `nodes/guaranine-controlplane/image/` in the operator directory. Rerun to reuse a completed image while its key is unexpired. Incomplete outputs are preserved with protected logs for inspection.
 
-To finish an already-prepared control-plane configuration, run `./guaranine build-controlplane`. It reuses the existing unexpired registration key and configuration and extracts the VHD with private permissions under your ownership. Existing image outputs are never overwritten.
+Check the fixed VHD with `qemu-img info -f vpc`, and record its exact byte length and SHA-256. Build scratch space must accommodate uncompressed disk images. The prepared Gen2 disk boots without Secure Boot/vTPM, Azure guest provisioning or a VM agent. Native Kairos upgrades own the installed OS.
 
-The imager stages its output in a private temporary directory on operator storage. Leave room there for the uncompressed VHD and compressed output; Docker still needs space for its container images. Temporary build files are removed after the imager exits.
+The [image root](infra/azure/image/main.tf) owns an artifact-specific upload group/disk and private managed image. The [coordinator root](infra/azure/coordinator/main.tf) owns the VM, isolated network, boot disk and protected data disk. Both have one `main.tf` and pinned provider locks. Use native local state on protected operator storage, one operator at a time, with off-machine backups after every apply.
 
-Decompress the VHD privately with `zstd --decompress` and check it with `qemu-img info -f vpc`. Record the actual uncompressed file size and SHA-256 for the next step. Configuration is embedded locally, never sent to public Image Factory or placed in Terraform inputs/state. The VM uses ordinary Gen2 boot with Secure Boot/vTPM disabled.
-
-## Upload the image with Terraform
-
-There are two independent Terraform roots, each with one `main.tf`: [image](infra/azure/image/main.tf) owns upload staging and the private managed image; [coordinator](infra/azure/coordinator/main.tf) owns the VM, network and retained disk. Terraform/AzureRM versions and provider locks remain pinned.
-
-Both use native local state on protected operator storage. Run one operator at a time with state locking enabled and back up state after every apply. Keep tfvars, plans and caches outside git. CI only uses credential-free mocks.
-
-Copy each root's `terraform.tfvars.example` into the operator directory and fill in real subscription, region and artifact identifiers. For this first image, use `image.tfvars` with `image_ready = false`, the VHD size/hash and a unique `guaranine-talos-...` name. New image contents need a separate state path; Terraform appends the content hash to the resource name.
+Copy each root's `terraform.tfvars.example` outside the checkout and fill in real values. For image upload, use `image_ready = false`, the VHD size/hash and a unique `guaranine-kairos-...` name. New image contents require their own state file.
 
 ```bash
 mkdir -p "$GUARANINE_OPERATOR_DIR/terraform"
@@ -75,15 +68,9 @@ terraform -chdir=infra/azure/image show "$GUARANINE_OPERATOR_DIR/image.tfplan"
 terraform -chdir=infra/azure/image apply "$GUARANINE_OPERATOR_DIR/image.tfplan"
 ```
 
-Inspect each saved plan against the authorized scope before applying. This first apply creates only a Gen2 upload disk. Obtain its ID with `terraform -chdir=infra/azure/image output -raw upload_disk_id`.
+Review the saved plan before applying. This first apply creates only upload staging. Obtain `upload_disk_id` and follow the [Azure direct-upload procedure](https://learn.microsoft.com/azure/virtual-machines/linux/disks-upload-vhd-to-managed-disk-cli): grant a short-lived write SAS, upload the exact VHD with AzCopy, then revoke disk access in an `EXIT` trap, including on failure. Keep shell tracing off and AzCopy logs/job plans private. SAS values and image contents never enter Terraform state.
 
-Follow the [official Azure direct-upload procedure](https://learn.microsoft.com/azure/virtual-machines/linux/disks-upload-vhd-to-managed-disk-cli): grant a short-lived write SAS, copy the exact VHD with AzCopy, and revoke disk access in an `EXIT` trap even if copying fails. Keep tracing off and AzCopy logs/job plans private. Neither the SAS nor VHD contents enter Terraform state.
-
-After upload and revocation, set `image_ready = true` and repeat plan/show/apply. This closes disk export access and creates the private image. Put its `talos_image_id` output into `coordinator.tfvars`.
-
-## Provision the control plane
-
-Terraform first creates a managed boot disk from the private image, then attaches that prepared disk to the VM. This uses Azure's existing-OS path and avoids the generalized-guest provisioning handshake that Talos skips with a complete embedded configuration. No SSH metadata, cloud-init, custom data, VM agent or extension service is needed. Azure-managed boot diagnostics provide protected console logs for failed boots.
+Set `image_ready = true` and repeat plan/show/apply to close export access and create the image. Put the `image_id` output into `coordinator.tfvars`; use `name_prefix = "guaranine-kairos"` for the migration.
 
 ```bash
 export TF_DATA_DIR="$GUARANINE_OPERATOR_DIR/terraform/coordinator-cache"
@@ -96,85 +83,79 @@ terraform -chdir=infra/azure/coordinator apply "$GUARANINE_OPERATOR_DIR/coordina
 terraform -chdir=infra/azure/coordinator plan -var-file="$GUARANINE_OPERATOR_DIR/coordinator.tfvars" -detailed-exitcode
 ```
 
-Require a no-change rerun. The NSG denies physical inbound traffic and direct VNet egress. Its public IP supplies explicit internet egress for Tailscale/DERP and downloads. Azure IPs are never cluster endpoints. The `talos_handoff` output records resource/image/disk identifiers and LUN. VM replacement reuses both disks, preserving the installed machine identity. The image seeds a boot disk once; use native Talos upgrades for an installed OS.
+Require a no-change rerun. The NSG denies physical inbound access and direct VNet egress; its public IP provides explicit internet egress for Tailscale/DERP and downloads. VM replacement retains both disks. The `handoff` output records IDs and the data-disk LUN. Changing the image input does not reinstall an existing boot disk.
 
-## Bootstrap the control plane once
+## Bootstrap the controller
 
-The initial profile uses a temporary loopback Kubernetes endpoint. After the VM joins Tailscale, find its actual IPv4 address with `tailscale status`. Set `GUARANINE_CONTROL_IP` to that verified address and use the generated control-plane operator context:
+After the VM registers with Tailscale, find its verified tailnet IPv4 address. Run:
 
 ```bash
-export TALOSCONFIG="$GUARANINE_OPERATOR_DIR/nodes/guaranine-controlplane/config/talosconfig"
-./guaranine talosctl config endpoint "$GUARANINE_CONTROL_IP"
-./guaranine talosctl config node "$GUARANINE_CONTROL_IP"
-cat > "$GUARANINE_OPERATOR_DIR/endpoint.patch.yaml" <<EOF
-apiVersion: v1alpha1
-kind: KubeClusterConfig
-clusterName: guaranine
-endpoint: https://$GUARANINE_CONTROL_IP:6443
-EOF
-./guaranine talosctl patch machineconfig --patch @"$GUARANINE_OPERATOR_DIR/endpoint.patch.yaml"
-./guaranine talosctl bootstrap
-./guaranine talosctl kubeconfig --merge=false "$GUARANINE_OPERATOR_DIR/kubeconfig"
+./guaranine bootstrap
 ```
 
-Bootstrap etcd once. Check Talos health, etcd and `kubectl get nodes -o wide`; node addresses must be Tailscale addresses. Set `endpoint` in the private `operator.yaml` to `https://CONTROL_PLANE_TAILSCALE_IP:6443` before preparing workers. The deployed controller has passed native Talos health checks with its etcd volume on the retained disk and its Kubernetes API reached over Tailscale.
+Compare the SSH fingerprint with protected VM console output. For a new deployment, explicitly choose the NEW EMPTY retained data disk and confirm initialization. Existing filesystem signatures are refused. Recovery uses the retained/restored `GUARANINE_DATA` volume without formatting it. The K3s service requires that mount and fails closed when it is absent.
 
-## Prepare a shared laptop ISO
+Bootstrap waits for the API, saves a private kubeconfig and pinned server host key, and records the Tailscale endpoint in `operator.yaml`.
 
-With Docker running, build the private boot media once on the operator computer:
+```bash
+export KUBECONFIG="$GUARANINE_OPERATOR_DIR/kubeconfig"
+kubectl get nodes -o wide
+```
+
+The server is tainted against ordinary application placement. Workers receive the secure CA-pinned agent token, never the server token. Traefik, ServiceLB, local-path storage and metrics-server are disabled; add workloads only through repository manifests when needed.
+
+## Shared laptop ISO
+
+Connect the operator to the Wi-Fi network the laptops should use, then run:
 
 ```bash
 ./guaranine iso
 ```
 
-This checks Docker, requests one preauthorized, reusable, non-ephemeral Tailscale key with a 24-hour lifetime and builds one ISO with the pinned upstream Talos imager. Reuse that same ISO on multiple laptops during the registration window; the command prints its actual expiry. The boot configuration contains only a generated hostname, Tailscale registration and ingress rules: no disk-install instruction, cluster join credentials or machine identity.
+The CLI captures exactly one active NetworkManager Wi-Fi connection, with open, WPA personal or WPA3 personal authentication. It copies the SSID/authentication only, using DHCP on each laptop; it does not copy the operator's MAC, interface name, IP address or access-point binding. Enterprise credentials and ambiguous/missing networks fail before media creation. Passwords are captured privately, never printed or placed in command arguments.
 
-The pinned Tailscale extension normally waits for CRI and stores state under `/var/lib`, which are unavailable in maintenance mode. For this boot ISO only, the build exports the pinned upstream extension with Docker, removes the CRI dependency and persistent-state mount, and uses its existing `/var/run/tailscale` mount for RAM state. Its binaries and other settings stay upstream. The imager consumes this local tar archive through its native `tarballPath` input. Installed workers use the ordinary upstream Tailscale-enabled installer with persistent state. Docker removes the stopped export container afterward.
+The image uses only `wpa_supplicant` and the existing network service. It has no NetworkManager, Wi-Fi management CLI or supplicant control socket. Wi-Fi configuration is carried from the live profile into the installed configuration. Ordinary discovery/reconnection still requires Wi-Fi scanning. The controller uses the same OS base with its cloud NIC and no Wi-Fi profile.
 
-Outputs are under `installer/` in the operator directory: `tailscale-key.json` records the batch key, `boot.yaml` contains the maintenance configuration, and `image/` holds the ISO and protected logs. Files use mode 0600 in mode-0700 directories. Keep the ISO private; it authorizes new Tailscale registrations during its window. It must never be published or uploaded as a CI artifact.
+A reusable, preauthorized, non-ephemeral Tailscale key allows registrations for at most 24 hours. The command prints the ISO path and expiry in local time. The ISO has no K3s token or installation target. Files under `installer/` are private; media containing a protected Wi-Fi profile also carries that network credential. Never publish images or upload them as CI artifacts.
 
-Existing installer outputs are never overwritten. If only `tailscale-key.json` was saved, rerun `./guaranine iso` to reuse that unexpired key with its original expiry. After a later build failure, inspect protected logs and revoke the issued key before removing `installer/` and retrying. To start another batch, revoke the old key and archive or remove its `installer/` directory before running `./guaranine iso` again. Revoking or expiring an auth key does not remove devices already registered with it.
+Interactive terminals offer a numbered USB menu. Enter skips it. Choose by path/model/size/serial/label and type the exact `ERASE /dev/DEVICE` phrase. The CLI rechecks the drive, unmounts it, writes the image with progress and flushes it. System mounts, active encrypted/LVM volumes and the ISO's own disk are excluded. Redirected runs never prompt for flashing.
 
-## Add a laptop
+Completed images are reused with their original network/profile while the registration key remains valid. To change the network or start another batch, revoke the previous key and archive its installer directory. Key-only retries reuse the same key. After a partial build, inspect protected logs before archiving outputs and retrying. Expiring/revoking a key does not remove already registered devices.
 
-Write the shared ISO to a USB drive and boot a laptop with Ethernet or USB Ethernet and internet access. The laptop stays in maintenance mode; booting the ISO does not authorize installation or erasure. Its host firewall permits the maintenance API only from the Tailscale range, and the tailnet policy limits who can reach it. An existing installed Talos system causes this ISO to halt rather than reuse its disks automatically.
+## Install a worker
 
-Run this on the operator computer for each laptop:
+Boot the shared USB. Wi-Fi connects automatically and the laptop stays live until explicitly installed. Run on the operator:
 
 ```bash
 ./guaranine worker
 ```
 
-The command asks for the laptop's Tailscale IPv4 address and the Talos certificate fingerprint shown on its screen. It pins that certificate for every native maintenance API request. Choose a unique lowercase worker name, then select a disk from the laptop's detected model, size, serial, transport and device path. No disk is preselected. The command displays the name, laptop address and disk, then requires the exact displayed `ERASE NAME /dev/DISK` phrase. Cancelling before that confirmation sends no installation configuration. The selected disk's contents will be destroyed when the confirmed configuration is applied.
+Enter its Tailscale IPv4 and the SSH fingerprint displayed on its console. Every remote command uses that pinned host key and the operator's SSH key. Choose a unique worker name and an unmounted, writable disk of at least 16 GiB. There is no default disk. The exact `ERASE NAME /dev/DISK` confirmation authorizes erasure; cancellation before it sends no installation configuration.
 
-After confirmation, the command checks the disk again, generates and validates the native worker configuration using the existing cluster secrets and batch key, and applies it with `talosctl`. The chosen name becomes both the Kubernetes node name and Tailscale hostname. Configuration is saved privately under `nodes/NAME/config/machine.yaml`. Worker profiles contain neither the operator API credential, an admin `talosconfig` nor cluster signing keys. Existing worker output is never overwritten.
+The CLI rechecks the disk and batch expiry, fetches the secure K3s agent token over pinned server SSH and invokes native `kairos-agent manual-install`. The root filesystem comes from the live media, so installation does not need a public image registry or LAN provisioning service. Name, join credentials and the captured Wi-Fi configuration are saved privately under `nodes/NAME/`.
 
-The command reports that configuration was sent, not that enrollment succeeded. Remove the USB when the laptop reboots and find its installed identity in Tailscale; its address can change when the in-memory registration is replaced by persistent state. Verify `kubectl get node NAME -o wide` reports Ready and its address is in the Tailscale range. Remove a leftover offline installer identity only after identifying it separately from the installed worker. If applying configuration reports a connection failure, inspect the laptop before retrying: the installation might already have started.
+After installation powers off, remove the USB and boot the laptop. Its persistent Tailscale identity can have a different address from the live session. Require `kubectl get node NAME -o wide` to report Ready with a Tailscale address. A transport error during installation can occur after disk changes started; inspect the laptop before retrying.
 
-Installed workers normally retain their identity across reboots and do not need another ISO. Physical installation, identity handoff and operation across laptop locations still need qualification.
+## Networking and workload security
 
-## Maintain and recover
+Tailscale uses kernel networking, persistent identity, no accepted subnet routes and no host DNS changes. K3s binds node addresses and Flannel to `tailscale0`; Flannel derives its MTU from that interface. Administration, API, kubelet and cross-node pod traffic use the tailnet. Test direct/relayed paths, reconnects and temporary outages on the real network.
 
-All private inter-host traffic uses Tailscale, including relayed paths. Node addresses are restricted to `100.64.0.0/10`. Flannel binds to `tailscale0`, using VXLAN UDP 4789 and tunnel MTU 1280 before encapsulation overhead. Talos API TCP 50000, trust API 50001, Kubernetes API 6443 and kubelet TCP 10250 accept tailnet traffic. The control plane also permits TCP 6443 from the default pod subnet `10.244.0.0/16` so CoreDNS and workloads can use the Kubernetes API through its ClusterIP. Remote pod traffic reaches the host through Flannel over Tailscale. Other host ingress is blocked; workloads still need appropriate NetworkPolicies.
+The host firewall blocks physical administration and direct private-LAN/VNet traffic, with required DHCP/DNS and IPv6 control exceptions. Its forwarding rule also blocks pod traffic to private physical networks. Workloads use the standard restricted Pod Security policy: no privileged pods or host namespaces, no privilege escalation, and dropped capabilities. `kube-system` is reserved for trusted system components.
 
-The official Tailscale extension retains its identity, uses kernel networking, and changes neither host DNS nor accepted subnet routes. Alternate API endpoint selection and external cluster discovery are disabled. Test direct paths, relays, reboots and temporary disconnections on the real network.
+[kubernetes/network-policy.yaml](kubernetes/network-policy.yaml) isolates the default application namespace and permits cluster DNS. Add explicit ingress/egress rules alongside applications. New application namespaces need their own policies. Allowed destinations remain reachable by compromised applications; firewall rules and removing utilities cannot guarantee safety after host-root or kernel compromise.
 
-Use `kubectl cordon` and `kubectl drain --ignore-daemonsets` before worker removal. Wait for replacements to become ready; resolve capacity, disruption-budget and storage blockers. Fence a retired worker before deleting its Node and Tailscale identity. WAN disconnection is not fencing. Use native `talosctl` upgrades with the matching Tailscale-enabled installer.
+Use `kubectl cordon` and `kubectl drain --ignore-daemonsets` before removal. Wait for replacements and resolve capacity, disruption-budget and storage blockers. Fence retired machines before deleting their Kubernetes/Tailscale identities. A disconnected machine may still be running; WAN disconnection is not fencing.
 
-Back up etcd with `talosctl etcd snapshot`, cluster secrets, operator files and Terraform state outside the student subscription before replacement or credit expiry. The etcd disk has `prevent_destroy`; VM replacement must retain it. Never bypass retention by deleting state or targeting resources. Deliberate disk removal needs explicit scope, verified backups and fencing. Disks, images and IPs continue costing money after a VM is stopped.
+## Backup, restore and OS updates
 
-For cluster recovery, fence the old control plane and follow [native etcd recovery](https://docs.siderolabs.com/talos/v1.14/learn-more/control-plane). Fresh Tailscale credentials may be needed. A retained disk is not a backup and does not automatically restore a cluster. If Terraform state is lost, stop writers and restore its off-machine backup before planning; import only verified Guaranine resources if no backup exists.
+Use [native K3s SQLite backup/restore](https://docs.k3s.io/datastore/backup-restore), including the server token. For a consistent full server-directory copy, briefly stop K3s, archive `server/` from the mounted `/var/lib/rancher/k3s`, and restart it in an `EXIT` trap. Stream the archive over pinned Tailscale SSH into a mode-0600 operator file. Back up operator configuration/keys, Terraform state and application volumes separately, outside the student subscription.
 
-## Enrollment security status
+For recovery on another cloud VM: fence the old server, boot the same prepared Kairos base with fresh network registration if required, attach an empty retained disk, restore the server directory with K3s stopped, then start K3s. Preserve the server token from the backup. Verify API health, worker connectivity and application data; update the kubeconfig endpoint and private operator endpoint for the replacement address. A retained disk is not an off-machine backup.
 
-Each laptop generates its own identity; registered devices remain authorized after the auth key expires. A maintenance-mode device already connected before expiry can also remain connected afterward.
+Use native `kairos-agent upgrade` with the tested image produced from this recipe and a pinned digest or private local image. Keep secrets in OEM configuration, outside the public base. Verify active/passive rollback and persistent data after upgrades; do not use Terraform image changes as an OS upgrade mechanism. Secure Boot, TPM-bound enrollment and YubiKey boot authorization require separate qualification and are not implemented here.
 
-**The full policy is unfinished.** Tailscale registration expiry is separate from Talos cluster join authority. The command checks the saved batch expiry before sending a new worker configuration, but a local clock check cannot securely expire copied worker configuration or already-issued cluster credentials. A copied ISO can register additional devices during the window; it is not hardware-bound. YubiKey boot authorization is not implemented. The ISO itself stays copyable and bootable after 24 hours.
+## Validation and enrollment limits
 
-## Hardware and validation
+Run the checks in [README.md](README.md#development). They validate all native Kairos profiles, private-file handling, role credentials, disk confirmations, workflow/shell syntax and credential-free Terraform lifecycle plans. The private-image workflow builds disposable ISO/VHD fixtures and boots isolated QEMU guests; no real enrollment credentials or images are published.
 
-The pinned AMD64 release needs x86-64-v2, compatible storage/NIC hardware and at least 1 GiB RAM for a worker before application capacity. Physical laptops, Wi-Fi/firmware, lid/power behavior and live WAN operation still need qualification.
-
-Run repository validation as described in [README.md](README.md#development). It validates the maintenance configuration and both native Talos roles, restricts admin output to the control plane and tests the name/disk prompts, cancellation, certificate pinning, credentials, workflows, shell and credential-free Terraform plans and lifecycle. The [private-image workflow](.github/workflows/private-images.yml) builds shared-ISO/VHD fixtures with disposable keys, boots the same ISO in two isolated QEMU guests, then discards the outputs. It checks maintenance mode, Tailscale kernel-network startup, distinct certificates and unchanged guest disks. Synthetic guest networking and invalid keys exercise startup without authorizing a real tailnet device. These are construction and maintenance-boot tests, not proof of successful installation or real enrollment.
-
-Update [Talos pins](talos/versions.json) from official checksums, extension metadata and OCI digests, then run repository validation and both private builds. Keep [the public schematic](talos/schematic.yaml) for the Tailscale-enabled installer referenced by generated profiles; it contains only the extension name. Private configuration goes to the local imager through stdin, never to public Image Factory. There is no public ISO publishing workflow or published installer release.
+Laptop model coverage, physical Wi-Fi, lid/suspend behavior and real WAN recovery need hardware tests. The shared image remains copyable and bootable after the registration window. A local expiry check cannot revoke copied join credentials or already authorized nodes, and the ISO is not hardware-bound. Keep operational claims limited to checks actually completed.
