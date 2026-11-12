@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -212,7 +211,8 @@ class InstallationTests(unittest.TestCase):
             if 'kubectl get node' in args[-1]: return ''
             if 'server/agent-token' in args[-1]: return token
             self.assertIn('manual-install', args[-1])
-            self.assertIn('--device /dev/vdb --poweroff', args[-1])
+            self.assertIn('--device /dev/vdb /run/guaranine-install.yaml', args[-1])
+            self.assertIn('&& systemd-run --on-active=5s systemctl poweroff', args[-1])
             self.assertEqual(directory, self.root / 'nodes/worker-one')
             config = yaml.safe_load(kwargs['data'])
             files = config['stages']['initramfs'][0]['files']

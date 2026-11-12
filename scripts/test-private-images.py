@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Build and boot disposable native Kairos images; never publish credentials or media."""
-import json
 import os
 from pathlib import Path
 import re

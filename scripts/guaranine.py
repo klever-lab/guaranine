@@ -334,7 +334,7 @@ def machine_config(key, public_key, *, name=None, role=None, cluster_endpoint=No
         services.append('k3s.service')
     config['stages'] = {
         'initramfs': [{'name': 'Configure Guaranine identity and services', 'files': files,
-                       'commands': ['systemctl enable ' + ' '.join(services)]}],
+                       'commands': ['sync -f /etc/ssh', 'systemctl enable ' + ' '.join(services)]}],
         'boot': [{'name': 'Start Guaranine services', 'commands': [
             'systemctl daemon-reload', 'systemctl start --no-block ' + ' '.join(services),
             'ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub > /dev/console',
@@ -640,7 +640,7 @@ def install_worker(_args):
         auth_record(key, reusable=True)
         # No custom node API. Native Kairos installs from the read-only live root.
         command = 'umask 077; cat > /run/guaranine-install.yaml && kairos-agent manual-install --device '
-        command += shlex.quote(disk) + ' --poweroff /run/guaranine-install.yaml'
+        command += shlex.quote(disk) + ' /run/guaranine-install.yaml && systemd-run --on-active=5s systemctl poweroff'
         private_command([*connection, command], node, data=cloud_yaml(config), timeout=1800)
     print(f'Installation command completed for {name}. Remove the USB after power-off, then boot the laptop.')
     print(f'Its Tailscale address may change. Verify kubectl get node {name} reports Ready.')
