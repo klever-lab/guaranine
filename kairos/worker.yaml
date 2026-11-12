@@ -1,0 +1,24 @@
+#cloud-config
+name: Guaranine worker
+install:
+  poweroff: true
+# Native manual-install requires an administrator in the submitted configuration.
+users:
+  - name: root
+    groups: [admin]
+    lock_passwd: true
+stages:
+  initramfs:
+    - name: Configure the K3s agent
+      files:
+        - path: /etc/systemd/system/k3s.service.d/role.conf
+          permissions: 0644
+          content: |
+            [Service]
+            Environment=K3S_ROLE=agent
+      systemctl:
+        enable: [k3s.service]
+  boot:
+    - name: Start the K3s agent
+      commands:
+        - systemctl start --no-block k3s.service

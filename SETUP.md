@@ -2,6 +2,8 @@
 
 The cloud controller and laptop workers use the same Kairos/Hadron base. One K3s server uses SQLite on a retained data disk; laptop agents connect over Tailscale. Commands run from the repository root on the Linux operator computer.
 
+Public OS defaults and shared services live in [kairos/config.yaml](kairos/config.yaml). The [control-plane](kairos/controlplane.yaml) and [worker](kairos/worker.yaml) profiles own role-specific K3s settings; [kairos/auroraboot.yaml](kairos/auroraboot.yaml) owns the VHD recipe. The CLI adds private inputs to these native configurations.
+
 ## Operator files
 
 Install `uv`, Docker and `sudo`; image building needs a privileged Docker container. USB flashing also uses sudo. Install `nmcli` on the operator to capture its active Wi-Fi connection. Azure operations use the pinned Terraform version, Azure CLI, AzCopy and `qemu-img`; cluster checks use a matching `kubectl`.
@@ -132,7 +134,7 @@ Boot the shared USB. Wi-Fi connects automatically and the laptop stays live unti
 
 Enter its Tailscale IPv4 and the SSH fingerprint displayed on its console. Every remote command uses that pinned host key and the operator's SSH key. Choose a unique worker name and an unmounted, writable disk of at least 16 GiB. There is no default disk. The exact `ERASE NAME /dev/DISK` confirmation authorizes erasure; cancellation before it sends no installation configuration.
 
-The CLI rechecks the disk and batch expiry, fetches the secure K3s agent token over pinned server SSH and invokes native `kairos-agent manual-install`. The root filesystem comes from the live media, so installation does not need a public image registry or LAN provisioning service. Name, join credentials and the captured Wi-Fi configuration are saved privately under `nodes/NAME/`.
+The CLI rechecks the disk and batch expiry, fetches the secure K3s agent token over pinned server SSH and streams the approved configuration to native `kairos-agent --strict-validation manual-install`. The worker profile requests power-off after installation. The root filesystem comes from the live media, so installation does not need a public image registry or LAN provisioning service. Name, join credentials and the captured Wi-Fi configuration are saved privately under `nodes/NAME/`.
 
 After installation powers off, remove the USB and boot the laptop. Its persistent Tailscale identity can have a different address from the live session. Require `kubectl get node NAME -o wide` to report Ready with a Tailscale address. A transport error during installation can occur after disk changes started; inspect the laptop before retrying.
 
@@ -156,6 +158,6 @@ Use native `kairos-agent upgrade` with the tested image produced from this recip
 
 ## Validation and enrollment limits
 
-Run the checks in [README.md](README.md#development). They validate all native Kairos profiles, private-file handling, role credentials, disk confirmations, workflow/shell syntax and credential-free Terraform lifecycle plans. The private-image workflow builds disposable ISO/VHD fixtures and boots isolated QEMU guests; no real enrollment credentials or images are published.
+Run the checks in [README.md](README.md#development). They validate all native Kairos profiles, private-file handling, role credentials, disk confirmations, workflow/shell syntax and credential-free Terraform lifecycle plans. The private-image workflow boots isolated ISO/VHD guests and installs, powers off and reboots a disposable worker to check its persistent configuration. No real enrollment credentials or images are published.
 
 Laptop model coverage, physical Wi-Fi, lid/suspend behavior and real WAN recovery need hardware tests. The shared image remains copyable and bootable after the registration window. A local expiry check cannot revoke copied join credentials or already authorized nodes, and the ISO is not hardware-bound. Keep operational claims limited to checks actually completed.

@@ -1,5 +1,8 @@
 #cloud-config
 name: Guaranine host configuration
+hostname: guaranine-live-{{ trunc 8 .MachineID }}
+install:
+  auto: false
 stages:
   rootfs.before:
     - name: Load private ISO configuration into RAM
@@ -146,9 +149,35 @@ stages:
             if [ "$K3S_ROLE" = server ]; then
               mountpoint -q /var/lib/rancher/k3s
               install -Dm0600 /etc/rancher/k3s/network-policy.yaml /var/lib/rancher/k3s/server/manifests/guaranine-network.yaml
-              exec /usr/bin/k3s server --node-ip "$ip" --advertise-address "$ip" --tls-san "$ip"
+              exec /usr/bin/k3s server --node-ip "$ip"
             fi
             exec /usr/bin/k3s agent --node-ip "$ip"
+        - path: /etc/rancher/k3s/config.yaml
+          permissions: 0600
+          content: |
+            flannel-iface: tailscale0
+            token-file: /etc/rancher/k3s/token
+            resolv-conf: /run/systemd/resolve/resolv.conf
+        - path: /etc/systemd/system/k3s.service
+          permissions: 0644
+          content: |
+            [Unit]
+            Description=K3s
+            Requires=tailscaled.service guaranine-firewall.service
+            Wants=guaranine-tailscale.service
+            After=guaranine-tailscale.service guaranine-firewall.service
+            [Service]
+            Type=notify
+            Delegate=yes
+            KillMode=process
+            LimitNOFILE=1048576
+            TasksMax=infinity
+            Restart=always
+            RestartSec=5
+            TimeoutStartSec=0
+            ExecStart=/bin/sh /etc/guaranine/k3s-start
+            [Install]
+            WantedBy=multi-user.target
         - path: /etc/modules-load.d/guaranine.conf
           permissions: 0644
           content: |
@@ -179,18 +208,33 @@ stages:
               echo 'SSH host fingerprint (compare on the operator computer):'
               ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
             fi
-      commands:
-        - systemctl enable systemd-networkd.service systemd-resolved.service tailscaled.service guaranine-firewall.service sshd.service
-        - systemctl mask kairos-agent.service kairos-installer.service kairos-webui.service
+      systemctl:
+        enable:
+          - systemd-networkd.service
+          - systemd-resolved.service
+          - tailscaled.service
+          - guaranine-firewall.service
+          - guaranine-tailscale.service
+          - sshd.service
+        mask:
+          - kairos-agent.service
+          - kairos-installer.service
+          - kairos-webui.service
     - name: Show a local shell on live media
       if: '[ -f /run/cos/live_mode ]'
       commands:
         - systemctl unmask getty@tty1.service
         - systemctl enable getty@tty1.service
   boot:
+    - name: Start Guaranine networking and show the SSH fingerprint
+      commands:
+        - sync -f /etc/ssh
+        - systemctl daemon-reload
+        - systemctl start --no-block guaranine-tailscale.service
+        - ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub > /dev/console
+        - 'if test -c /dev/ttyS0; then ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub > /dev/ttyS0; fi'
     - name: Start Wi-Fi on detected wireless interfaces
       commands:
-        - systemctl daemon-reload
         - >-
           for path in /sys/class/net/*/wireless; do
           test -d "$path" || continue;

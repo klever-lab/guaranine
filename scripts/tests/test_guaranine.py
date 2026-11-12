@@ -71,21 +71,36 @@ class PrivateConfigTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError): cli.endpoint(value)
 
     def test_native_roles_separate_live_media_worker_and_server_authority(self):
+        base = yaml.safe_load((ROOT / 'kairos/config.yaml').read_text())
+        def files(config):
+            return {file['path']: file for stage in config['stages'].values()
+                    for step in stage for file in step.get('files', [])}
         wifi = 'update_config=0\nnetwork={\n ssid=74657374\n key_mgmt=NONE\n}\n'
         live = cli.machine_config('tskey-auth-LIVE', 'ssh-ed25519 PUBLIC', wifi=wifi)
-        self.assertEqual(live['install'], {'auto': False})
-        self.assertEqual(live['users'][0]['groups'], ['admin'])
+        self.assertEqual(base['install'], {'auto': False})
+        self.assertTrue(base['hostname'].startswith('guaranine-live-'))
+        self.assertEqual(live['ssh_authorized_keys'], ['ssh-ed25519 PUBLIC'])
         self.assertNotIn('k3s', cli.cloud_yaml(live))
         self.assertNotIn('device:', cli.cloud_yaml(live))
+        self.assertFalse(any('k3s.service' in step.get('systemctl', {}).get('enable', [])
+                             for step in base['stages']['initramfs']))
         worker = cli.machine_config('tskey-auth-WORKER', 'ssh-ed25519 PUBLIC', name='worker-one',
             role='worker', cluster_endpoint='https://100.64.0.1:6443', token='AGENT-ONLY', wifi=wifi)
+        self.assertEqual(worker['hostname'], 'worker-one')
+        self.assertTrue(worker['install']['poweroff'])
+        self.assertEqual(worker['users'][0]['groups'], ['admin'])
+        self.assertTrue(worker['users'][0]['lock_passwd'])
         text = cli.cloud_yaml(worker)
         self.assertIn('AGENT-ONLY', text)
         self.assertNotIn('SERVER-SECRET', text)
         self.assertNotIn('server/manifests', text)
         self.assertNotIn('GUARANINE_DATA', text)
-        server = cli.machine_config('tskey-auth-SERVER', 'ssh-ed25519 PUBLIC', name='guaranine-controlplane',
+        worker_files = files(worker)
+        join = yaml.safe_load(worker_files['/etc/rancher/k3s/config.yaml.d/90-join.yaml']['content'])
+        self.assertEqual(join, {'server': 'https://100.64.0.1:6443'})
+        server = cli.machine_config('tskey-auth-SERVER', 'ssh-ed25519 PUBLIC',
             role='controlplane', token='SERVER-SECRET', agent_token='AGENT-ONLY')
+        self.assertEqual(server['hostname'], cli.role_config('controlplane')['hostname'])
         text = cli.cloud_yaml(server)
         self.assertIn('GUARANINE_DATA', text)
         self.assertIn('var-lib-rancher-k3s.mount', text)
@@ -93,13 +108,28 @@ class PrivateConfigTests(unittest.TestCase):
         self.assertIn('restricted', text)
         self.assertNotIn('mkfs', text)
         self.assertNotIn('wifi.conf', text)
-        files = {file['path']: file for file in server['stages']['initramfs'][0]['files']}
-        config = yaml.safe_load(files['/etc/rancher/k3s/config.yaml']['content'])
-        self.assertEqual(config['flannel-iface'], 'tailscale0')
+        common = yaml.safe_load(files(base)['/etc/rancher/k3s/config.yaml']['content'])
+        server_files = files(server)
+        config = yaml.safe_load(server_files['/etc/rancher/k3s/config.yaml.d/10-controlplane.yaml']['content'])
+        self.assertEqual(common['flannel-iface'], 'tailscale0')
         self.assertTrue(config['secrets-encryption'])
-        self.assertNotIn('cluster-init', config)
+        self.assertEqual(server_files[common['token-file']]['content'], 'SERVER-SECRET\n')
+        self.assertEqual(server_files[config['agent-token-file']]['content'], 'AGENT-ONLY\n')
+        self.assertEqual(server_files[config['agent-token-file']]['permissions'], 0o600)
+        self.assertEqual(set(config['disable']), {'traefik', 'servicelb', 'local-storage', 'metrics-server', 'gateway-api-crd'})
+        self.assertIn('BindsTo=var-lib-rancher-k3s.mount', server_files['/etc/systemd/system/k3s.service.d/role.conf']['content'])
+        self.assertNotIn('node-name', common | config | join)
+        self.assertNotIn('cluster-init', common | config)
         with self.assertRaises(ValueError):
             cli.machine_config('key', 'pub', name='server-one', role='controlplane', token='same', agent_token='same')
+
+    def test_invalid_or_incomplete_roles_are_rejected(self):
+        for arguments in ({'role': 'other'}, {'role': 'worker', 'token': 'AGENT'},
+                          {'role': 'worker', 'name': 'worker-one'},
+                          {'role': 'controlplane', 'token': 'SERVER'},
+                          {'role': 'controlplane', 'name': 'INVALID', 'token': 'SERVER', 'agent_token': 'AGENT'}):
+            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                cli.machine_config('key', 'pub', **arguments)
 
     def test_failed_commands_keep_secret_diagnostics_private(self):
         result = subprocess.CompletedProcess([], 1, stdout='SECRET', stderr='PRIVATE')
@@ -211,11 +241,11 @@ class InstallationTests(unittest.TestCase):
             if 'kubectl get node' in args[-1]: return ''
             if 'server/agent-token' in args[-1]: return token
             self.assertIn('manual-install', args[-1])
-            self.assertIn('--device /dev/vdb /run/guaranine-install.yaml', args[-1])
-            self.assertIn('&& systemd-run --on-active=5s systemctl poweroff', args[-1])
+            self.assertEqual(args[-1], 'kairos-agent --strict-validation manual-install --device /dev/vdb /dev/stdin')
             self.assertEqual(directory, self.root / 'nodes/worker-one')
             config = yaml.safe_load(kwargs['data'])
-            files = config['stages']['initramfs'][0]['files']
+            self.assertTrue(config['install']['poweroff'])
+            files = [file for stage in config['stages']['initramfs'] for file in stage.get('files', [])]
             self.assertEqual(next(f['content'] for f in files if f['path'].endswith('/token')).strip(), token)
             self.assertTrue(any(f['path'].endswith('/wifi.conf') for f in files))
             return ''

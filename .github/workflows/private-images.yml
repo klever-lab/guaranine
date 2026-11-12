@@ -43,5 +43,5 @@ jobs:
         run: |
           sudo apt-get update --error-on=any
           sudo apt-get install --yes --no-install-recommends qemu-system-x86 ovmf
-      - name: Build disposable ISO/VHD and boot the same ISO in two isolated guests
+      - name: Verify live boots, the controller data guard and worker installation
         run: python3 scripts/test-private-images.py

@@ -1,0 +1,68 @@
+#cloud-config
+name: Guaranine control plane
+hostname: guaranine-controlplane
+stages:
+  initramfs:
+    - name: Configure the K3s server and retained data volume
+      files:
+        - path: /etc/rancher/k3s/config.yaml.d/10-controlplane.yaml
+          permissions: 0600
+          content: |
+            agent-token-file: /etc/rancher/k3s/agent-token
+            secrets-encryption: true
+            disable:
+              - traefik
+              - servicelb
+              - local-storage
+              - metrics-server
+              - gateway-api-crd
+            node-taint:
+              - node-role.kubernetes.io/control-plane=true:NoSchedule
+            kube-apiserver-arg:
+              - admission-control-config-file=/etc/rancher/k3s/admission.yaml
+        - path: /etc/rancher/k3s/admission.yaml
+          permissions: 0600
+          content: |
+            apiVersion: apiserver.config.k8s.io/v1
+            kind: AdmissionConfiguration
+            plugins:
+              - name: PodSecurity
+                configuration:
+                  apiVersion: pod-security.admission.config.k8s.io/v1
+                  kind: PodSecurityConfiguration
+                  defaults:
+                    enforce: restricted
+                    enforce-version: latest
+                    audit: restricted
+                    audit-version: latest
+                    warn: restricted
+                    warn-version: latest
+                  exemptions:
+                    usernames: []
+                    runtimeClasses: []
+                    namespaces: [kube-system]
+        - path: /etc/systemd/system/var-lib-rancher-k3s.mount
+          permissions: 0644
+          content: |
+            [Unit]
+            Description=Retained K3s data
+            JobTimeoutSec=30
+            [Mount]
+            What=/dev/disk/by-label/GUARANINE_DATA
+            Where=/var/lib/rancher/k3s
+            Type=ext4
+            Options=defaults
+        - path: /etc/systemd/system/k3s.service.d/role.conf
+          permissions: 0644
+          content: |
+            [Unit]
+            BindsTo=var-lib-rancher-k3s.mount
+            After=var-lib-rancher-k3s.mount
+            [Service]
+            Environment=K3S_ROLE=server
+      systemctl:
+        enable: [k3s.service]
+  boot:
+    - name: Start the K3s server
+      commands:
+        - systemctl start --no-block k3s.service

@@ -39,6 +39,9 @@ def main():
         version = cli.PINS['kairos']
         agent = binary(f'https://github.com/kairos-io/kairos/releases/download/{version}/kairos-{version}-linux-amd64.tar.gz',
                        cli.PINS['agent_sha256'], 'kairos', directory)
+        profiles = [ROOT / 'kairos' / name for name in ('config.yaml', 'worker.yaml', 'controlplane.yaml')]
+        for path in profiles:
+            subprocess.run([str(agent), 'agent', '--strict-validation', 'validate', str(path)], check=True)
         for role in (None, 'worker', 'controlplane'):
             arguments = {} if role is None else dict(name='test-' + role, role=role,
                 cluster_endpoint='https://100.64.0.1:6443', token='DISPOSABLE-SERVER' if role == 'controlplane' else 'DISPOSABLE-AGENT',
@@ -48,19 +51,18 @@ def main():
             path = directory / ((role or 'live') + '.yaml')
             cli.private_write(path, cli.cloud_yaml(config))
             subprocess.run([str(agent), 'agent', '--strict-validation', 'validate', str(path)], check=True)
-        subprocess.run([str(agent), 'agent', '--strict-validation', 'validate', str(ROOT / 'kairos/config.yaml')], check=True)
         actionlint = binary('https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz',
                             ACTIONLINT_SHA256, 'actionlint', directory)
         subprocess.run([str(actionlint)], cwd=ROOT, check=True)
-        base = yaml.safe_load((ROOT / 'kairos/config.yaml').read_text())
         shell = [ROOT / 'guaranine', ROOT / 'scripts/validate.sh']
-        for stage in base['stages'].values():
-            for step in stage:
-                for file in step.get('files', []):
-                    if file['content'].startswith('#!/bin/sh'):
-                        path = directory / Path(file['path']).name
-                        path.write_text(file['content'])
-                        shell.append(path)
+        for profile in profiles:
+            for stage in yaml.safe_load(profile.read_text())['stages'].values():
+                for step in stage:
+                    for file in step.get('files', []):
+                        if file['content'].startswith('#!/bin/sh'):
+                            path = directory / (profile.stem + '-' + Path(file['path']).name)
+                            path.write_text(file['content'])
+                            shell.append(path)
         subprocess.run(['shellcheck', *map(str, shell)], check=True)
     for path in (ROOT / 'scripts').rglob('*.py'):
         compile(path.read_text(), str(path), 'exec')

@@ -283,63 +283,37 @@ def operator_wifi(directory):
     return '\n'.join([*lines, '}']) + '\n'
 
 
+def role_config(role):
+    if role not in ('worker', 'controlplane'):
+        raise ValueError('Use the worker or controlplane Kairos profile')
+    return yaml.safe_load((ROOT / 'kairos' / (role + '.yaml')).read_text())
+
+
 def machine_config(key, public_key, *, name=None, role=None, cluster_endpoint=None, token=None, agent_token=None, wifi=None):
-    """Native Kairos config; live media has neither an install target nor K3s authority."""
-    files = [config_file('/etc/guaranine/tailscale-key', key + '\n')]
-    config = {'hostname': name or 'guaranine-live-{{ trunc 8 .MachineID }}',
-              'users': [{'name': 'root', 'groups': ['admin'], 'lock_passwd': True, 'ssh_authorized_keys': [public_key.strip()]}],
-              'install': {'auto': False}}
-    services = ['guaranine-tailscale.service']
-    if wifi:
-        files.append(config_file('/etc/guaranine/wifi.conf', wifi))
+    """Add private inputs to a native role profile; the shared OS config stays in the image."""
+    config = role_config(role) if role else {'stages': {'initramfs': [], 'boot': []}}
+    name = name or config.get('hostname')
     if name:
         check_name(name)
+        config['hostname'] = name
+    config['ssh_authorized_keys'] = [public_key.strip()]
+    files = [config_file('/etc/guaranine/tailscale-key', key + '\n')]
+    if wifi:
+        files.append(config_file('/etc/guaranine/wifi.conf', wifi))
     if role:
-        if role not in ('worker', 'controlplane') or not name or not token:
+        if not name or not token:
             raise ValueError('A named worker or control plane needs its own K3s token')
-        k3s = {'node-name': name, 'flannel-iface': 'tailscale0', 'token-file': '/etc/rancher/k3s/token',
-               'resolv-conf': '/run/systemd/resolve/resolv.conf'}
         files.append(config_file('/etc/rancher/k3s/token', token.strip() + '\n'))
-        mount, command = '', 'agent'
         if role == 'worker':
-            k3s['server'] = endpoint(cluster_endpoint)
+            files.append(config_file('/etc/rancher/k3s/config.yaml.d/90-join.yaml',
+                                     yaml.safe_dump({'server': endpoint(cluster_endpoint)})))
         else:
             if not agent_token or agent_token.strip() == token.strip():
                 raise ValueError('The control plane needs a separate agent token')
-            command = 'server'
-            k3s.update({'agent-token': agent_token.strip(), 'flannel-backend': 'vxlan',
-                        'secrets-encryption': True, 'write-kubeconfig-mode': '0600',
-                        'disable': ['traefik', 'servicelb', 'local-storage', 'metrics-server', 'gateway-api-crd'],
-                        'node-taint': ['node-role.kubernetes.io/control-plane=true:NoSchedule'],
-                        'kube-apiserver-arg': ['admission-control-config-file=/etc/rancher/k3s/admission.yaml']})
-            admission = {'apiVersion': 'apiserver.config.k8s.io/v1', 'kind': 'AdmissionConfiguration', 'plugins': [{
-                'name': 'PodSecurity', 'configuration': {'apiVersion': 'pod-security.admission.config.k8s.io/v1',
-                    'kind': 'PodSecurityConfiguration', 'defaults': {'enforce': 'restricted', 'enforce-version': 'latest',
-                    'audit': 'restricted', 'audit-version': 'latest', 'warn': 'restricted', 'warn-version': 'latest'},
-                    'exemptions': {'usernames': [], 'runtimeClasses': [], 'namespaces': ['kube-system']}}}]}
-            files.append(config_file('/etc/rancher/k3s/admission.yaml', yaml.safe_dump(admission)))
-            files.append(config_file('/etc/systemd/system/var-lib-rancher-k3s.mount', '[Unit]\n'
-                'Description=Retained K3s data\nJobTimeoutSec=30\n[Mount]\n'
-                'What=/dev/disk/by-label/GUARANINE_DATA\nWhere=/var/lib/rancher/k3s\nType=ext4\nOptions=defaults\n', 0o644))
-            mount = 'BindsTo=var-lib-rancher-k3s.mount\nAfter=var-lib-rancher-k3s.mount\n'
+            files.append(config_file('/etc/rancher/k3s/agent-token', agent_token.strip() + '\n'))
             files.append(config_file('/etc/rancher/k3s/network-policy.yaml',
                                      (ROOT / 'kubernetes/network-policy.yaml').read_text()))
-        files.append(config_file('/etc/rancher/k3s/config.yaml', yaml.safe_dump(k3s, sort_keys=False)))
-        files.append(config_file('/etc/systemd/system/k3s.service', f'[Unit]\nDescription=K3s {command}\n'
-            f'Requires=tailscaled.service guaranine-firewall.service\nWants=guaranine-tailscale.service\n'
-            f'After=guaranine-tailscale.service guaranine-firewall.service\n{mount}[Service]\n'
-            f'Environment=K3S_ROLE={command}\nType=notify\nDelegate=yes\nKillMode=process\n'
-            'LimitNOFILE=1048576\nTasksMax=infinity\nRestart=always\nRestartSec=5\nTimeoutStartSec=0\n'
-            'ExecStart=/bin/sh /etc/guaranine/k3s-start\n[Install]\nWantedBy=multi-user.target\n', 0o644))
-        services.append('k3s.service')
-    config['stages'] = {
-        'initramfs': [{'name': 'Configure Guaranine identity and services', 'files': files,
-                       'commands': ['sync -f /etc/ssh', 'systemctl enable ' + ' '.join(services)]}],
-        'boot': [{'name': 'Start Guaranine services', 'commands': [
-            'systemctl daemon-reload', 'systemctl start --no-block ' + ' '.join(services),
-            'ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub > /dev/console',
-            'if test -c /dev/ttyS0; then ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub > /dev/ttyS0; fi']}],
-    }
+    config['stages']['initramfs'].append({'name': 'Configure Guaranine private inputs', 'files': files})
     return config
 
 
@@ -380,7 +354,7 @@ cat > /work/config.yaml
 if [ "$1" = iso ]; then
   auroraboot build-iso --arch amd64 --cloud-config /work/config.yaml --output /work/images --override-name guaranine-kairos "$2" > /work/build.log 2>&1 || { cat /work/build.log >&2; exit 1; }
 else
-  auroraboot --cloud-config /work/config.yaml --set "container_image=$2" --set disable_http_server=true --set disable_netboot=true --set disable_iso=true --set disk.vhd=true --set disk.boot_active=true --set disk.size=8192 --set state_dir=/work/images > /work/build.log 2>&1 || { cat /work/build.log >&2; exit 1; }
+  auroraboot --cloud-config /work/config.yaml --set "container_image=$2" --set state_dir=/work/images /auroraboot.yaml > /work/build.log 2>&1 || { cat /work/build.log >&2; exit 1; }
 fi
 cd /work/images
 if [ "$1" = iso ]; then set -- ./*.iso; else set -- ./*.vhd; fi
@@ -396,6 +370,7 @@ tar --sparse --hole-detection=raw -cf - "$1"
             result = subprocess.run(['sudo', '--', 'docker', 'run', '--rm', '--privileged', '--name', container,
                 '--platform', 'linux/amd64', '-i', '--mount', f'type=bind,source={scratch},target=/work', '--mount',
                 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock',
+                '--mount', f'type=bind,source={ROOT / "kairos/auroraboot.yaml"},target=/auroraboot.yaml,readonly',
                 '--entrypoint', '/bin/bash', PINS['auroraboot'], '-ec', script, 'guaranine-builder',
                 image_format, 'oci:' + source, str(os.getuid()), str(os.getgid())], input=cloud_yaml(config).encode(), stdout=output,
                 stderr=errors, timeout=1800)
@@ -456,7 +431,7 @@ def prepare_iso(_args):
 def prepare_controlplane(_args):
     directory = operator_directory()
     settings = operator_settings()
-    node = directory / 'nodes/guaranine-controlplane'
+    node = directory / 'nodes' / role_config('controlplane')['hostname']
     key, config_path = node / 'tailscale-key.json', node / 'config.yaml'
     image = node / 'image/guaranine-kairos.vhd'
     if image.exists() and not (image.parent / 'build-output.tar').exists():
@@ -472,7 +447,7 @@ def prepare_controlplane(_args):
         if (node / 'image').exists():
             raise ValueError('Incomplete control-plane image; inspect protected logs before retrying')
         config = machine_config(record['key'], (directory / 'ssh_key.pub').read_text(),
-            name='guaranine-controlplane', role='controlplane',
+            role='controlplane',
             token=protected(directory / 'server-token').read_text(),
             agent_token=protected(directory / 'agent-token').read_text())
         if not config_path.exists():
@@ -566,15 +541,16 @@ def initialize_data(connection, directory):
 def bootstrap(_args):
     directory = operator_directory()
     settings = operator_settings()
+    name = role_config('controlplane')['hostname']
+    check_name(name)
     if (directory / 'kubeconfig').exists() or (directory / 'controlplane-known-hosts').exists():
         raise ValueError('Control-plane operator outputs already exist; inspect them before repeating bootstrap')
     address = tailnet_ip(input('Control-plane Tailscale IPv4 address: ').strip())
     with verified_connection(address, directory) as (connection, hosts):
         initialize_data(connection, directory)
-        private_command([*connection, 'systemctl start var-lib-rancher-k3s.mount && '
-            'mountpoint -q /var/lib/rancher/k3s && systemctl start --no-block k3s'], directory)
+        private_command([*connection, 'systemctl start --no-block k3s.service'], directory)
         raw = private_command([*connection, 'timeout 180 sh -ec \'until k3s kubectl wait --for=condition=Ready '
-            'node/guaranine-controlplane --timeout=10s >/dev/null 2>&1; '
+            f'node/{name} --timeout=10s >/dev/null 2>&1; '
             'do sleep 2; done; cat /etc/rancher/k3s/k3s.yaml\''], directory)
         kubeconfig = yaml.safe_load(raw)
         cluster_endpoint = 'https://' + address + ':6443'
@@ -639,8 +615,7 @@ def install_worker(_args):
         private_write(node / 'config.yaml', cloud_yaml(config))
         auth_record(key, reusable=True)
         # No custom node API. Native Kairos installs from the read-only live root.
-        command = 'umask 077; cat > /run/guaranine-install.yaml && kairos-agent manual-install --device '
-        command += shlex.quote(disk) + ' /run/guaranine-install.yaml && systemd-run --on-active=5s systemctl poweroff'
+        command = 'kairos-agent --strict-validation manual-install --device ' + shlex.quote(disk) + ' /dev/stdin'
         private_command([*connection, command], node, data=cloud_yaml(config), timeout=1800)
     print(f'Installation command completed for {name}. Remove the USB after power-off, then boot the laptop.')
     print(f'Its Tailscale address may change. Verify kubectl get node {name} reports Ready.')
