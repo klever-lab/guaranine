@@ -142,7 +142,9 @@ After installation powers off, remove the USB and boot the laptop. Its persisten
 
 Tailscale uses kernel networking, persistent identity, no accepted subnet routes and no host DNS changes. K3s binds node addresses and Flannel to `tailscale0`; Flannel derives its MTU from that interface. Administration, API, kubelet and cross-node pod traffic use the tailnet. Test direct/relayed paths, reconnects and temporary outages on the real network.
 
-The host firewall blocks physical administration and direct private-LAN/VNet traffic, with required DHCP/DNS and IPv6 control exceptions. Its forwarding rule also blocks pod traffic to private physical networks. Workloads use the standard restricted Pod Security policy: no privileged pods or host namespaces, no privilege escalation, and dropped capabilities. `kube-system` is reserved for trusted system components.
+Wi-Fi client isolation is useful but never assumed. The host firewall blocks direct LAN traffic from hosts and pods, including attached subnets that use public addresses. The existing network service updates those subnets as addresses change; ordinary physical egress stays blocked until it registers the interface. Exceptions permit network-service DHCP, system-resolver DNS, required IPv6 link control and encrypted Tailscale transport. Unsolicited physical traffic cannot reach host services or pods; internet replies remain allowed.
+
+Workloads use the standard restricted Pod Security policy: no privileged pods or host namespaces, no privilege escalation, and dropped capabilities. `kube-system` is reserved for trusted system components.
 
 [kubernetes/network-policy.yaml](kubernetes/network-policy.yaml) isolates the default application namespace and permits cluster DNS. Add explicit ingress/egress rules alongside applications. New application namespaces need their own policies. Allowed destinations remain reachable by compromised applications; firewall rules and removing utilities cannot guarantee safety after host-root or kernel compromise.
 

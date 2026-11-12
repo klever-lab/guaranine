@@ -24,7 +24,11 @@ def fixture(role=None):
     checks = [
         'test -f /etc/guaranine/tailscale-key',
         f'grep -Fq "{PUBLIC_KEY}" /root/.ssh/authorized_keys',
-        'timeout 120 sh -ec \'until systemctl is-active --quiet sshd guaranine-firewall tailscaled; do sleep 1; done\'',
+        'timeout 120 sh -ec \'until systemctl is-active --quiet sshd guaranine-firewall tailscaled '
+        'systemd-networkd systemd-resolved; do sleep 1; done\'',
+        'timeout 60 sh -ec \'until /usr/lib/guaranine-network/ld-musl-x86_64.so.1 '
+        '--library-path /usr/lib/guaranine-network /usr/lib/guaranine-network/nft '
+        'get element inet guaranine lan4 "{ 10.0.2.0/24 }"; do sleep 1; done\'',
     ]
     if role == 'controlplane':
         checks += ['! mountpoint -q /var/lib/rancher/k3s', '! systemctl is-active --quiet k3s']

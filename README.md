@@ -23,6 +23,8 @@ Use Python 3.12+ and run the same checks as CI:
 env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bash scripts/validate.sh
 ```
 
+Packet checks also need `iproute2`, `nftables`, `iputils-ping` and user namespaces: `uv run --no-project --with-requirements requirements.txt python scripts/test-firewall.py`.
+
 The private-image workflow builds and boots disposable fixtures without publishing images or using real credentials. Laptop hardware and live WAN operation require separate verification.
 
 ## Original design question

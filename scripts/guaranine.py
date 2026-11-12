@@ -351,6 +351,8 @@ mkdir -p /work/images
 mkdir -p /work/tmp
 export TMPDIR=/work/tmp
 cat > /work/config.yaml
+# Private inputs are protected; OS directories need their standard permissions.
+umask 022
 if [ "$1" = iso ]; then
   auroraboot build-iso --arch amd64 --cloud-config /work/config.yaml --output /work/images --override-name guaranine-kairos "$2" > /work/build.log 2>&1 || { cat /work/build.log >&2; exit 1; }
 else

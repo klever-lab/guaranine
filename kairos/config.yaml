@@ -38,48 +38,72 @@ stages:
                 type ipv4_addr; flags interval;
                 elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 }
               }
+              # systemd-networkd maintains these as DHCP/IPv6 addresses change.
+              set lan4 { type ipv4_addr; flags interval; }
+              set lan6 { type ipv6_addr; flags interval; }
+              set connected_interfaces { type iface_index; }
+              chain deny_lan {
+                ip daddr @local_networks reject
+                ip daddr @lan4 reject
+                ip6 daddr { fc00::/7, fe80::/10, fec0::/10, ff00::/8 } reject
+                ip6 daddr @lan6 reject
+              }
               chain input {
                 type filter hook input priority 0; policy drop;
                 iifname "lo" accept
                 ct state established,related accept
-                ip protocol icmp accept
-                meta l4proto ipv6-icmp accept
                 udp sport 67 udp dport 68 accept
                 udp sport 547 udp dport 546 accept
+                ip6 hoplimit 255 icmpv6 type { nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+                ip6 hoplimit 1 ip6 saddr fe80::/10 icmpv6 type mld-listener-query accept
                 udp dport 41641 accept
                 iifname "tailscale0" tcp dport { 22, 6443, 10250 } accept
                 iifname "tailscale0" udp dport 8472 accept
                 iifname { "cni0", "flannel.1" } ip saddr 10.42.0.0/16 tcp dport 6443 accept
               }
               chain output {
-                type filter hook output priority -10; policy accept;
+                type filter hook output priority -10; policy drop;
                 oifname { "lo", "tailscale0", "cni0", "flannel.1" } accept
                 meta mark & 0xff0000 == 0x80000 accept
-                udp sport 68 udp dport 67 accept
-                udp sport 546 udp dport 547 accept
-                meta l4proto ipv6-icmp accept
-                udp dport 53 accept
-                tcp dport 53 accept
-                ip daddr @local_networks reject
-                ip6 daddr { fc00::/7, fe80::/10, fec0::/10, ff00::/8 } reject
+                meta skuid "systemd-network" udp sport 68 udp dport 67 accept
+                meta skuid "systemd-network" udp sport 546 udp dport 547 accept
+                ip6 hoplimit 255 icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept
+                ip6 hoplimit 1 icmpv6 type { mld-listener-report, mld-listener-done, mld2-listener-report } accept
+                meta skuid "systemd-resolve" meta l4proto { tcp, udp } th dport 53 accept
+                jump deny_lan
+                meta oif @connected_interfaces accept
               }
               chain forward {
-                type filter hook forward priority -10; policy accept;
+                type filter hook forward priority -10; policy drop;
+                iifname != { "tailscale0", "cni0", "flannel.1" } ct state != { established, related } drop
                 oifname { "tailscale0", "cni0", "flannel.1" } accept
-                ip daddr @local_networks reject
-                ip6 daddr { fc00::/7, fe80::/10, fec0::/10, ff00::/8 } reject
+                jump deny_lan
+                meta oif @connected_interfaces accept
               }
             }
-        - path: /etc/systemd/network/20-wifi.network
+        - path: /etc/systemd/network/10-guaranine.network
           permissions: 0644
           content: |
             [Match]
-            Name=wl*
+            Name=en* eth* wl*
             [Network]
-            DHCP=ipv4
-            IPv6AcceptRA=no
+            DHCP=yes
+            LLMNR=no
+            MulticastDNS=no
             [DHCPv4]
             ClientIdentifier=mac
+            NFTSet=prefix:inet:guaranine:lan4 ifindex:inet:guaranine:connected_interfaces
+            [DHCPv6]
+            NFTSet=prefix:inet:guaranine:lan6 ifindex:inet:guaranine:connected_interfaces
+            [IPv6AcceptRA]
+            UseRedirect=no
+            NFTSet=prefix:inet:guaranine:lan6 ifindex:inet:guaranine:connected_interfaces
+        - path: /etc/systemd/system/systemd-networkd.service.d/guaranine.conf
+          permissions: 0644
+          content: |
+            [Unit]
+            Requires=guaranine-firewall.service
+            After=guaranine-firewall.service
         - path: /etc/systemd/system/wpa_supplicant@.service
           permissions: 0644
           content: |
@@ -208,6 +232,8 @@ stages:
               echo 'SSH host fingerprint (compare on the operator computer):'
               ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
             fi
+      commands:
+        - ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
       systemctl:
         enable:
           - systemd-networkd.service
