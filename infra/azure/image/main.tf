@@ -73,7 +73,7 @@ variable "image_ready" {
   description = "Explicitly set true only after VHD upload completes and its write SAS is revoked."
 }
 
-# Private Kairos VHD upload staging and image publication; no VM/server is created.
+# Private Kairos VHD upload; the controller root copies the finalized disk.
 resource "azurerm_resource_group" "image" {
   name     = "${var.image_name}-${substr(var.vhd_sha256, 0, 12)}-rg"
   location = var.location
@@ -99,28 +99,10 @@ resource "azurerm_managed_disk" "upload" {
   }
 }
 
-# image_ready is set only after an operator uploads the VHD and revokes its
-# short-lived write SAS. Neither the SAS nor VHD contents enter Terraform.
-resource "azurerm_image" "kairos" {
-  count               = var.image_ready ? 1 : 0
-  name                = "${var.image_name}-${substr(var.vhd_sha256, 0, 12)}"
-  resource_group_name = azurerm_resource_group.image.name
-  location            = azurerm_resource_group.image.location
-  hyper_v_generation  = "V2"
-  os_disk {
-    os_type         = "Linux"
-    os_state        = "Generalized"
-    managed_disk_id = azurerm_managed_disk.upload.id
-    caching         = "ReadWrite"
-    storage_type    = "StandardSSD_LRS"
-  }
-  tags = { project = "guaranine", managed_by = "terraform", vhd_sha256 = var.vhd_sha256 }
-}
-
 output "upload_disk_id" {
   value = azurerm_managed_disk.upload.id
 }
 
-output "image_id" {
-  value = var.image_ready ? azurerm_image.kairos[0].id : null
+output "source_disk_id" {
+  value = var.image_ready ? azurerm_managed_disk.upload.id : null
 }

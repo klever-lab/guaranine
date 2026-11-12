@@ -53,7 +53,7 @@ This builds the shared public base before issuing a single-use Tailscale registr
 
 Check the fixed VHD with `qemu-img info -f vpc`, and record its exact byte length and SHA-256. Build scratch space must accommodate uncompressed disk images. The prepared Gen2 disk boots without Secure Boot/vTPM, Azure guest provisioning or a VM agent. Native Kairos upgrades own the installed OS.
 
-The [image root](infra/azure/image/main.tf) owns an artifact-specific upload group/disk and private managed image. The [coordinator root](infra/azure/coordinator/main.tf) owns the VM, isolated network, boot disk and protected data disk. Both have one `main.tf` and pinned provider locks. Use native local state on protected operator storage, one operator at a time, with off-machine backups after every apply.
+The [image root](infra/azure/image/main.tf) owns an artifact-specific upload group and private source disk. The [coordinator root](infra/azure/coordinator/main.tf) owns the VM, isolated network, boot disk and protected data disk. Both have one `main.tf` and pinned provider locks. Use native local state on protected operator storage, one operator at a time, with off-machine backups after every apply.
 
 Copy each root's `terraform.tfvars.example` outside the checkout and fill in real values. For image upload, use `image_ready = false`, the VHD size/hash and a unique `guaranine-kairos-...` name. New image contents require their own state file.
 
@@ -70,7 +70,7 @@ terraform -chdir=infra/azure/image apply "$GUARANINE_OPERATOR_DIR/image.tfplan"
 
 Review the saved plan before applying. This first apply creates only upload staging. Obtain `upload_disk_id` and follow the [Azure direct-upload procedure](https://learn.microsoft.com/azure/virtual-machines/linux/disks-upload-vhd-to-managed-disk-cli): grant a short-lived write SAS, upload the exact VHD with AzCopy, then revoke disk access in an `EXIT` trap, including on failure. Keep shell tracing off and AzCopy logs/job plans private. SAS values and image contents never enter Terraform state.
 
-Set `image_ready = true` and repeat plan/show/apply to close export access and create the image. Put the `image_id` output into `coordinator.tfvars`; use `name_prefix = "guaranine-kairos"` for the migration.
+Set `image_ready = true` and repeat plan/show/apply to close export access. Put the `source_disk_id` output into `coordinator.tfvars`; use `name_prefix = "guaranine-kairos"` for the migration.
 
 ```bash
 export TF_DATA_DIR="$GUARANINE_OPERATOR_DIR/terraform/coordinator-cache"
@@ -83,7 +83,7 @@ terraform -chdir=infra/azure/coordinator apply "$GUARANINE_OPERATOR_DIR/coordina
 terraform -chdir=infra/azure/coordinator plan -var-file="$GUARANINE_OPERATOR_DIR/coordinator.tfvars" -detailed-exitcode
 ```
 
-Require a no-change rerun. The NSG denies physical inbound access and direct VNet egress; its public IP provides explicit internet egress for Tailscale/DERP and downloads. VM replacement retains both disks. The `handoff` output records IDs and the data-disk LUN. Changing the image input does not reinstall an existing boot disk.
+Require a no-change rerun. The NSG denies physical inbound access and direct VNet egress; its public IP provides explicit internet egress for Tailscale/DERP and downloads. VM replacement retains both disks. The `handoff` output records IDs and the data-disk LUN. The controller boot disk is copied once from the private source disk; changing the source does not reinstall it.
 
 ## Bootstrap the controller
 

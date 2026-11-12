@@ -4,7 +4,7 @@ mock_provider "azurerm" {
 
 variables {
   subscription_id = "00000000-0000-0000-0000-000000000000"
-  image_id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/kairos-v4-4-0-fixture"
+  source_disk_id  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/disks/kairos-v4-4-0-fixture"
 }
 
 # Mocked apply seeds Terraform's in-memory state without Azure calls.

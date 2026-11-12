@@ -65,16 +65,13 @@ variable "vm_size" {
   }
 }
 
-variable "image_id" {
-  description = "Exact private Kairos Azure managed-image or gallery-version ID. Machine configuration is embedded locally in its VHD, never Terraform custom_data."
+variable "source_disk_id" {
+  description = "Finalized private Kairos upload disk to copy once. Machine configuration is embedded locally in its VHD, never Terraform custom_data."
   type        = string
 
   validation {
-    condition = (
-      can(regex("^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[^/]+/providers/Microsoft.Compute/(images/[^/]+|galleries/[^/]+/images/[^/]+/versions/[0-9]+\\.[0-9]+\\.[0-9]+)$", var.image_id)) &&
-      !can(regex("(?i)(^|/)latest($|/)", var.image_id))
-    )
-    error_message = "Supply a private managed-image ID or explicit gallery image version, never a marketplace image, URL, or latest alias."
+    condition     = can(regex("^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[^/]+/providers/Microsoft.Compute/disks/[^/]+$", var.source_disk_id))
+    error_message = "Supply the finalized private upload disk's ARM ID."
   }
 }
 
@@ -213,8 +210,8 @@ resource "azurerm_managed_disk" "coordinator_os" {
   resource_group_name           = azurerm_resource_group.coordinator.name
   location                      = azurerm_resource_group.coordinator.location
   storage_account_type          = "StandardSSD_LRS"
-  create_option                 = "FromImage"
-  image_reference_id            = var.image_id
+  create_option                 = "Copy"
+  source_resource_id            = var.source_disk_id
   os_type                       = "Linux"
   hyper_v_generation            = "V2"
   disk_size_gb                  = var.os_disk_size_gib
@@ -223,9 +220,8 @@ resource "azurerm_managed_disk" "coordinator_os" {
   tags                          = local.tags
 
   lifecycle {
-    # Creation metadata is not an OS upgrade mechanism. This also permits
-    # adoption of Azure-created boot disks whose origin is an image snapshot.
-    ignore_changes = [create_option, image_reference_id, source_resource_id]
+    # Kairos upgrades the installed OS; changing the seed must not reinstall it.
+    ignore_changes = [source_resource_id]
   }
 }
 
@@ -284,7 +280,7 @@ output "handoff" {
     resource_group  = azurerm_resource_group.coordinator.name
     vm_name         = azurerm_linux_virtual_machine.coordinator.name
     vm_id           = azurerm_linux_virtual_machine.coordinator.id
-    image_id        = var.image_id
+    source_disk_id  = var.source_disk_id
     os_disk_id      = azurerm_managed_disk.coordinator_os.id
     data_disk_id    = azurerm_managed_disk.coordinator_data.id
     data_disk_lun   = azurerm_virtual_machine_data_disk_attachment.coordinator_data.lun

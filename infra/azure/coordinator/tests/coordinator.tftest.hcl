@@ -6,7 +6,7 @@ mock_provider "azurerm" {
 
 variables {
   subscription_id = "00000000-0000-0000-0000-000000000000"
-  image_id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/kairos-v4-4-0-fixture"
+  source_disk_id  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/disks/kairos-v4-4-0-fixture"
 }
 
 run "default_sizing_and_os" {
@@ -16,8 +16,8 @@ run "default_sizing_and_os" {
     condition = (
       azurerm_linux_virtual_machine.coordinator.size == "Standard_B2ls_v2" &&
       azurerm_managed_disk.coordinator_os.storage_account_type == "StandardSSD_LRS" &&
-      azurerm_managed_disk.coordinator_os.create_option == "FromImage" &&
-      azurerm_managed_disk.coordinator_os.image_reference_id == var.image_id &&
+      azurerm_managed_disk.coordinator_os.create_option == "Copy" &&
+      azurerm_managed_disk.coordinator_os.source_resource_id == var.source_disk_id &&
       azurerm_managed_disk.coordinator_os.disk_size_gb == 32 &&
       azurerm_managed_disk.coordinator_os.network_access_policy == "DenyAll" &&
       !azurerm_managed_disk.coordinator_os.public_network_access_enabled &&
@@ -104,8 +104,8 @@ run "explicit_configuration" {
     os_disk_size_gib   = 64
     data_disk_size_gib = 128
 
-    image_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/images/kairos-v4-4-0-fixture-alternate"
-    tags     = { cost_center = "students", project = "wrong", managed_by = "wrong" }
+    source_disk_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/disks/kairos-v4-4-0-fixture-alternate"
+    tags           = { cost_center = "students", project = "wrong", managed_by = "wrong" }
   }
 
   assert {
@@ -113,7 +113,7 @@ run "explicit_configuration" {
       azurerm_linux_virtual_machine.coordinator.location == "westeurope" &&
       azurerm_linux_virtual_machine.coordinator.size == "Standard_B4ls_v2" &&
       azurerm_managed_disk.coordinator_data.disk_size_gb == 128 &&
-      azurerm_managed_disk.coordinator_os.image_reference_id == var.image_id &&
+      azurerm_managed_disk.coordinator_os.source_resource_id == var.source_disk_id &&
       azurerm_managed_disk.coordinator_os.disk_size_gb == 64 &&
       output.handoff.transport == "tailscale" &&
       azurerm_resource_group.coordinator.tags.project == "guaranine" &&
@@ -124,12 +124,12 @@ run "explicit_configuration" {
   }
 }
 
-run "reject_latest_image" {
+run "reject_non_disk_source" {
   command = plan
   variables {
-    image_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/galleries/kairos/images/node/versions/latest"
+    source_disk_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/guaranine-images-rg/providers/Microsoft.Compute/galleries/kairos/images/node/versions/latest"
   }
-  expect_failures = [var.image_id]
+  expect_failures = [var.source_disk_id]
 }
 
 run "reject_small_os_disk" {

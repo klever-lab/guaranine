@@ -21,23 +21,22 @@ run "prepare_upload" {
       azurerm_managed_disk.upload.create_option == "Upload" &&
       azurerm_managed_disk.upload.upload_size_bytes == var.vhd_size_bytes &&
       azurerm_managed_disk.upload.hyper_v_generation == "V2" &&
-      length(azurerm_image.kairos) == 0 && output.image_id == null
+      output.source_disk_id == null
     )
-    error_message = "Prepare a Gen2 upload disk without publishing an incomplete image."
+    error_message = "Prepare a Gen2 upload disk without handing off an incomplete upload."
   }
 }
 
-run "publish_after_upload" {
+run "finalize_after_upload" {
   command = plan
   variables { image_ready = true }
   assert {
     condition = (
-      length(azurerm_image.kairos) == 1 &&
-      azurerm_image.kairos[0].os_disk[0].managed_disk_id == azurerm_managed_disk.upload.id &&
+      output.source_disk_id == azurerm_managed_disk.upload.id &&
       azurerm_managed_disk.upload.network_access_policy == "DenyAll" &&
       !azurerm_managed_disk.upload.public_network_access_enabled
     )
-    error_message = "Publish only from the uploaded disk and close its export surface."
+    error_message = "Hand off the finalized upload disk and close its export surface."
   }
 }
 
