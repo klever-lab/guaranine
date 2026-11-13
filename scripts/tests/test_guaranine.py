@@ -393,6 +393,32 @@ class InstallationTests(unittest.TestCase):
             prompt.assert_not_called()
             self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
 
+    def test_boot_preflight_shell_checks_tools_and_firmware_without_writing(self):
+        with patch.object(cli, 'private_command', return_value='uefi') as call:
+            cli.check_worker_boot(['ssh'], self.root)
+        # Execute the actual remote shell; functions replace firmware/tools only.
+        fixture = '''test() {
+  case "$*" in
+    '! -d /sys/firmware/efi') [ "$BOOT_FIXTURE" = bios ] ;;
+    '-w /sys/firmware/efi/efivars') [ "$BOOT_FIXTURE" != unwritable ] ;;
+    *) command test "$@" ;;
+  esac
+}
+findmnt() {
+  if [ "$BOOT_FIXTURE" = readonly ]; then printf ro; else printf rw,nosuid; fi
+}
+efibootmgr() {
+  [ "$BOOT_FIXTURE" != outdated ] || return 1
+  [ "${1-}" = --version ] || [ "$BOOT_FIXTURE" != unreadable ]
+}
+'''
+        for mode, expected in [('bios', 'bios'), ('uefi', 'uefi'), ('outdated', 'outdated'),
+                               ('readonly', 'unavailable'), ('unwritable', 'unavailable'), ('unreadable', 'unavailable')]:
+            with self.subTest(mode=mode):
+                result = subprocess.run(['sh', '-c', fixture + call.call_args.args[0][-1]],
+                    check=True, capture_output=True, text=True, env={**os.environ, 'BOOT_FIXTURE': mode})
+                self.assertEqual(result.stdout, expected)
+
     def test_native_label_collisions_on_other_disks_stop_installation(self):
         labels = [('label', value) for value in ('COS_GRUB', 'COS_OEM', 'COS_STATE', 'COS_RECOVERY', 'COS_PERSISTENT')]
         labels += [('partlabel', value) for value in ('efi', 'oem', 'state', 'recovery', 'persistent')]

@@ -52,10 +52,10 @@ part=$(lsblk --noheadings --raw --output PARTN "$esp")
 uuid=$(lsblk --noheadings --raw --output PARTUUID "$esp")
 test -n "$part" && test -n "$uuid"
 printf '%s\n' "$entry" | grep -Fi "HD($part,GPT,$uuid,"
-printf '%s\n' "$entry" | grep -Fi 'File(\EFI\boot\bootx64.efi)'
-printf '%s\n' "$entries" | grep -F 'Boot8000* ubuntu' | grep -F 'File(\EFI\ubuntu\shimx64.efi)'
-printf '%s\n' "$entries" | grep -F 'Boot8001* Linux Boot Manager' | grep -F 'File(\EFI\systemd\systemd-bootx64.efi)'
-printf '%s\n' "$entries" | grep -F 'Boot8002* Windows Boot Manager' | grep -F 'File(\EFI\Microsoft\Boot\bootmgfw.efi)'
+printf '%s\n' "$entry" | grep -Fi '/\EFI\boot\bootx64.efi'
+printf '%s\n' "$entries" | grep -F 'Boot8000* ubuntu' | grep -F '\EFI\ubuntu\shimx64.efi'
+printf '%s\n' "$entries" | grep -F 'Boot8001* Linux Boot Manager' | grep -F '\EFI\systemd\systemd-bootx64.efi'
+printf '%s\n' "$entries" | grep -F 'Boot8002* Windows Boot Manager' | grep -F '\EFI\Microsoft\Boot\bootmgfw.efi'
 if printf '%s\n' "$entries" | grep -q '^BootNext:'; then exit 1; fi
 if test "$1" = boot; then
   current=$(printf '%s\n' "$entries" | awk '/^BootCurrent:/ {print $2}')

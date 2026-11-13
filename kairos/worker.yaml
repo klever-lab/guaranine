@@ -40,7 +40,7 @@ stages:
             test -n "$first"
             entry=$(printf '%s\n' "$state" | grep -i "^Boot${first}\\* Kairos[[:space:]]" | tr '[:upper:]' '[:lower:]')
             printf '%s\n' "$entry" | grep -Fq "hd($number,gpt,$uuid,"
-            printf '%s\n' "$entry" | grep -Fq 'file(\efi\boot\bootx64.efi)'
+            test "${entry##*/}" = '\efi\boot\bootx64.efi'
             ! printf '%s\n' "$state" | grep -q '^BootNext:'
       commands:
         - sh /run/guaranine-register-boot
