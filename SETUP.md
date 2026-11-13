@@ -2,6 +2,8 @@
 
 Run these commands from the repository root on your Linux operator computer. See the [documentation index](docs/README.md) for background and ongoing operations.
 
+Use the arrow keys and Enter in selection menus. Cancel or Skip is selected initially.
+
 ## Prerequisites
 
 Install Git, Python 3.12+, `uv`, Docker, `sudo`, OpenSSH client tools, Tailscale and `nmcli`. Building images needs privileged Docker access and space for uncompressed disk images. USB flashing uses sudo. Azure needs the Terraform version in [.terraform-version](.terraform-version), Azure CLI, AzCopy and `qemu-img`. Use a `kubectl` version matching K3s in [kairos/versions.json](kairos/versions.json).
@@ -116,7 +118,7 @@ Open, WPA personal and WPA3 personal networks are supported. Enterprise, missing
 
 The CLI prints the ISO path and enrollment deadline in local time. Enroll before that deadline and follow the [media handling limits](docs/security.md#private-material-and-enrollment). To change networks or reuse a batch, follow [image batches and retries](docs/operations.md#image-batches-and-retries).
 
-Choose a USB by number, checking its path, model, size, serial and label. Press Enter to skip. Type `ERASE` to confirm. The CLI rechecks and unmounts the drive, writes with progress, then flushes it. Do not remove the USB until `Flashed` appears. System mounts, active encrypted/LVM volumes and the ISO's own disk are excluded. Redirected runs do not offer flashing.
+Choose a USB, checking its path, model, size, serial and label, or select **Skip flashing** to keep the ISO without writing a USB. Type `ERASE` to confirm. The CLI rechecks and unmounts the drive, writes with progress, then flushes it. Do not remove the USB until `Flashed` appears. System mounts, active encrypted/LVM volumes and the ISO's own disk are excluded. Redirected runs do not offer flashing.
 
 ## Install a worker
 
@@ -126,9 +128,9 @@ Boot the USB. Wi-Fi connects automatically; the laptop stays live until you inst
 ./guaranine worker
 ```
 
-The command finds the laptop. If several are online, choose its number. Compare the displayed SSH fingerprint with the one on the laptop screen and enter `yes` if they match. Remote commands use that pinned host key and the operator's SSH key.
+Choose **Add worker**. The command finds the laptop. If several are online, select the laptop to install. Compare the displayed SSH fingerprint with the one on the laptop screen and enter `yes` if they match. Remote commands use that pinned host key and the operator's SSH key.
 
-Press Enter to accept the suggested name, or type your own. Choose a disk by number, checking its model, size and serial. It must be unmounted, writable and at least 16 GiB; there is no default. Type `ERASE` to erase that disk and install. Cancelling before confirmation sends no installation configuration.
+Press Enter to accept the suggested name, or type your own. Select an installation disk, checking its model, size and serial. It must be unmounted, writable and at least 16 GiB. Type `ERASE` to erase that disk and install. Cancelling before confirmation sends no installation configuration.
 
 The CLI rechecks the disk and batch expiry, then sends the configuration to `kairos-agent --strict-validation manual-install`. The name, join credentials and Wi-Fi settings are saved privately under `nodes/NAME/`.
 

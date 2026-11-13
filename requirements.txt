@@ -1,2 +1,3 @@
-# Runtime dependency for native Kairos configuration.
+# Runtime dependencies for CLI menus and native Kairos configuration.
 PyYAML==6.0.3
+questionary==2.1.1

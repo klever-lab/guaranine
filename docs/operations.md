@@ -2,6 +2,8 @@
 
 Use the existing operator files created in [SETUP.md](../SETUP.md#operator-files); set `GUARANINE_OPERATOR_DIR` to that directory in a new shell. Do not rerun initialization over an existing deployment.
 
+Run `./guaranine` or `./guaranine --help` for command help.
+
 ## Check the cluster
 
 ```bash
@@ -28,9 +30,11 @@ Incomplete builds preserve outputs and protected logs. Inspect them before revok
 
 For worker retries, follow the [installation boundaries](../SETUP.md#install-a-worker), including the check after an interrupted remote install. [Enrollment limits](security.md#private-material-and-enrollment) explain why ending a batch does not retire its devices.
 
+To free a name reserved by a failed installation, run `./guaranine worker`, choose **Forget worker**, then select the saved worker. The controller is excluded from that list. It checks the controller and refuses any name still registered in Kubernetes, including an offline worker. On success, it archives the private `nodes/NAME/` directory under `backups/` in the operator directory. It needs no valid installer key and does not erase a laptop or remove its Tailscale identity. Check the failed laptop before reusing its name. The name prompt accepts the name again after it is freed in another terminal.
+
 ## Laptop discovery
 
-The worker command reads the operator's local `tailscale status --json` and waits for an online peer with the `guaranine-live-` hostname prefix and `tag:guaranine-worker` tag. It checks every two seconds until a candidate appears; Ctrl+C cancels the wait. A single candidate is selected automatically; several candidates produce a numbered menu. It then waits up to two minutes for SSH startup. The operator must be connected to Tailscale. No LAN discovery or manual IP lookup is needed.
+The worker command reads the operator's local `tailscale status --json` and waits for an online peer with the `guaranine-live-` hostname prefix and `tag:guaranine-worker` tag. It checks every two seconds until a candidate appears; Ctrl+C cancels the wait. A single candidate is selected automatically; several candidates produce a selection menu. It then waits up to two minutes for SSH startup. The operator must be connected to Tailscale. No LAN discovery or manual IP lookup is needed.
 
 These names and tags identify candidates; they do not replace the SSH fingerprint verification or live-media check in the [worker installation procedure](../SETUP.md#install-a-worker).
 

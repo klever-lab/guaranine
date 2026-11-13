@@ -17,6 +17,8 @@ import unittest
 from unittest.mock import patch
 
 import yaml
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -329,8 +331,10 @@ class InstallationTests(unittest.TestCase):
         with (patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
               patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
               patch.object(cli, 'private_command', side_effect=command) as calls,
-              patch('builtins.input', side_effect=['worker-one', '1', 'ERASE']),
+              patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input', side_effect=['worker-one', 'ERASE']),
               contextlib.redirect_stdout(io.StringIO())):
+            select.return_value.unsafe_ask.return_value = disk
             cli.install_worker(None)
         self.assertEqual(len([call for call in calls.call_args_list if 'manual-install' in call.args[0][-1]]), 1)
         self.assertEqual((self.root / 'nodes/worker-one/config.yaml').stat().st_mode & 0o777, 0o600)
@@ -344,9 +348,28 @@ class InstallationTests(unittest.TestCase):
                   patch.object(cli, 'verified_connection', verified),
                   patch.object(cli, 'read_disks', side_effect=disks),
                   patch.object(cli, 'private_command', side_effect=['live', 'uefi', 'Inspiron 5558', '{"items":[]}']) as calls,
-                  patch('builtins.input', side_effect=['worker-one', '1', answer]),
+                  patch.object(cli.questionary, 'select') as select,
+                  patch('builtins.input', side_effect=['worker-one', answer]),
                   contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError)):
+                select.return_value.unsafe_ask.return_value = disk
                 cli.install_worker(None)
+            self.assertFalse((self.root / 'nodes/worker-one').exists())
+            self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
+
+    def test_worker_disk_selection_cancels_before_erase_confirmation_or_installation(self):
+        disk = self.worker_setup()
+        @contextlib.contextmanager
+        def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
+        for answer in (False, None):
+            with (self.subTest(answer=answer), patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
+                  patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
+                  patch.object(cli, 'private_command', side_effect=['live', 'uefi', 'Inspiron 5558', '{"items":[]}']) as calls,
+                  patch.object(cli.questionary, 'select') as select, patch('builtins.input', return_value='worker-one') as prompt,
+                  contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'Installation cancelled')):
+                select.return_value.unsafe_ask.return_value = answer
+                cli.install_worker(None)
+            prompt.assert_called_once()
+            self.assertIn('Laptop name', prompt.call_args.args[0])
             self.assertFalse((self.root / 'nodes/worker-one').exists())
             self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
 
@@ -357,7 +380,7 @@ class InstallationTests(unittest.TestCase):
         blob = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\x11' * 32
         key = '100.64.0.8 ssh-ed25519 ' + base64.b64encode(blob).decode() + '\n'
         prompts, sent = [], []
-        answers = iter(['yes', '', '1', 'ERASE'])
+        answers = iter(['yes', '', 'ERASE'])
         confirmed = False
         def answer(prompt):
             nonlocal confirmed
@@ -394,9 +417,12 @@ class InstallationTests(unittest.TestCase):
         output = io.StringIO()
         with (patch.object(cli, 'private_command', side_effect=command),
               patch.object(cli.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout=key)),
+              patch.object(cli.questionary, 'select') as select,
               patch('builtins.input', side_effect=answer), contextlib.redirect_stdout(output)):
+            select.return_value.unsafe_ask.side_effect = lambda: select.call_args.kwargs['choices'][1].value
             cli.install_worker(None)
-        self.assertEqual(len(prompts), 4)
+        self.assertEqual(len(prompts), 3)
+        self.assertEqual(select.call_count, 1)
         self.assertEqual(len(sent), 1)
         self.assertIn('Found laptop', output.getvalue())
         self.assertIn('inspiron-5558-3 is Ready at 100.64.0.90', output.getvalue())
@@ -411,10 +437,12 @@ class InstallationTests(unittest.TestCase):
             with (self.subTest(status=status), patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
                   patch.object(cli, 'verified_connection', verified),
                   patch.object(cli, 'private_command', side_effect=['live', status]) as calls,
-                  patch.object(cli, 'read_disks') as disks, patch('builtins.input') as prompt,
+                  patch.object(cli, 'read_disks') as disks, patch.object(cli.questionary, 'select') as select,
+                  patch('builtins.input') as prompt,
                   self.assertRaisesRegex(ValueError, message)):
                 cli.install_worker(None)
             disks.assert_not_called()
+            select.assert_not_called()
             prompt.assert_not_called()
             self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
 
@@ -482,7 +510,9 @@ efibootmgr() {
                   patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
                   patch.object(cli, 'private_command', side_effect=command),
                   patch.object(cli, 'wait_for_worker') as wait,
-                  patch('builtins.input', side_effect=[name, '1', 'ERASE']), contextlib.redirect_stdout(output)):
+                  patch.object(cli.questionary, 'select') as select,
+                  patch('builtins.input', side_effect=[name, 'ERASE']), contextlib.redirect_stdout(output)):
+                select.return_value.unsafe_ask.return_value = disk
                 if code == 1:
                     with self.assertRaisesRegex(ValueError, 'Installation failed.*Keep the USB connected'):
                         cli.install_worker(None)
@@ -503,8 +533,10 @@ efibootmgr() {
               patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
               patch.object(cli, 'private_command', side_effect=[
                   'live', 'uefi', 'Inspiron 5558', '{"items":[]}', json.dumps(inventory)]) as calls,
-              patch('builtins.input', side_effect=['worker-one', '1', 'ERASE']),
+              patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input', side_effect=['worker-one', 'ERASE']),
               contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, '/dev/vdc1.*Nothing was erased')):
+            select.return_value.unsafe_ask.return_value = disk
             cli.install_worker(None)
         self.assertFalse((self.root / 'nodes/worker-one').exists())
         self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
@@ -537,6 +569,299 @@ efibootmgr() {
         with (patch.object(cli, 'private_command', side_effect=ValueError('DISPOSABLE failure')),
               contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, '--wait worker-one')):
             cli.wait_for_worker('worker-one', ['ssh'], self.root)
+
+    def forget_setup(self, name='worker-one'):
+        cli.private_write(self.root / 'controlplane-known-hosts', 'DISPOSABLE')
+        cli.private_write(self.root / 'operator.yaml', yaml.safe_dump({
+            'tailnet': 'fixture.invalid', 'tailscale_api_token': 'DISPOSABLE',
+            'endpoint': 'https://100.64.0.1:6443'}))
+        return cli.output_directory(self.root / 'nodes' / name)
+
+    def test_worker_menu_add_requires_an_explicit_choice(self):
+        output = io.StringIO()
+        with (patch.object(cli, 'install_worker') as install, patch.object(cli, 'forget_worker') as forget,
+              patch.object(cli, 'operator_settings') as settings, patch.object(cli.os, 'umask'),
+              patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input') as prompt, contextlib.redirect_stdout(output)):
+            select.return_value.unsafe_ask.return_value = 'add'
+            cli.main(['worker'])
+        self.assertEqual([choice.value for choice in select.call_args.kwargs['choices']], [False, 'add', 'forget'])
+        select.return_value.unsafe_ask.assert_called_once()
+        prompt.assert_not_called()
+        install.assert_called_once()
+        forget.assert_not_called()
+        settings.assert_not_called()
+
+    def test_worker_menu_cancellation_does_not_contact_nodes(self):
+        for answer in (False, None, EOFError(), KeyboardInterrupt()):
+            with (self.subTest(answer=answer), patch.object(cli, 'install_worker') as install,
+                  patch.object(cli, 'forget_worker') as forget, patch.object(cli, 'operator_settings') as settings,
+                  patch.object(cli, 'private_command') as command, patch.object(cli.os, 'umask'),
+                  patch.object(cli.questionary, 'select') as select, patch('builtins.input') as prompt,
+                  contextlib.redirect_stdout(io.StringIO()),
+                  contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error):
+                if isinstance(answer, BaseException):
+                    select.return_value.unsafe_ask.side_effect = answer
+                else:
+                    select.return_value.unsafe_ask.return_value = answer
+                cli.main(['worker'])
+            self.assertEqual(error.exception.code, 1)
+            prompt.assert_not_called()
+            install.assert_not_called()
+            forget.assert_not_called()
+            settings.assert_not_called()
+            command.assert_not_called()
+
+    def test_worker_menu_enter_cancels_and_arrow_selection_adds_with_real_terminal_input(self):
+        real_select = cli.questionary.select
+        for keys, add in [('\r', False), ('\x1b[B\r', True)]:
+            with self.subTest(keys=keys), create_pipe_input() as keyboard:
+                keyboard.send_text(keys)
+                def terminal_select(*args, **kwargs):
+                    return real_select(*args, **kwargs, input=keyboard, output=DummyOutput())
+                with (patch.object(cli.questionary, 'select', side_effect=terminal_select),
+                      patch.object(cli, 'install_worker') as install, patch.object(cli, 'forget_worker') as forget,
+                      patch.object(cli, 'operator_settings') as settings, patch('builtins.input') as prompt,
+                      contextlib.redirect_stdout(io.StringIO())):
+                    if add:
+                        cli.manage_workers(SimpleNamespace(wait=None))
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'cancelled'):
+                            cli.manage_workers(SimpleNamespace(wait=None))
+                self.assertEqual(install.call_count, int(add))
+                forget.assert_not_called()
+                settings.assert_not_called()
+                prompt.assert_not_called()
+
+    def test_forget_menu_without_saved_workers_does_not_load_controller_settings(self):
+        for populated in (False, True):
+            with self.subTest(populated=populated):
+                if populated:
+                    nodes = self.root / 'nodes'
+                    cli.output_directory(nodes / cli.role_config('controlplane')['hostname'])
+                    target = cli.output_directory(self.root / 'elsewhere')
+                    (nodes / 'worker-link').symlink_to(target, target_is_directory=True)
+                    cli.private_write(nodes / 'notes.log', 'DISPOSABLE')
+                output = io.StringIO()
+                with (patch.object(cli, 'operator_settings') as settings, patch.object(cli, 'forget_worker') as forget,
+                      patch.object(cli, 'install_worker') as install, patch.object(cli.os, 'umask'),
+                      patch.object(cli.questionary, 'select') as select,
+                      patch('builtins.input') as prompt, contextlib.redirect_stdout(output)):
+                    select.return_value.unsafe_ask.return_value = 'forget'
+                    cli.main(['worker'])
+                self.assertIn('No saved workers', output.getvalue())
+                select.assert_called_once()
+                prompt.assert_not_called()
+                settings.assert_not_called()
+                forget.assert_not_called()
+                install.assert_not_called()
+
+    def test_forget_menu_lists_workers_sorted_and_excludes_controller_files_and_links(self):
+        chosen = self.forget_setup('zeta-worker')
+        cli.output_directory(chosen.parent / 'alpha-worker')
+        controller = cli.role_config('controlplane')['hostname']
+        cli.output_directory(chosen.parent / controller)
+        (chosen.parent / 'worker-link').symlink_to(chosen, target_is_directory=True)
+        cli.private_write(chosen.parent / 'notes.log', 'DISPOSABLE')
+        output = io.StringIO()
+        with (patch.object(cli, 'forget_worker') as forget, patch.object(cli, 'install_worker') as install,
+              patch.object(cli, 'private_command') as command, patch.object(cli.os, 'umask'),
+              patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input') as prompt, contextlib.redirect_stdout(output)):
+            select.return_value.unsafe_ask.side_effect = ['forget', 'zeta-worker']
+            cli.main(['worker'])
+        choices = select.call_args.kwargs['choices']
+        self.assertEqual([choice.value for choice in choices], [False, 'alpha-worker', 'zeta-worker'])
+        for excluded in (controller, 'worker-link', 'notes.log'):
+            self.assertNotIn(excluded, [choice.title for choice in choices])
+        prompt.assert_not_called()
+        forget.assert_called_once()
+        name, server, directory = forget.call_args.args
+        self.assertEqual((name, directory), ('zeta-worker', self.root))
+        self.assertIn('StrictHostKeyChecking=yes', server)
+        self.assertIn('root@100.64.0.1', server)
+        install.assert_not_called()
+        command.assert_not_called()
+
+    def test_forget_menu_cancellation_leaves_records_untouched(self):
+        node = self.forget_setup()
+        for answer in (False, None, EOFError(), KeyboardInterrupt()):
+            with (self.subTest(answer=answer), patch.object(cli, 'forget_worker') as forget,
+                  patch.object(cli, 'operator_settings') as settings, patch.object(cli, 'private_command') as command,
+                  patch.object(cli.os, 'umask'), patch.object(cli.questionary, 'select') as select,
+                  patch('builtins.input') as prompt,
+                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()),
+                  self.assertRaises(SystemExit) as error):
+                select.return_value.unsafe_ask.side_effect = ['forget', answer]
+                cli.main(['worker'])
+            self.assertEqual(error.exception.code, 1)
+            prompt.assert_not_called()
+            forget.assert_not_called()
+            settings.assert_not_called()
+            command.assert_not_called()
+            self.assertTrue(node.is_dir())
+            self.assertFalse((self.root / 'backups').exists())
+
+    def test_worker_wait_flag_bypasses_the_menu_and_installer(self):
+        node = self.forget_setup()
+        cli.private_write(node / 'config.yaml', 'DISPOSABLE')
+        output = io.StringIO()
+        with (patch.object(cli, 'wait_for_worker') as wait, patch.object(cli, 'forget_worker') as forget,
+              patch.object(cli, 'auth_record') as auth, patch.object(cli, 'choose_laptop') as choose,
+              patch.object(cli, 'private_command') as command, patch.object(cli.os, 'umask'),
+              patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input') as prompt, contextlib.redirect_stdout(output)):
+            cli.main(['worker', '--wait', 'worker-one'])
+        prompt.assert_not_called()
+        select.assert_not_called()
+        forget.assert_not_called()
+        auth.assert_not_called()
+        choose.assert_not_called()
+        command.assert_not_called()
+        wait.assert_called_once()
+        self.assertEqual((wait.call_args.args[0], wait.call_args.args[2]), ('worker-one', node))
+        self.assertNotIn('Add worker', output.getvalue())
+
+    def test_forget_command_archives_private_files_without_installer_or_laptop_access(self):
+        node = self.forget_setup()
+        contents = {'config.yaml': 'DISPOSABLE-AGENT-SECRET', 'error-install.log': 'DISPOSABLE diagnostics'}
+        for name, text in contents.items():
+            cli.private_write(node / name, text)
+        unrelated = cli.output_directory(self.root / 'nodes/worker-two')
+        output = io.StringIO()
+        with (patch.object(cli, 'private_command', return_value='{"items":[]}') as command,
+              patch.object(cli, 'auth_record') as auth, patch.object(cli, 'choose_laptop') as choose,
+              patch.object(cli, 'verified_connection') as verified, patch.object(cli, 'wait_for_worker') as wait,
+              patch.object(cli.os, 'umask'), patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input') as prompt,
+              contextlib.redirect_stdout(output)):
+            select.return_value.unsafe_ask.side_effect = ['forget', 'worker-one']
+            cli.main(['worker'])
+        auth.assert_not_called()
+        choose.assert_not_called()
+        verified.assert_not_called()
+        wait.assert_not_called()
+        self.assertEqual(select.return_value.unsafe_ask.call_count, 2)
+        prompt.assert_not_called()
+        command.assert_called_once()
+        arguments = command.call_args.args[0]
+        self.assertEqual(arguments[-1], 'k3s kubectl get nodes -o json')
+        self.assertIn('StrictHostKeyChecking=yes', arguments)
+        self.assertIn('root@100.64.0.1', arguments)
+        self.assertFalse((self.root / 'installer').exists())
+        self.assertFalse(node.exists())
+        self.assertTrue(unrelated.is_dir())
+        backups = self.root / 'backups'
+        archive, = backups.iterdir()
+        self.assertEqual(backups.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(archive.stat().st_mode & 0o777, 0o700)
+        for name, text in contents.items():
+            self.assertEqual((archive / name).read_text(), text)
+            self.assertEqual((archive / name).stat().st_mode & 0o777, 0o600)
+        self.assertIn(str(archive), output.getvalue())
+        self.assertNotIn('DISPOSABLE-AGENT-SECRET', output.getvalue())
+
+    def test_forget_can_archive_an_empty_interrupted_attempt(self):
+        node = self.forget_setup()
+        with (patch.object(cli, 'private_command', return_value='{"items":[]}'),
+              contextlib.redirect_stdout(io.StringIO())):
+            cli.forget_worker('worker-one', ['ssh', 'PINNED'], self.root)
+        self.assertFalse(node.exists())
+        archive, = (self.root / 'backups').iterdir()
+        self.assertEqual(list(archive.iterdir()), [])
+
+    def test_forget_refuses_ready_and_notready_registered_workers(self):
+        node = self.forget_setup()
+        cli.private_write(node / 'config.yaml', 'DISPOSABLE')
+        for ready in ('True', 'False'):
+            registered = json.dumps({'items': [{'metadata': {'name': 'worker-one'},
+                'status': {'conditions': [{'type': 'Ready', 'status': ready}]}}]})
+            with (self.subTest(ready=ready), patch.object(cli, 'private_command', return_value=registered),
+                  self.assertRaisesRegex(ValueError, 'registered in Kubernetes')):
+                cli.forget_worker('worker-one', ['ssh', 'PINNED'], self.root)
+            self.assertEqual((node / 'config.yaml').read_text(), 'DISPOSABLE')
+            self.assertFalse((self.root / 'backups').exists())
+
+    def test_forget_refuses_controller_without_contact_or_changes(self):
+        name = cli.role_config('controlplane')['hostname']
+        node = self.forget_setup(name)
+        with (patch.object(cli, 'private_command') as command,
+              self.assertRaisesRegex(ValueError, 'controller')):
+            cli.forget_worker(name, ['ssh', 'PINNED'], self.root)
+        command.assert_not_called()
+        self.assertTrue(node.is_dir())
+        self.assertFalse((self.root / 'backups').exists())
+
+    def test_forget_keeps_records_when_controller_query_fails_or_is_invalid(self):
+        node = self.forget_setup()
+        cli.private_write(node / 'config.yaml', 'DISPOSABLE')
+        for response in (ValueError('DISPOSABLE controller unavailable'), 'not JSON', '{}', '{"items":[{}]}'):
+            with self.subTest(response=response):
+                options = {'side_effect': response} if isinstance(response, Exception) else {'return_value': response}
+                with (patch.object(cli, 'private_command', **options),
+                      self.assertRaises((ValueError, KeyError))):
+                    cli.forget_worker('worker-one', ['ssh', 'PINNED'], self.root)
+                self.assertEqual((node / 'config.yaml').read_text(), 'DISPOSABLE')
+                self.assertFalse((self.root / 'backups').exists())
+
+    def test_forget_rejects_source_and_backup_directory_symlinks(self):
+        node = self.forget_setup()
+        cli.private_write(node / 'config.yaml', 'DISPOSABLE')
+        link = node.parent / 'worker-link'
+        link.symlink_to(node, target_is_directory=True)
+        with (patch.object(cli, 'private_command') as command,
+              self.assertRaisesRegex(ValueError, 'worker directory')):
+            cli.forget_worker('worker-link', ['ssh', 'PINNED'], self.root)
+        command.assert_not_called()
+        self.assertTrue(link.is_symlink())
+        destination = cli.output_directory(self.root / 'elsewhere')
+        (self.root / 'backups').symlink_to(destination, target_is_directory=True)
+        with (patch.object(cli, 'private_command', return_value='{"items":[]}'),
+              self.assertRaisesRegex(ValueError, 'Backup directory')):
+            cli.forget_worker('worker-one', ['ssh', 'PINNED'], self.root)
+        self.assertEqual((node / 'config.yaml').read_text(), 'DISPOSABLE')
+        self.assertTrue((self.root / 'backups').is_symlink())
+        self.assertEqual(list(destination.iterdir()), [])
+
+    def test_worker_rejects_the_removed_forget_flag(self):
+        with (patch.object(cli, 'install_worker') as install, patch.object(cli.os, 'umask'),
+              contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error):
+            cli.main(['worker', '--forget', 'worker-one'])
+        self.assertEqual(error.exception.code, 2)
+        install.assert_not_called()
+
+    def test_name_prompt_accepts_a_failed_name_after_forget_in_another_terminal(self):
+        disk = self.worker_setup()
+        node = cli.output_directory(self.root / 'nodes/worker-one')
+        cli.private_write(node / 'config.yaml', 'DISPOSABLE')
+        @contextlib.contextmanager
+        def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
+        replies = iter(['worker-one', 'worker-one', 'cancel'])
+        names = 0
+        def answer(prompt):
+            nonlocal names
+            if prompt.startswith('Laptop name'):
+                names += 1
+                if names == 2:
+                    cli.forget_worker('worker-one', ['ssh', 'PINNED'], self.root)
+            return next(replies)
+        output = io.StringIO()
+        with (patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
+              patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
+              patch.object(cli, 'private_command', side_effect=[
+                  'live', 'uefi', 'Inspiron 5558', '{"items":[]}', '{"items":[]}']) as command,
+              patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input', side_effect=answer), contextlib.redirect_stdout(output),
+              self.assertRaisesRegex(ValueError, 'Installation cancelled')):
+            select.return_value.unsafe_ask.return_value = disk
+            cli.install_worker(None)
+        self.assertIn('./guaranine worker', output.getvalue())
+        self.assertIn('Forget worker', output.getvalue())
+        self.assertEqual(names, 2)
+        self.assertFalse(node.exists())
+        archive, = (self.root / 'backups').iterdir()
+        self.assertEqual((archive / 'config.yaml').read_text(), 'DISPOSABLE')
+        self.assertFalse(any('manual-install' in call.args[0][-1] for call in command.call_args_list))
 
     def test_iso_rebuild_keeps_network_and_key_and_preserves_previous_image(self):
         self.worker_setup()
@@ -681,14 +1006,19 @@ efibootmgr() {
         with (patch.object(cli, 'private_command', side_effect=[
                   json.dumps({'BackendState': 'Running', 'Peer': None}),
                   json.dumps({'BackendState': 'Running', 'Peer': peers})]) as command,
-              patch.object(cli.time, 'sleep') as sleep, patch('builtins.input', return_value='2'),
+              patch.object(cli.time, 'sleep') as sleep, patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input') as prompt,
               contextlib.redirect_stdout(output)):
+            select.return_value.unsafe_ask.return_value = '100.64.0.9'
             self.assertEqual(cli.choose_laptop(self.root), '100.64.0.9')
         sleep.assert_called_once_with(2)
         self.assertTrue(all(call.args[0] == ['tailscale', 'status', '--json'] for call in command.call_args_list))
         self.assertIn('Boot the laptop from the Guaranine USB', output.getvalue())
-        self.assertIn('1. guaranine-live-aaaa | 100.64.0.8', output.getvalue())
-        self.assertIn('2. guaranine-live-bbbb | 100.64.0.9', output.getvalue())
+        choices = select.call_args.kwargs['choices']
+        self.assertEqual([choice.value for choice in choices], [False, '100.64.0.8', '100.64.0.9'])
+        self.assertIn('guaranine-live-aaaa', choices[1].title)
+        self.assertIn('guaranine-live-bbbb', choices[2].title)
+        prompt.assert_not_called()
         self.assertNotIn('worker-one', output.getvalue())
 
     def test_laptop_selection_cancellation_never_contacts_a_node(self):
@@ -697,12 +1027,15 @@ efibootmgr() {
                 'TailscaleIPs': ['100.64.0.8']}
         second = {**peer, 'HostName': 'guaranine-live-bbbb', 'TailscaleIPs': ['100.64.0.9']}
         status = json.dumps({'BackendState': 'Running', 'Peer': {'laptop': peer, 'second': second}})
-        for answer in ('', '0', '3', '100.64.0.8'):
+        for answer in (False, None):
             with (self.subTest(answer=answer), patch.object(cli, 'private_command', return_value=status) as command,
-                  patch.object(cli, 'verified_connection') as connect, patch('builtins.input', return_value=answer),
+                  patch.object(cli, 'verified_connection') as connect, patch.object(cli.questionary, 'select') as select,
+                  patch('builtins.input') as prompt,
                   contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'selection cancelled')):
+                select.return_value.unsafe_ask.return_value = answer
                 cli.install_worker(None)
             connect.assert_not_called()
+            prompt.assert_not_called()
             self.assertEqual([call.args[0] for call in command.call_args_list], [['tailscale', 'status', '--json']])
 
     def test_laptop_discovery_explains_disconnected_operator(self):
@@ -759,26 +1092,46 @@ efibootmgr() {
 
     def test_data_disk_with_signatures_is_never_formatted(self):
         disk = {'path': '/dev/vdb', 'size': 64 * 2**30, 'model': 'Fixture', 'serial': 'disk-b', 'tran': 'virtio'}
-        with (patch.object(cli, 'read_disks', return_value=[disk]), patch('builtins.input', return_value='1'),
+        with (patch.object(cli, 'read_disks', return_value=[disk]), patch('builtins.input') as prompt,
+              patch.object(cli.questionary, 'select') as select,
               patch.object(cli, 'private_command', side_effect=['', '{"signatures":[{"type":"xfs"}]}']) as command,
               contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError)):
+            select.return_value.unsafe_ask.return_value = disk
             cli.initialize_data(['ssh'], self.root)
+        prompt.assert_not_called()
         self.assertFalse(any('mkfs' in str(call) for call in command.call_args_list))
 
     def test_existing_data_label_is_reused_without_selection_or_formatting(self):
-        with patch.object(cli, 'private_command', return_value='present') as command, patch('builtins.input') as prompt:
+        with (patch.object(cli, 'private_command', return_value='present') as command,
+              patch.object(cli.questionary, 'select') as select, patch('builtins.input') as prompt):
             cli.initialize_data(['ssh'], self.root)
         prompt.assert_not_called()
+        select.assert_not_called()
         self.assertEqual(command.call_count, 1)
+
+    def test_data_disk_selection_cancels_before_signature_checks_or_formatting(self):
+        disk = {'path': '/dev/vdb', 'size': 64 * 2**30, 'model': 'Fixture', 'serial': 'disk-b', 'tran': 'virtio'}
+        for answer in (False, None):
+            with (self.subTest(answer=answer), patch.object(cli, 'read_disks', return_value=[disk]),
+                  patch.object(cli, 'private_command', return_value='') as command,
+                  patch.object(cli.questionary, 'select') as select, patch('builtins.input') as prompt,
+                  contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'initialization cancelled')):
+                select.return_value.unsafe_ask.return_value = answer
+                cli.initialize_data(['ssh'], self.root)
+            prompt.assert_not_called()
+            self.assertEqual(command.call_count, 1)
+            self.assertFalse(any('wipefs' in str(call) or 'mkfs' in str(call) for call in command.call_args_list))
 
     def test_data_disk_signatures_are_checked_again_after_confirmation(self):
         disk = {'path': '/dev/vdb', 'size': 64 * 2**30, 'model': 'Fixture', 'serial': 'disk-b', 'tran': 'virtio'}
         for signatures in ('[]', '[{"type":"ext4"}]'):
             replies = ['', '{"signatures":[]}', '{"signatures":' + signatures + '}', '']
             with (self.subTest(signatures=signatures), patch.object(cli, 'read_disks', return_value=[disk]),
-                  patch('builtins.input', side_effect=['1', 'INITIALIZE /dev/vdb']),
+                  patch.object(cli.questionary, 'select') as select,
+                  patch('builtins.input', return_value='INITIALIZE /dev/vdb'),
                   patch.object(cli, 'private_command', side_effect=replies) as command,
                   contextlib.redirect_stdout(io.StringIO())):
+                select.return_value.unsafe_ask.return_value = disk
                 if signatures == '[]':
                     cli.initialize_data(['ssh'], self.root)
                 else:
@@ -830,41 +1183,69 @@ class USBFlashingTests(unittest.TestCase):
                   patch.object(cli.sys.stdin, 'isatty', return_value=stdin),
                   patch.object(self.output, 'isatty', return_value=stdout),
                   patch.object(cli, 'usb_disks') as disks, patch('builtins.input') as prompt,
+                  patch.object(cli.questionary, 'select') as select,
                   patch.object(cli.subprocess, 'run') as run):
                 cli.flash_iso(self.image)
                 disks.assert_not_called()
                 prompt.assert_not_called()
+                select.assert_not_called()
                 run.assert_not_called()
 
     def test_skip_cancellation_and_no_devices_never_unmount_or_write(self):
-        for answers in ([''], ['0'], ['1', 'no'], [EOFError], [KeyboardInterrupt]):
-            with (self.subTest(answers=answers), patch.object(cli, 'usb_disks', return_value=[self.disk]),
-                  patch('builtins.input', side_effect=answers), patch.object(cli.subprocess, 'run') as run):
+        for answer in (False, None, EOFError(), KeyboardInterrupt()):
+            with (self.subTest(answer=answer), patch.object(cli, 'usb_disks', return_value=[self.disk]),
+                  patch.object(cli.questionary, 'select') as select, patch('builtins.input') as prompt,
+                  patch.object(cli.subprocess, 'run') as run):
+                if isinstance(answer, BaseException):
+                    select.return_value.unsafe_ask.side_effect = answer
+                else:
+                    select.return_value.unsafe_ask.return_value = answer
                 self.assertFalse(cli.flash_iso(self.image))
+                prompt.assert_not_called()
                 run.assert_not_called()
         with (patch.object(cli, 'usb_disks', return_value=[]), patch('builtins.input') as prompt,
+              patch.object(cli.questionary, 'select') as select,
               patch.object(cli.subprocess, 'run') as run):
             cli.flash_iso(self.image)
         prompt.assert_not_called()
+        select.assert_not_called()
         run.assert_not_called()
 
     def test_wrong_confirmation_explains_required_word_without_writing(self):
         with (patch.object(cli, 'usb_disks', return_value=[self.disk]),
-              patch('builtins.input', side_effect=['1', 'yes']),
+              patch.object(cli.questionary, 'select') as select, patch('builtins.input', return_value='yes'),
               patch.object(cli.subprocess, 'run') as run):
+            select.return_value.unsafe_ask.return_value = self.disk
             self.assertFalse(cli.flash_iso(self.image))
         run.assert_not_called()
         output = self.output.getvalue()
         self.assertIn('Confirmation must be ERASE.', output)
         self.assertIn('Nothing was written to /dev/sdy.', output)
 
-    def test_invalid_choices_never_unmount_or_write(self):
-        for choice in ('2', '-1', 'invalid'):
-            with (self.subTest(choice=choice), patch.object(cli, 'usb_disks', return_value=[self.disk]),
-                  patch('builtins.input', return_value=choice), patch.object(cli.subprocess, 'run') as run,
-                  self.assertRaises(ValueError)):
-                cli.flash_iso(self.image)
-            run.assert_not_called()
+    def test_usb_enter_skips_and_arrow_selects_the_disk_with_real_terminal_input(self):
+        real_select = cli.questionary.select
+        for keys, expected in [('\r', False), ('\x1b[B\r', self.disk)]:
+            with self.subTest(keys=keys), create_pipe_input() as keyboard:
+                keyboard.send_text(keys)
+                selected = []
+                def terminal_select(*args, **kwargs):
+                    question = real_select(*args, **kwargs, input=keyboard, output=DummyOutput())
+                    unsafe_ask = question.unsafe_ask
+                    def answer():
+                        value = unsafe_ask()
+                        selected.append(value)
+                        return value
+                    question.unsafe_ask = answer
+                    return question
+                with (patch.object(cli, 'usb_disks', return_value=[self.disk]),
+                      patch.object(cli.questionary, 'select', side_effect=terminal_select),
+                      patch('builtins.input', return_value='') as prompt,
+                      patch.object(cli.subprocess, 'run') as run):
+                    self.assertFalse(cli.flash_iso(self.image))
+                self.assertEqual(len(selected), 1)
+                self.assertIs(selected[0], expected)
+                self.assertEqual(prompt.call_count, int(bool(expected)))
+                run.assert_not_called()
 
     def test_only_the_confirmed_usb_is_unmounted_and_written_as_a_whole_disk(self):
         second = copy.deepcopy(self.disk)
@@ -873,13 +1254,17 @@ class USBFlashingTests(unittest.TestCase):
         unmounted = copy.deepcopy(second)
         unmounted['children'][0]['mountpoints'] = []
         with (patch.object(cli, 'usb_disks', side_effect=[[self.disk, second], [self.disk, second], [unmounted]]),
-              patch('builtins.input', side_effect=['2', 'ERASE']), patch.object(cli.subprocess, 'run') as run):
+              patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input', return_value='ERASE'), patch.object(cli.subprocess, 'run') as run):
+            select.return_value.unsafe_ask.return_value = second
             self.assertTrue(cli.flash_iso(self.image))
         self.assertEqual([call.args[0] for call in run.call_args_list], [
             ['sudo', '--', 'umount', '--all-targets', '--', '/dev/sdz1'],
             ['sudo', '--', 'dd', f'if={self.image}', 'of=/dev/sdz', 'bs=4M', 'oflag=dsync',
              'status=progress', 'conv=fsync,nocreat']])
-        self.assertIn('DISPOSABLE-USB-B', self.output.getvalue())
+        choices = select.call_args.kwargs['choices']
+        self.assertIs(choices[2].value, second)
+        self.assertIn('DISPOSABLE-USB-B', choices[2].title)
         self.assertIn('Writing ', self.output.getvalue())
         self.assertIn('Do not remove the USB.', self.output.getvalue())
         self.assertIn('Flashed guaranine-kairos.iso to /dev/sdz.', self.output.getvalue())
@@ -889,8 +1274,9 @@ class USBFlashingTests(unittest.TestCase):
         for reports in ([[self.disk], [changed]], [[self.disk], [self.disk], [changed]],
                         [[self.disk], [self.disk], [self.disk]]):
             with (self.subTest(reports=reports), patch.object(cli, 'usb_disks', side_effect=reports),
-                  patch('builtins.input', side_effect=['1', 'ERASE']),
+                  patch.object(cli.questionary, 'select') as select, patch('builtins.input', return_value='ERASE'),
                   patch.object(cli.subprocess, 'run') as run, self.assertRaises(ValueError)):
+                select.return_value.unsafe_ask.return_value = self.disk
                 cli.flash_iso(self.image)
             self.assertTrue(all('dd' not in call.args[0] for call in run.call_args_list))
 
@@ -902,9 +1288,10 @@ class USBFlashingTests(unittest.TestCase):
                 subprocess.CompletedProcess(['umount'], 0), subprocess.CalledProcessError(1, ['dd'])]
             with (self.subTest(fail_unmount=fail_unmount),
                   patch.object(cli, 'usb_disks', side_effect=[[self.disk], [self.disk], [unmounted]]),
-                  patch('builtins.input', side_effect=['1', 'ERASE']),
+                  patch.object(cli.questionary, 'select') as select, patch('builtins.input', return_value='ERASE'),
                   patch.object(cli.subprocess, 'run', side_effect=effects) as run,
                   self.assertRaises(subprocess.CalledProcessError if fail_unmount else ValueError)):
+                select.return_value.unsafe_ask.return_value = self.disk
                 cli.flash_iso(self.image)
             self.assertEqual(run.call_count, 1 if fail_unmount else 2)
         self.assertNotIn('Flashed ', self.output.getvalue())
@@ -928,9 +1315,10 @@ class USBFlashingTests(unittest.TestCase):
                         raise subprocess.TimeoutExpired(arguments, 900)
                     return result
                 with (patch.object(cli, 'usb_disks', return_value=[unmounted]),
-                      patch('builtins.input', side_effect=['1', 'ERASE']),
+                      patch.object(cli.questionary, 'select') as select, patch('builtins.input', return_value='ERASE'),
                       patch.object(cli.subprocess, 'run', side_effect=write),
                       contextlib.redirect_stderr(terminal)):
+                    select.return_value.unsafe_ask.return_value = unmounted
                     if outcome == 'success':
                         self.assertTrue(cli.flash_iso(self.image))
                     else:

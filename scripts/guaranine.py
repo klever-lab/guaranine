@@ -20,6 +20,7 @@ import time
 import urllib.parse
 import urllib.request
 
+import questionary
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -167,18 +168,16 @@ def flash_iso(image):
         if not disks:
             print('No suitable USB drives found.')
             return False
-        print('\nFlash the ISO to a USB drive:')
-        print('0. Skip flashing (default)')
-        for number, disk in enumerate(disks, 1):
+        choices = [questionary.Choice('Skip flashing', value=False)]
+        for disk in disks:
             labels = ', '.join(member['label'] for member in [disk, *disk.get('children', [])] if member.get('label'))
-            print(f'{number}. {disk["path"]} | {disk.get("model") or "Unknown model"} | '
-                  f'{disk["size"] / 2**30:.1f} GiB | {disk.get("serial") or "No serial"} | {labels or "No label"}')
-        choice = input('USB drive number (Enter to skip): ').strip()
-        if choice in ('', '0'):
+            choices.append(questionary.Choice(
+                f'{disk["path"]} | {disk.get("model") or "Unknown model"} | '
+                f'{disk["size"] / 2**30:.1f} GiB | {disk.get("serial") or "No serial"} | {labels or "No label"}',
+                value=disk))
+        selected = questionary.select('Flash the ISO to a USB drive', choices=choices).unsafe_ask()
+        if not selected:
             return False
-        if not choice.isdecimal() or not 1 <= int(choice) <= len(disks):
-            raise ValueError('Select a listed USB drive; nothing was flashed')
-        selected = disks[int(choice) - 1]
         path = selected['path']
         confirmation = 'ERASE'
         print(f'ALL DATA on {path} will be erased. Image: {image.name}')
@@ -637,13 +636,14 @@ def initialize_data(connection, directory):
     disks = read_disks(connection, directory)
     if not disks:
         raise ValueError('No unmounted K3s data disk found; attach the retained disk before bootstrap')
-    for number, disk in enumerate(disks, 1):
-        print(f'{number}. {disk["path"]} | {disk["size"] / 2**30:.1f} GiB | '
-              f'{disk["model"] or "Unknown model"} | {disk["serial"] or "No serial"}')
-    choice = input('NEW EMPTY retained data disk number (no default): ').strip()
-    if not choice.isdecimal() or not 1 <= int(choice) <= len(disks):
+    selected = questionary.select('NEW EMPTY retained data disk', choices=[
+        questionary.Choice('Cancel', value=False),
+        *[questionary.Choice(f'{disk["path"]} | {disk["size"] / 2**30:.1f} GiB | '
+                            f'{disk["model"] or "Unknown model"} | {disk["serial"] or "No serial"}', value=disk)
+          for disk in disks],
+    ]).unsafe_ask()
+    if not selected:
         raise ValueError('Data disk initialization cancelled')
-    selected = disks[int(choice) - 1]
     disk = selected['path']
     signatures = json.loads(private_command([*connection, 'wipefs --no-act --json ' + shlex.quote(disk)], directory))
     if signatures.get('signatures'):
@@ -709,13 +709,13 @@ def choose_laptop(directory):
         name, address = laptops[0]
         print(f'Found laptop: {name} | {address}')
         return address
-    print('\nAvailable laptops:')
-    for number, (name, address) in enumerate(laptops, 1):
-        print(f'{number}. {name} | {address}')
-    choice = input('Laptop number to install (Enter to cancel): ').strip()
-    if not choice.isdecimal() or not 1 <= int(choice) <= len(laptops):
+    address = questionary.select('Laptop to install', choices=[
+        questionary.Choice('Cancel', value=False),
+        *[questionary.Choice(f'{name} | {address}', value=address) for name, address in laptops],
+    ]).unsafe_ask()
+    if not address:
         raise ValueError('Laptop selection cancelled; no installation was started')
-    return laptops[int(choice) - 1][1]
+    return address
 
 
 def wait_for_worker(name, server, node):
@@ -735,6 +735,67 @@ def wait_for_worker(name, server, node):
     if len(addresses) != 1:
         raise ValueError(f'{name} must have exactly one internal Tailscale IPv4 address')
     print(f'\n{name} is Ready at {tailnet_ip(addresses[0])}.')
+
+
+def forget_worker(name, server, directory):
+    check_name(name)
+    if name == role_config('controlplane')['hostname']:
+        raise ValueError('Cannot forget the controller')
+    node = directory / 'nodes' / name
+    try:
+        info = node.lstat()
+    except FileNotFoundError:
+        raise ValueError(f'No saved installation for {name}') from None
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise ValueError('Saved worker directory must be operator-owned with mode 0700')
+    existing = json.loads(private_command([*server, 'k3s kubectl get nodes -o json'], directory))
+    if any(item['metadata']['name'] == name for item in existing['items']):
+        raise ValueError(f'{name} is registered in Kubernetes; retire that worker before forgetting its files')
+    backups = directory / 'backups'
+    backups.mkdir(mode=0o700, exist_ok=True)
+    info = backups.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise ValueError('Backup directory must be operator-owned with mode 0700')
+    archive = backups / (name + '-install-' + str(time.time_ns()))
+    node.rename(archive)
+    print(f'Archived {name}: {archive}')
+    print(f'{name} is available for installation. Run: ./guaranine worker')
+
+
+def manage_workers(args):
+    if getattr(args, 'wait', None):
+        install_worker(args)
+        return
+    action = questionary.select('Worker action', choices=[
+        questionary.Choice('Cancel', value=False),
+        questionary.Choice('Add worker', value='add'),
+        questionary.Choice('Forget worker', value='forget'),
+    ]).unsafe_ask()
+    if action == 'add':
+        install_worker(args)
+        return
+    if action != 'forget':
+        raise ValueError('Worker action cancelled; select Add worker or Forget worker')
+    directory = operator_directory()
+    nodes = directory / 'nodes'
+    controller = role_config('controlplane')['hostname']
+    names = []
+    if nodes.exists():
+        names = sorted(path.name for path in nodes.iterdir()
+                       if path.is_dir() and not path.is_symlink() and path.name != controller)
+    if not names:
+        print('No saved workers to forget.')
+        return
+    name = questionary.select('Worker to forget', choices=[
+        questionary.Choice('Cancel', value=False),
+        *[questionary.Choice(name, value=name) for name in names],
+    ]).unsafe_ask()
+    if not name:
+        raise ValueError('Worker selection cancelled; no files were archived')
+    settings = operator_settings()
+    address = urllib.parse.urlsplit(endpoint(settings.get('endpoint'))).hostname
+    server = ssh_command(address, directory / 'controlplane-known-hosts')
+    forget_worker(name, server, directory)
 
 
 def install_worker(_args):
@@ -761,7 +822,8 @@ def install_worker(_args):
         model = private_command([*connection, 'cat /sys/class/dmi/id/product_name'], directory).strip()
         print(f'\nLaptop model: {model!r}')
         existing = json.loads(private_command([*server, 'k3s kubectl get nodes -o json'], directory))
-        used_names = {item['metadata']['name'] for item in existing['items']}
+        registered_names = {item['metadata']['name'] for item in existing['items']}
+        used_names = set(registered_names)
         if (directory / 'nodes').exists():
             used_names.update(path.name for path in (directory / 'nodes').iterdir())
         stem = re.sub(r'[^a-z0-9]+', '-', model.lower()).strip('-')[:48].rstrip('-') or 'laptop'
@@ -775,8 +837,12 @@ def install_worker(_args):
             name = input(f'Laptop name (Enter for {suggested}): ').strip() or suggested
             try:
                 check_name(name)
-                if name in used_names:
-                    raise ValueError('Name already in use. Choose another.')
+                if name in registered_names:
+                    raise ValueError('Name already registered in Kubernetes. Choose another.')
+                if (directory / 'nodes' / name).exists():
+                    raise ValueError('Name has saved installation files. To clear a failed attempt, run '
+                                     './guaranine worker in another terminal, choose Forget worker, '
+                                     f'select {name}, then enter the name again here.')
                 break
             except ValueError as error:
                 print(error)
@@ -784,13 +850,14 @@ def install_worker(_args):
         disks = read_disks(connection, directory)
         if not disks:
             raise ValueError('No unmounted, writable disk of at least 16 GiB found')
-        for number, disk in enumerate(disks, 1):
-            print(f'{number}. {disk["path"]} | {disk["size"] / 2**30:.1f} GiB | '
-                  f'{disk["model"] or "Unknown model"} | {disk["serial"] or "No serial"} | {disk["tran"] or "Unknown transport"}')
-        choice = input('Installation disk number (no default): ').strip()
-        if not choice.isdecimal() or not 1 <= int(choice) <= len(disks):
-            raise ValueError('Installation cancelled; select one of the displayed disks')
-        selected = disks[int(choice) - 1]
+        selected = questionary.select('Installation disk', choices=[
+            questionary.Choice('Cancel', value=False),
+            *[questionary.Choice(f'{disk["path"]} | {disk["size"] / 2**30:.1f} GiB | '
+                                f'{disk["model"] or "Unknown model"} | {disk["serial"] or "No serial"} | '
+                                f'{disk["tran"] or "Unknown transport"}', value=disk) for disk in disks],
+        ]).unsafe_ask()
+        if not selected:
+            raise ValueError('Installation cancelled; no disk was selected')
         disk = selected['path']
         confirmation = 'ERASE'
         print(f'Install {name} on {address}, destroying ALL DATA on {disk}.')
@@ -823,11 +890,12 @@ def install_worker(_args):
                 raise ValueError(f'Installation failed. Keep the USB connected and check the laptop. {error}') from error
             print(f'Could not confirm installation: {error}')
             print('Check the laptop screen. SSH may close when installation finishes and the laptop powers off.')
-    print('\nAfter the laptop powers off, remove the USB and turn it on again.', flush=True)
+    print('\nAfter the laptop powers off, remove the USB and turn it on again.\n', flush=True)
     wait_for_worker(name, server, node)
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(prog='guaranine', description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('init', help='Create operator files (once)').set_defaults(
@@ -837,12 +905,12 @@ def main(argv=None):
     iso.set_defaults(action=prepare_iso)
     commands.add_parser('controlplane', help='Build or reuse the Azure VHD').set_defaults(action=prepare_controlplane)
     commands.add_parser('bootstrap', help='Start the cloud controller and save its kubeconfig').set_defaults(action=bootstrap)
-    worker = commands.add_parser('worker', help='Install a laptop and wait for it to become Ready')
+    worker = commands.add_parser('worker', help='Add or forget a worker')
     worker.add_argument('--wait', metavar='NAME', help='Wait for Ready without reinstalling')
-    worker.set_defaults(action=install_worker)
+    worker.set_defaults(action=manage_workers)
     os.umask(0o077)
     try:
-        args = parser.parse_args(argv)
+        args = parser.parse_args(argv or ['--help'])
         args.action(args)
     except yaml.YAMLError:
         parser.exit(1, 'Invalid YAML; check the local operator/configuration file.\n')
