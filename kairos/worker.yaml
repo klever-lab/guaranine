@@ -1,5 +1,6 @@
 #cloud-config
 name: Guaranine worker
+strict: true
 install:
   poweroff: true
   grub_options:
@@ -10,6 +11,39 @@ users:
     groups: [admin]
     lock_passwd: true
 stages:
+  after-install:
+    - name: Register Kairos in the UEFI boot order
+      if: '[ -d /sys/firmware/efi ]'
+      files:
+        - path: /run/guaranine-register-boot
+          permissions: 0700
+          content: |
+            #!/bin/sh
+            set -eu
+            export LC_ALL=C
+            esp=/run/cos/efi
+            test -s "$esp/EFI/boot/bootx64.efi"
+            partition=$(findmnt -nro SOURCE --mountpoint "$esp")
+            disk=$(lsblk -nrpo PKNAME "$partition")
+            number=$(lsblk -nro PARTN "$partition")
+            uuid=$(lsblk -nro PARTUUID "$partition" | tr '[:upper:]' '[:lower:]')
+            test -n "$disk"
+            test "$number" -gt 0
+            test -n "$uuid"
+            efibootmgr --create --disk "$disk" --part "$number" --label Kairos --loader '\EFI\boot\bootx64.efi'
+            state=$(efibootmgr --verbose)
+            if printf '%s\n' "$state" | grep -q '^BootNext:'; then
+              efibootmgr --delete-bootnext
+              state=$(efibootmgr --verbose)
+            fi
+            first=$(printf '%s\n' "$state" | sed -n 's/^BootOrder: \([[:xdigit:]]\{4\}\).*/\1/p')
+            test -n "$first"
+            entry=$(printf '%s\n' "$state" | grep -i "^Boot${first}\\* Kairos[[:space:]]" | tr '[:upper:]' '[:lower:]')
+            printf '%s\n' "$entry" | grep -Fq "hd($number,gpt,$uuid,"
+            printf '%s\n' "$entry" | grep -Fq 'file(\efi\boot\bootx64.efi)'
+            ! printf '%s\n' "$state" | grep -q '^BootNext:'
+      commands:
+        - sh /run/guaranine-register-boot
   initramfs:
     - name: Configure the K3s agent
       files:

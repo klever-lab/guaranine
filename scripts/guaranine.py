@@ -28,6 +28,12 @@ TAILNET = ipaddress.ip_network('100.64.0.0/10')
 DISK_PATH = r'/dev/(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme[0-9]+n[0-9]+|mmcblk[0-9]+)'
 
 
+class PrivateCommandError(ValueError):
+    def __init__(self, returncode, log):
+        super().__init__(f'Command failed (exit {returncode}). Private log: {log}')
+        self.returncode = returncode
+
+
 def digest(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -85,7 +91,7 @@ def private_command(arguments, directory, *, data=None, timeout=600):
     if result.returncode:
         path = Path(directory) / ('error-' + str(time.time_ns()) + '.log')
         private_write(path, result.stdout + result.stderr)
-        raise ValueError(f'Command failed. Check the private log: {path}')
+        raise PrivateCommandError(result.returncode, path)
     return result.stdout
 
 
@@ -576,6 +582,39 @@ def read_disks(connection, directory):
     return sorted(disks, key=lambda disk: disk['path'])
 
 
+def check_worker_boot(connection, directory):
+    status = private_command([*connection, '''if test ! -d /sys/firmware/efi; then
+  printf bios
+elif ! command -v efibootmgr >/dev/null || ! efibootmgr --version >/dev/null 2>&1; then
+  printf outdated
+elif ! test -w /sys/firmware/efi/efivars ||
+     ! findmnt -nro OPTIONS --mountpoint /sys/firmware/efi/efivars | grep -Eq '(^|,)rw(,|$)' ||
+     ! efibootmgr >/dev/null 2>&1; then
+  printf unavailable
+else
+  printf uefi
+fi'''], directory)
+    if status == 'outdated':
+        raise ValueError('USB needs updating. Run ./guaranine iso, reflash it and boot the laptop again. Nothing was erased.')
+    if status not in ('bios', 'uefi'):
+        raise ValueError('UEFI boot settings are unavailable or read-only. Nothing was erased; check the laptop screen.')
+
+
+def check_install_labels(connection, directory, selected):
+    """Kairos resolves partition/filesystem labels globally, even when given a disk."""
+    raw = private_command([*connection, 'lsblk --json --paths --tree --output PATH,LABEL,PARTLABEL'], directory)
+    labels = {'COS_GRUB', 'COS_OEM', 'COS_STATE', 'COS_RECOVERY', 'COS_PERSISTENT'}
+    names = {'efi', 'oem', 'state', 'recovery', 'persistent'}
+    pending = list(json.loads(raw)['blockdevices'])
+    while pending:
+        disk = pending.pop()
+        if disk['path'] == selected:
+            continue
+        if disk.get('label') in labels or disk.get('partlabel') in names:
+            raise ValueError(f'{disk["path"]} has a conflicting Kairos disk label. Disconnect that drive before installing. Nothing was erased.')
+        pending.extend(disk.get('children', []))
+
+
 def initialize_data(connection, directory):
     present = private_command([*connection,
         'test ! -e /dev/disk/by-label/GUARANINE_DATA || printf present'], directory)
@@ -704,6 +743,7 @@ def install_worker(_args):
             'test -d /run/rootfsbase && printf live'], directory)
         if live != 'live':
             raise ValueError('Boot the laptop from the Guaranine USB')
+        check_worker_boot(connection, directory)
         model = private_command([*connection, 'cat /sys/class/dmi/id/product_name'], directory).strip()
         print(f'\nLaptop model: {model!r}')
         existing = json.loads(private_command([*server, 'k3s kubectl get nodes -o json'], directory))
@@ -746,6 +786,7 @@ def install_worker(_args):
             raise ValueError('Installation cancelled; no configuration was applied')
         if selected not in read_disks(connection, directory):
             raise ValueError('The selected disk changed; no installation was started')
+        check_install_labels(connection, directory, disk)
         record = auth_record(key, reusable=True)
         agent_token = private_command([*server, 'cat /var/lib/rancher/k3s/server/agent-token'], directory).strip()
         if not re.fullmatch(r'K10[0-9a-f]{64}::[^\s]+', agent_token):
@@ -763,7 +804,9 @@ def install_worker(_args):
         try:
             with progress(f'Installing {name} on {disk}…'):
                 private_command([*connection, command], node, data=cloud_yaml(config), timeout=1800)
-        except (ValueError, subprocess.TimeoutExpired) as error:
+        except (PrivateCommandError, subprocess.TimeoutExpired) as error:
+            if isinstance(error, PrivateCommandError) and error.returncode != 255:
+                raise ValueError(f'Installation failed. Keep the USB connected and check the laptop. {error}') from error
             print(f'Could not confirm installation: {error}')
             print('Check the laptop screen. SSH may close when installation finishes and the laptop powers off.')
     print('\nAfter the laptop powers off, remove the USB and turn it on again.', flush=True)

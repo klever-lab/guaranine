@@ -18,6 +18,53 @@ import guaranine as cli
 PUBLIC_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER'
 
 
+EFI_SEED = r'''#!/bin/sh
+set -eu
+test -d /sys/firmware/efi || exit 0
+# File-only paths model stale entries whose original partitions no longer exist.
+efibootmgr --create --disk /dev/vda --part 1 --file-dev-path --bootnum 8002 \
+  --label 'Windows Boot Manager' --loader '\EFI\Microsoft\Boot\bootmgfw.efi'
+efibootmgr --create --disk /dev/vda --part 1 --file-dev-path --bootnum 8001 \
+  --label 'Linux Boot Manager' --loader '\EFI\systemd\systemd-bootx64.efi'
+efibootmgr --create --disk /dev/vda --part 1 --file-dev-path --bootnum 8000 \
+  --label ubuntu --loader '\EFI\ubuntu\shimx64.efi'
+efibootmgr --bootnext 8000
+entries=$(efibootmgr -v)
+printf '%s\n' "$entries" > /dev/ttyS0
+printf '%s\n' "$entries" | grep -q '^BootOrder: 8000,8001,8002,'
+printf '%s\n' "$entries" | grep -q '^BootNext: 8000$'
+echo GUARANINE_OLD_EFI_ENTRIES_OK > /dev/ttyS0
+'''
+
+
+EFI_CHECK = r'''#!/bin/sh
+set -eu
+test -d /sys/firmware/efi || exit 0
+entries=$(efibootmgr -v)
+printf '%s\n' "$entries" > /dev/ttyS0
+order=$(printf '%s\n' "$entries" | awk '/^BootOrder:/ {print $2}')
+first=${order%%,*}
+test -n "$first"
+entry=$(printf '%s\n' "$entries" | grep -E "^Boot$first\* Kairos[[:space:]]")
+esp=$(readlink -f /dev/disk/by-label/COS_GRUB)
+test "$(lsblk --noheadings --raw --output PKNAME "$esp")" = vda
+part=$(lsblk --noheadings --raw --output PARTN "$esp")
+uuid=$(lsblk --noheadings --raw --output PARTUUID "$esp")
+test -n "$part" && test -n "$uuid"
+printf '%s\n' "$entry" | grep -Fi "HD($part,GPT,$uuid,"
+printf '%s\n' "$entry" | grep -Fi 'File(\EFI\boot\bootx64.efi)'
+printf '%s\n' "$entries" | grep -F 'Boot8000* ubuntu' | grep -F 'File(\EFI\ubuntu\shimx64.efi)'
+printf '%s\n' "$entries" | grep -F 'Boot8001* Linux Boot Manager' | grep -F 'File(\EFI\systemd\systemd-bootx64.efi)'
+printf '%s\n' "$entries" | grep -F 'Boot8002* Windows Boot Manager' | grep -F 'File(\EFI\Microsoft\Boot\bootmgfw.efi)'
+if printf '%s\n' "$entries" | grep -q '^BootNext:'; then exit 1; fi
+if test "$1" = boot; then
+  current=$(printf '%s\n' "$entries" | awk '/^BootCurrent:/ {print $2}')
+  test "$current" = "$first"
+fi
+echo GUARANINE_EFI_ENTRY_OK > /dev/ttyS0
+'''
+
+
 @contextmanager
 def timed(label):
     started = time.monotonic()
@@ -145,6 +192,16 @@ def fixture(role=None):
                    'grep -qx "server: https://100.64.0.1:6443" /etc/rancher/k3s/config.yaml.d/90-join.yaml',
                    'systemctl is-enabled --quiet k3s.service',
                    'systemctl show k3s.service --property=Environment --value | grep -q K3S_ROLE=agent']
+        # Check firmware before poweroff as well: BootNext is consumed by reboot.
+        config['stages'].setdefault('after-install', []).append({
+            'name': 'Verify installed worker boot entry',
+            'files': [cli.config_file('/run/fixture-efi-check', EFI_CHECK, 0o700)],
+            'commands': ['sh /run/fixture-efi-check install && echo GUARANINE_INSTALL_OK > /dev/ttyS0']})
+        config['stages']['boot'].append({
+            'name': 'Verify the registered worker entry booted',
+            'files': [cli.config_file('/run/fixture-efi-check', EFI_CHECK, 0o700)],
+            'commands': ['sh /run/fixture-efi-check boot && touch /run/fixture-efi-ok']})
+        checks += ['test -f /run/fixture-efi-ok']
     else:
         checks += ['test -f /run/cos/live_mode', 'test -f /etc/guaranine/wifi.conf',
                    'grep -qx \'FLAGS="--state=mem:"\' /run/guaranine-tailscale-live.env',
@@ -167,7 +224,7 @@ def fixture(role=None):
     return config
 
 
-def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=False):
+def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=False, firmware=None):
     started = time.monotonic()
     acceleration = ['-accel', 'kvm', '-cpu', 'host'] if os.access('/dev/kvm', os.R_OK | os.W_OK) else ['-accel', 'tcg', '-cpu', 'max']
     if legacy_cpu:
@@ -192,8 +249,9 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
         if not pairs:
             raise ValueError('Install OVMF to boot the Gen2 VHD fixture')
         code = pairs[0]
-        variables = directory / f'uefi-{number}.fd'
-        shutil.copyfile(Path(str(code).replace('CODE', 'VARS')), variables)
+        variables = firmware or directory / f'uefi-{number}.fd'
+        if not variables.exists():
+            shutil.copyfile(Path(str(code).replace('CODE', 'VARS')), variables)
         command += ['-drive', f'if=pflash,format=raw,readonly=on,file={code}',
                     '-drive', f'if=pflash,format=raw,file={variables}']
     if image.suffix == '.vhd':
@@ -214,7 +272,9 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
                 while time.monotonic() < deadline:
                     status = process.poll()
                     if status is not None:
-                        if install and status == 0:
+                        if install and status == 0 and 'GUARANINE_INSTALL_OK' in log.read_text(errors='replace'):
+                            if uefi and 'GUARANINE_OLD_EFI_ENTRIES_OK' not in log.read_text(errors='replace'):
+                                raise ValueError('UEFI installation did not seed the old boot entries')
                             print(f'Fixture {number}: guest powered off after installation', flush=True)
                             return disk
                         break
@@ -273,8 +333,10 @@ def main():
                 # Only this disposable fixture authorizes installation onto its QEMU disk.
                 installer = fixture()
                 installer['stages']['boot'].append({'name': 'Install the disposable worker',
-                    'files': [cli.config_file('/run/fixture-worker.yaml', cli.cloud_yaml(fixture('worker')))],
-                    'commands': ['test -f /run/fixture-wifi-ok && kairos-agent --strict-validation manual-install '
+                    'files': [cli.config_file('/run/fixture-worker.yaml', cli.cloud_yaml(fixture('worker'))),
+                              cli.config_file('/run/fixture-efi-seed', EFI_SEED, 0o700)],
+                    'commands': ['test -f /run/fixture-wifi-ok && sh /run/fixture-efi-seed && '
+                                 'kairos-agent --strict-validation manual-install '
                                  '--device /dev/vda /dev/stdin < /run/fixture-worker.yaml']})
                 with timed('Worker installer ISO build'):
                     install_iso = cli.build_image(installer, 'iso', directory / 'install', source)
@@ -283,9 +345,10 @@ def main():
                     boot(worker, directory, 6)
                     print('BIOS worker suite passed: installed, powered off and rebooted with its configuration.', flush=True)
                 if suite in ('all', 'worker-uefi'):
-                    worker = boot(install_iso, directory, 7, install=True, uefi=True)
-                    boot(worker, directory, 8, uefi=True)
-                    print('UEFI worker suite passed: installed, powered off and rebooted with its configuration.', flush=True)
+                    firmware = directory / 'worker-uefi.fd'
+                    worker = boot(install_iso, directory, 7, install=True, uefi=True, firmware=firmware)
+                    boot(worker, directory, 8, uefi=True, firmware=firmware)
+                    print('UEFI worker suite passed: Kairos took priority over old entries and booted with its configuration.', flush=True)
                 install_iso.unlink()
         except Exception:
             # This harness creates disposable credentials only. Keep failed CI diagnosable.

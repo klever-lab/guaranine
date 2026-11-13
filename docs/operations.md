@@ -34,7 +34,9 @@ The worker command reads the operator's local `tailscale status --json` and wait
 
 These names and tags identify candidates; they do not replace the SSH fingerprint verification or live-media check in the [worker installation procedure](../SETUP.md#install-a-worker).
 
-Laptop names are suggested from DMI model information, with a suffix when a name already exists in Kubernetes or private operator outputs. Installation is issued once after disk confirmation. A lost installation connection leaves the outcome uncertain; the command can still confirm success if the installed worker subsequently joins. It waits up to ten minutes for Ready and requires a Tailscale internal address before reporting success. The [resume command](../SETUP.md#install-a-worker) performs only that verification, using saved operator outputs and pinned controller SSH; it does not require an unexpired installer key or contact the laptop for installation.
+Before erasing a worker disk, the CLI checks UEFI boot tools and firmware access. Old USBs missing the required tool stop with an update instruction. It also refuses installation if another attached device has partition names or filesystem labels used by Kairos: the native installer resolves those labels globally and could otherwise format the wrong device. The selected disk may already contain Kairos labels.
+
+Laptop names are suggested from DMI model information, with a suffix when a name already exists in Kubernetes or private operator outputs. Installation is issued once after disk confirmation. A definite installer error stops with a private diagnostic log; it does not show reboot instructions or wait for Ready. SSH transport loss or timeout leaves the outcome uncertain; the command can still confirm success if the installed worker subsequently joins. It waits up to ten minutes for Ready and requires a Tailscale internal address before reporting success. The [resume command](../SETUP.md#install-a-worker) performs only that verification, using saved operator outputs and pinned controller SSH; it does not require an unexpired installer key or contact the laptop for installation.
 
 ## Retire a worker
 

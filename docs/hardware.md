@@ -6,6 +6,8 @@ Use a 2.4-GHz WPA2-Personal network with 802.11g clients enabled for this mixed 
 
 New laptop ISOs and installed workers enable `efi=debug` by default so EFI startup diagnostics can be photographed without editing GRUB. The native worker profile owns the value; AuroraBoot appends the same value to live boot entries. Updating an existing USB follows the [image rebuild procedure](operations.md#image-batches-and-retries).
 
+On UEFI workers, a native `after-install` hook registers **Kairos** for the installed disk's `\EFI\boot\bootx64.efi`, places it first in the firmware boot order and clears an overriding one-time boot choice. Existing entries are preserved. The hook verifies the partition GUID and loader path before allowing poweroff; `strict: true` makes hook errors fatal. BIOS workers keep the native BIOS bootloader path.
+
 ## Laptop models
 
 These model names are confirmed by the operator. Coverage targets their factory Wi-Fi options, including variants that cannot be identified while the laptops are powered off.
@@ -25,7 +27,7 @@ The earlier Toshiba series guide also contains an RTL8192E regulatory entry. Tha
 
 The [image recipe](../kairos/Dockerfile) rejects missing kernel modules, chipset PCI aliases or required firmware paths before a registration key is issued. It places Intel firmware at the names requested by the pinned kernel and extracts checksum-pinned Broadcom `b43` firmware with upstream `b43-fwcutter`. Atheros PCI `ath9k` radios need no external Wi-Fi firmware. Only firmware bundles needed by the documented inventory are copied; unrelated radio families are excluded. Adding firmware cannot supply a missing kernel driver.
 
-The [boot checks](../scripts/test-private-images.py) exercise BIOS/UEFI USB boot, an older CPU baseline, installation and reboot, plus WPA2 association, DHCP and AP outage recovery with `mac80211_hwsim`. They also check distinct live SSH identities, the controller's missing-data-volume guard, persistent worker configuration and unchanged unrelated guest disks. [Development](development.md#disposable-image-checks) owns the command and CI workflow.
+The [boot checks](../scripts/test-private-images.py) exercise BIOS/UEFI USB boot, an older CPU baseline, installation and reboot, plus WPA2 association, DHCP and AP outage recovery with `mac80211_hwsim`. The UEFI worker case seeds old Ubuntu/Linux/Windows entries and a stale one-time boot choice, retains the same firmware state across installation and reboot, and checks that the registered Kairos entry actually booted. Installation needs an explicit success marker before a VM shutdown counts as success. The checks also cover distinct live SSH identities, the controller's missing-data-volume guard, persistent worker configuration and unchanged unrelated guest disks. [Development](development.md#disposable-image-checks) owns the command and CI workflow.
 
 Recorded result on 2026-11-13 UTC: the [full four-suite run](https://github.com/klever-lab/guaranine/actions/runs/43349091458) passed all eight guests, including Wi-Fi after BIOS and UEFI worker installation, default EFI diagnostics, temporary live Tailscale state and its absence after installation. This is a software qualification record. The installed physical cards and their RF behavior have not been measured; lid/suspend behavior and real WAN recovery also need hardware/live-network checks. Keep those pending checks distinct from the simulated-radio and firmware-path results.
 

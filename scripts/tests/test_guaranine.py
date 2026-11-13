@@ -179,6 +179,8 @@ class PrivateConfigTests(unittest.TestCase):
         result = subprocess.CompletedProcess([], 1, stdout='SECRET', stderr='PRIVATE')
         with patch.object(cli.subprocess, 'run', return_value=result), self.assertRaises(ValueError) as error:
             cli.private_command(['tool'], self.root, data='TOKEN')
+        self.assertIsInstance(error.exception, cli.PrivateCommandError)
+        self.assertEqual(error.exception.returncode, 1)
         self.assertNotIn('SECRET', str(error.exception))
         log = next(self.root.glob('error-*.log'))
         self.assertEqual(log.stat().st_mode & 0o777, 0o600)
@@ -282,8 +284,10 @@ class InstallationTests(unittest.TestCase):
         def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
         def command(args, directory, **kwargs):
             if 'test -f /run/cos/live_mode' in args[-1]: return 'live'
+            if args[-1].startswith('if test ! -d /sys/firmware/efi'): return 'uefi'
             if 'cat /sys/class/dmi/id/product_name' in args[-1]: return 'Inspiron 5558\n'
             if args[-1] == 'k3s kubectl get nodes -o json': return '{"items":[]}'
+            if args[-1].startswith('lsblk '): return json.dumps({'blockdevices': [disk]})
             if args[-1].startswith('timeout 600'):
                 return json.dumps({'status': {'conditions': [{'type': 'Ready', 'status': 'True'}],
                     'addresses': [{'type': 'InternalIP', 'address': '100.64.0.9'}]}})
@@ -314,7 +318,7 @@ class InstallationTests(unittest.TestCase):
             with (self.subTest(answer=answer), patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
                   patch.object(cli, 'verified_connection', verified),
                   patch.object(cli, 'read_disks', side_effect=disks),
-                  patch.object(cli, 'private_command', side_effect=['live', 'Inspiron 5558', '{"items":[]}']) as calls,
+                  patch.object(cli, 'private_command', side_effect=['live', 'uefi', 'Inspiron 5558', '{"items":[]}']) as calls,
                   patch('builtins.input', side_effect=['worker-one', '1', answer]),
                   contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError)):
                 cli.install_worker(None)
@@ -345,6 +349,7 @@ class InstallationTests(unittest.TestCase):
                     'TailscaleIPs': ['100.64.0.8']}}})
             remote = arguments[-1]
             if 'live_mode' in remote: return 'live'
+            if remote.startswith('if test ! -d /sys/firmware/efi'): return 'uefi'
             if remote == 'cat /sys/class/dmi/id/product_name': return 'Inspiron 5558\n'
             if remote == 'k3s kubectl get nodes -o json':
                 return '{"items":[{"metadata":{"name":"inspiron-5558"}}]}'
@@ -372,6 +377,86 @@ class InstallationTests(unittest.TestCase):
         self.assertIn('inspiron-5558-3 is Ready at 100.64.0.90', output.getvalue())
         self.assertNotIn(token, output.getvalue())
         self.assertFalse(any('IPv4 address' in prompt or 'fingerprint shown' in prompt for prompt in prompts))
+
+    def test_unusable_uefi_stops_before_disk_selection_or_installation(self):
+        self.worker_setup()
+        @contextlib.contextmanager
+        def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
+        for status, message in [('outdated', 'USB needs updating'), ('unavailable', 'unavailable or read-only')]:
+            with (self.subTest(status=status), patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
+                  patch.object(cli, 'verified_connection', verified),
+                  patch.object(cli, 'private_command', side_effect=['live', status]) as calls,
+                  patch.object(cli, 'read_disks') as disks, patch('builtins.input') as prompt,
+                  self.assertRaisesRegex(ValueError, message)):
+                cli.install_worker(None)
+            disks.assert_not_called()
+            prompt.assert_not_called()
+            self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
+
+    def test_native_label_collisions_on_other_disks_stop_installation(self):
+        labels = [('label', value) for value in ('COS_GRUB', 'COS_OEM', 'COS_STATE', 'COS_RECOVERY', 'COS_PERSISTENT')]
+        labels += [('partlabel', value) for value in ('efi', 'oem', 'state', 'recovery', 'persistent')]
+        for field, value in labels:
+            target = {'path': '/dev/vda', 'children': [{'path': '/dev/vda1', field: value}]}
+            other = {'path': '/dev/vdb', 'children': [{'path': '/dev/vdb1', field: value}]}
+            with self.subTest(field=field, value=value):
+                for devices, collision in [([target], False), ([target, other], True)]:
+                    raw = json.dumps({'blockdevices': devices})
+                    with patch.object(cli, 'private_command', return_value=raw):
+                        if collision:
+                            with self.assertRaisesRegex(ValueError, '/dev/vdb1.*Nothing was erased'):
+                                cli.check_install_labels(['ssh'], self.root, '/dev/vda')
+                        else:
+                            cli.check_install_labels(['ssh'], self.root, '/dev/vda')
+
+    def test_definite_install_failure_stops_but_transport_loss_can_still_be_verified(self):
+        disk = self.worker_setup()
+        @contextlib.contextmanager
+        def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
+        for code in (1, 255, None):
+            name = 'failure-' + str(code).lower()
+            output = io.StringIO()
+            def command(arguments, _directory, **_kwargs):
+                remote = arguments[-1]
+                if 'live_mode' in remote: return 'live'
+                if remote.startswith('if test ! -d /sys/firmware/efi'): return 'uefi'
+                if remote == 'cat /sys/class/dmi/id/product_name': return 'Inspiron 5558'
+                if remote == 'k3s kubectl get nodes -o json': return '{"items":[]}'
+                if remote.startswith('lsblk '): return json.dumps({'blockdevices': [disk]})
+                if 'server/agent-token' in remote: return 'K10' + 'ab' * 32 + '::agent:DISPOSABLE'
+                self.assertIn('manual-install', remote)
+                if code is None: raise subprocess.TimeoutExpired(['ssh'], 1800)
+                raise cli.PrivateCommandError(code, self.root / 'private.log')
+            with (self.subTest(code=code), patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
+                  patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
+                  patch.object(cli, 'private_command', side_effect=command),
+                  patch.object(cli, 'wait_for_worker') as wait,
+                  patch('builtins.input', side_effect=[name, '1', 'ERASE']), contextlib.redirect_stdout(output)):
+                if code == 1:
+                    with self.assertRaisesRegex(ValueError, 'Installation failed.*Keep the USB connected'):
+                        cli.install_worker(None)
+                    wait.assert_not_called()
+                    self.assertNotIn('remove the USB', output.getvalue())
+                else:
+                    cli.install_worker(None)
+                    wait.assert_called_once()
+                    self.assertIn('Could not confirm installation', output.getvalue())
+
+    def test_conflicting_labels_prevent_native_install_even_after_confirmation(self):
+        disk = self.worker_setup()
+        @contextlib.contextmanager
+        def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
+        inventory = {'blockdevices': [disk, {'path': '/dev/vdc', 'children': [
+            {'path': '/dev/vdc1', 'partlabel': 'efi'}]}]}
+        with (patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
+              patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
+              patch.object(cli, 'private_command', side_effect=[
+                  'live', 'uefi', 'Inspiron 5558', '{"items":[]}', json.dumps(inventory)]) as calls,
+              patch('builtins.input', side_effect=['worker-one', '1', 'ERASE']),
+              contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, '/dev/vdc1.*Nothing was erased')):
+            cli.install_worker(None)
+        self.assertFalse((self.root / 'nodes/worker-one').exists())
+        self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
 
     def test_ready_check_can_resume_without_a_valid_installer_key(self):
         self.worker_setup()
