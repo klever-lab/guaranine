@@ -1,0 +1,53 @@
+# Operations
+
+Use the existing operator files created in [SETUP.md](../SETUP.md#operator-files); set `GUARANINE_OPERATOR_DIR` to that directory in a new shell. Do not rerun initialization over an existing deployment.
+
+## Check the cluster
+
+```bash
+export KUBECONFIG="$GUARANINE_OPERATOR_DIR/kubeconfig"
+kubectl get nodes -o wide
+kubectl get pods --all-namespaces -o wide
+```
+
+Use the [networking guide](security.md) when checking addresses, access policy or connectivity. The [availability limits](architecture.md#workloads-and-availability) matter when a worker disappears or workloads need to move.
+
+## Image batches and retries
+
+Rerunning `./guaranine iso` reuses a completed image while its registration key is valid. It retains the original captured network/profile; changing the operator's active Wi-Fi does not modify an existing ISO. To change networks or start a new batch, revoke the old key in Tailscale, archive the private `installer/` directory and build again. A key-only retry reuses the same key.
+
+Incomplete builds preserve outputs and protected logs. Inspect them before revoking the batch key, archiving outputs and retrying. Failed subprocesses can also leave protected `error-*.log` files. Do not put diagnostic contents in public issues or logs. The CLI does not automatically repeat key-creation POSTs after ambiguous transport failures; inspect the live Tailscale state before retrying.
+
+The same completed-image reuse rule applies to `./guaranine controlplane`, under `nodes/guaranine-controlplane/`. An incomplete controller image needs inspection before another build. `bootstrap` refuses to overwrite an existing kubeconfig or `controlplane-known-hosts`; inspect those files instead of treating it as a repeatable repair command.
+
+For worker retries, follow the [installation boundaries](../SETUP.md#install-a-worker), including the check after an interrupted remote install. [Enrollment limits](security.md#private-material-and-enrollment) explain why ending a batch does not retire its devices.
+
+## Retire a worker
+
+Use `kubectl cordon NAME` and `kubectl drain NAME --ignore-daemonsets` before removal. Wait for replacement workloads, and resolve spare-capacity, disruption-budget and storage blockers. Fence the machine before deleting its Kubernetes and Tailscale identities or reusing its name.
+
+A disconnected machine may still be running. WAN disconnection is not fencing.
+
+## Backup
+
+Use [native K3s SQLite backup/restore](https://docs.k3s.io/datastore/backup-restore), including the server token. For a consistent full server-directory copy, briefly stop K3s, archive `server/` from the mounted `/var/lib/rancher/k3s`, and restart K3s in an `EXIT` trap. Stream the archive over pinned Tailscale SSH into a mode-0600 operator file.
+
+Back up operator configuration/keys, Terraform state and application volumes separately, outside the student subscription. Back up Terraform state after every apply. A retained disk is not an off-machine backup.
+
+## Restore on another cloud VM
+
+Fence the old server first. Boot the same prepared Kairos base on a replacement cloud VM, with fresh Tailscale registration if required. Keep K3s stopped while attaching and mounting the retained/restored `GUARANINE_DATA` volume. If the disk was lost, prepare an empty ext4 replacement with that label before restoring. Never initialize or format a volume containing recovery data.
+
+Restore the server directory with K3s stopped and preserve the server token from the backup, then start K3s. Verify API health, worker connectivity and application data. Update both the kubeconfig endpoint and private `operator.yaml` endpoint for the replacement's tailnet address, and verify its SSH fingerprint through the protected console before replacing the pinned controller host key. Keep the old server fenced throughout recovery.
+
+## Migrate an older deployment
+
+Replacing an earlier OS/cluster deployment is a fresh-cluster migration. Create a new `guaranine-kairos` resource prefix and fresh Terraform state. Preserve the existing deployment, state, cluster secrets, boot/data disks and an off-machine datastore backup for rollback. Do not point the new configuration at the old state or format its data disk. Kubernetes manifests and application data need explicit migration; replacing an OS image does not migrate a cluster.
+
+Fence the previous controller before restoring its cluster elsewhere. Keep its recovery copy until the replacement and backups are verified. Retained-disk cleanup requires deliberate scope and verified backups; never bypass retention by deleting Terraform state or targeting resources. [History](history.md) identifies superseded implementations so their commands are not mistaken for current procedures.
+
+## OS updates
+
+Use native `kairos-agent upgrade` with a tested image produced from this recipe and a pinned digest or private local image. Keep secrets in OEM configuration, outside the public base. Verify active/passive rollback and persistent data after upgrades. Terraform seed-image changes do not upgrade an installed OS; see [controller disk ownership](architecture.md#controller-resources).
+
+Check the [hardware qualification](hardware.md#qualification-and-limits) whenever the base image, kernel, firmware or network configuration changes.
