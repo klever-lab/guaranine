@@ -272,8 +272,9 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
                 while time.monotonic() < deadline:
                     status = process.poll()
                     if status is not None:
-                        if install and status == 0 and 'GUARANINE_INSTALL_OK' in log.read_text(errors='replace'):
-                            if uefi and 'GUARANINE_OLD_EFI_ENTRIES_OK' not in log.read_text(errors='replace'):
+                        text = log.read_text(errors='replace')
+                        if install and status == 0 and re.search(r'^GUARANINE_INSTALL_OK\r?$', text, re.M):
+                            if uefi and not re.search(r'^GUARANINE_OLD_EFI_ENTRIES_OK\r?$', text, re.M):
                                 raise ValueError('UEFI installation did not seed the old boot entries')
                             print(f'Fixture {number}: guest powered off after installation', flush=True)
                             return disk

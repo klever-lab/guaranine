@@ -4,6 +4,7 @@ import base64
 import contextlib
 import copy
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -20,6 +21,30 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import guaranine as cli
+
+
+class ImageHarnessTests(unittest.TestCase):
+    def test_poweroff_requires_a_completed_install_marker_not_logged_command_text(self):
+        spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        for marker, success in [('echo GUARANINE_INSTALL_OK\n', False),
+                                 ('GUARANINE_INSTALL_OK extra\n', False),
+                                 ('GUARANINE_INSTALL_OK\r\n', True)]:
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                def qemu(_arguments, **kwargs):
+                    kwargs['stdout'].write(marker.encode())
+                    kwargs['stdout'].flush()
+                    return SimpleNamespace(poll=lambda: 0, terminate=lambda: None, wait=lambda **_kwargs: 0)
+                with (patch.object(harness.subprocess, 'Popen', side_effect=qemu),
+                      contextlib.redirect_stdout(io.StringIO())):
+                    if success:
+                        self.assertEqual(harness.boot(directory / 'fixture.iso', directory, 1, install=True),
+                                         directory / 'data-1.raw')
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'boot assertions failed'):
+                            harness.boot(directory / 'fixture.iso', directory, 1, install=True)
 
 
 class PrivateConfigTests(unittest.TestCase):
