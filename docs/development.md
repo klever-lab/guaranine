@@ -37,7 +37,7 @@ With privileged Docker access, `sudo`, `qemu-system-x86_64` and OVMF installed, 
 uv run --no-project --with-requirements requirements.txt python scripts/test-private-images.py
 ```
 
-The [image harness](../scripts/test-private-images.py) builds ISO/VHD fixtures using disposable credentials and restricted QEMU networking. Test-only access-point tools are mounted into guests, outside the production image and installed filesystem. Image qualification coverage, the recorded result and remaining physical/live-network checks belong in [Laptop hardware](hardware.md#qualification-and-limits).
+The [image harness](../scripts/test-private-images.py) builds ISO/VHD fixtures using disposable credentials and restricted QEMU networking. Test-only access-point tools are mounted into guests, outside the production image and installed filesystem. The controller fixture reports immucore mount failures to its serial log; an unexpected reboot still fails the check. Image qualification coverage, the recorded result and remaining physical/live-network checks belong in [Laptop hardware](hardware.md#qualification-and-limits).
 
 The default runs all eight guests. Use `--suite live`, `--suite controller`, `--suite worker-bios` or `--suite worker-uefi` to run only the three live boots, controller data guard, BIOS install/reboot pair or UEFI install/reboot pair. Every suite builds its own disposable base/tools/media. The live suite keeps its three-way SSH identity comparison in one process; all suites retain guest disk hashing. Logs include base, tools, media and guest durations, plus each guest's KVM/TCG and CPU selection. Legacy CPU coverage always uses TCG.
 

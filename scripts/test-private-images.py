@@ -180,6 +180,11 @@ def fixture(role=None):
         'do test -s "/usr/lib/firmware/$firmware.zst" || exit 1; done',
     ]
     if role == 'controlplane':
+        config['stages']['mount-failure'] = [{
+            'name': 'Report disposable controller mount failure',
+            'commands': ['printf "%s\\n%s\\n" "$IMMUCORE_MOUNT_FAILURE_STEP" "$IMMUCORE_MOUNT_FAILURE" '
+                         '> /dev/ttyS0; journalctl -b -u immucore --no-pager > /dev/ttyS0'],
+        }]
         checks += ['! mountpoint -q /var/lib/rancher/k3s', '! systemctl is-active --quiet k3s']
     elif role == 'worker':
         checks += ['! test -f /run/cos/live_mode', 'test "$(hostname)" = fixture-worker',
