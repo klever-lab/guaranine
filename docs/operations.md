@@ -16,6 +16,8 @@ Use the [networking guide](security.md) when checking addresses, access policy o
 
 Rerunning `./guaranine iso` reuses a completed image while its registration key is valid. It retains the original captured network/profile; changing the operator's active Wi-Fi does not modify an existing ISO. To change networks or start a new batch, revoke the old key in Tailscale, archive the private `installer/` directory and build again. A key-only retry reuses the same key.
 
+The USB confirmation displays the full required text on its own line and explains a mismatch. Skipping or cancelling flashing leaves the ISO saved and prints the retry command; laptop boot instructions appear only after a successful USB write. Flashing uses `dd` with synchronized block writes and periodic byte/rate statistics, followed by a final flush before reporting success; updates can pause while USB I/O is pending.
+
 Incomplete builds preserve outputs and protected logs. Inspect them before revoking the batch key, archiving outputs and retrying. Failed subprocesses can also leave protected `error-*.log` files. Do not put diagnostic contents in public issues or logs. The CLI does not automatically repeat key-creation POSTs after ambiguous transport failures; inspect the live Tailscale state before retrying.
 
 The same completed-image reuse rule applies to `./guaranine controlplane`, under `nodes/guaranine-controlplane/`. An incomplete controller image needs inspection before another build. `bootstrap` refuses to overwrite an existing kubeconfig or `controlplane-known-hosts`; inspect those files instead of treating it as a repeatable repair command.

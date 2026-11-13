@@ -137,13 +137,13 @@ def usb_disks(image):
 
 def flash_iso(image):
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return
+        return False
     image = protected(image)
     try:
         disks = usb_disks(image)
         if not disks:
             print('No suitable USB drives found; the ISO is saved for later flashing.')
-            return
+            return False
         print('\nFlash the ISO to a USB drive:')
         print('0. Skip flashing (default)')
         for number, disk in enumerate(disks, 1):
@@ -152,16 +152,21 @@ def flash_iso(image):
                   f'{disk["size"] / 2**30:.1f} GiB | {disk.get("serial") or "No serial"} | {labels or "No label"}')
         choice = input('USB drive number (Enter to skip): ').strip()
         if choice in ('', '0'):
-            return
+            return False
         if not choice.isdecimal() or not 1 <= int(choice) <= len(disks):
             raise ValueError('Select a listed USB drive; nothing was flashed')
         selected = disks[int(choice) - 1]
         path = selected['path']
         confirmation = f'ERASE {path}'
         print(f'ALL DATA on {path} will be erased and replaced with {image.name}.')
-        if input(f'Type {confirmation} to flash, or anything else to cancel: ').strip() != confirmation:
-            print('Flashing cancelled.')
-            return
+        print('Type the ENTIRE line below, including the space and device path:')
+        print(f'\n  {confirmation}\n')
+        answer = input('Type the full line here (Enter to cancel): ').strip()
+        if answer != confirmation:
+            if answer:
+                print(f'Confirmation did not match. The required text is: {confirmation}')
+            print(f'Flashing cancelled. Nothing was written to {path}.')
+            return False
         if selected not in usb_disks(image):
             raise ValueError('The selected USB drive changed; nothing was flashed')
         for member in [*selected.get('children', []), selected]:
@@ -172,11 +177,16 @@ def flash_iso(image):
                 or any(mount for member in [current, *current.get('children', [])]
                        for mount in member.get('mountpoints', []))):
             raise ValueError('The selected USB drive changed or is still mounted; nothing was flashed')
-        subprocess.run(['sudo', '--', 'dd', f'if={image}', f'of={path}', 'bs=4M', 'status=progress', 'conv=fsync,nocreat'],
+        print(f'Writing {image.stat().st_size / 2**20:.1f} MiB to {path}; progress appears below.', flush=True)
+        print('Wait for the "Flashed" success message before removing the USB.', flush=True)
+        subprocess.run(['sudo', '--', 'dd', f'if={image}', f'of={path}', 'bs=4M', 'oflag=dsync',
+                        'status=progress', 'conv=fsync,nocreat'],
                        check=True, timeout=900)
         print(f'Flashed {image.name} to {path}. You can now remove the USB drive.')
+        return True
     except (EOFError, KeyboardInterrupt):
         print(f'\nFlashing cancelled; the ISO is saved at {image}.')
+        return False
 
 
 def operator_directory():
@@ -423,8 +433,11 @@ def prepare_iso(_args):
     print(f'Private shared ISO ready: {image}')
     expires = datetime.fromisoformat(record['expires'].replace('Z', '+00:00')).astimezone()
     print(f'New Tailscale registrations expire on {expires:%A, %B %-d, %Y at %-I:%M:%S %p %Z}.')
-    flash_iso(image)
-    print('Wi-Fi connects automatically. Run ./guaranine worker on the operator computer after booting the laptop.')
+    if flash_iso(image):
+        print('Boot the laptop from this USB. Wi-Fi connects automatically.')
+        print('Then run ./guaranine worker on this operator computer.')
+    else:
+        print('USB flashing was not completed. Run ./guaranine iso again to write the saved ISO.')
 
 
 def prepare_controlplane(_args):

@@ -283,6 +283,22 @@ class InstallationTests(unittest.TestCase):
         image.assert_not_called()
         self.assertFalse((self.root / 'installer').exists())
 
+    def test_reused_iso_only_prints_laptop_steps_after_usb_write(self):
+        self.worker_setup()
+        image = cli.output_directory(self.root / 'installer/image') / 'guaranine-kairos.iso'
+        cli.private_write(image, 'DISPOSABLE-ISO')
+        for flashed in (False, True):
+            output = io.StringIO()
+            with (self.subTest(flashed=flashed), patch.object(cli, 'flash_iso', return_value=flashed),
+                  patch.object(cli, 'build_base') as build, patch.object(cli, 'mint') as mint,
+                  contextlib.redirect_stdout(output)):
+                cli.prepare_iso(None)
+            build.assert_not_called()
+            mint.assert_not_called()
+            self.assertEqual('Boot the laptop from this USB.' in output.getvalue(), flashed)
+            self.assertEqual('./guaranine worker' in output.getvalue(), flashed)
+            self.assertEqual('USB flashing was not completed.' in output.getvalue(), not flashed)
+
     def test_ssh_hostkey_requires_physical_fingerprint_and_is_pinned(self):
         blob = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\x11' * 32
         raw = '100.64.0.8 ssh-ed25519 ' + base64.b64encode(blob).decode() + '\n'
@@ -382,13 +398,25 @@ class USBFlashingTests(unittest.TestCase):
         for answers in ([''], ['0'], ['1', 'no'], [EOFError], [KeyboardInterrupt]):
             with (self.subTest(answers=answers), patch.object(cli, 'usb_disks', return_value=[self.disk]),
                   patch('builtins.input', side_effect=answers), patch.object(cli.subprocess, 'run') as run):
-                cli.flash_iso(self.image)
+                self.assertFalse(cli.flash_iso(self.image))
                 run.assert_not_called()
         with (patch.object(cli, 'usb_disks', return_value=[]), patch('builtins.input') as prompt,
               patch.object(cli.subprocess, 'run') as run):
             cli.flash_iso(self.image)
         prompt.assert_not_called()
         run.assert_not_called()
+
+    def test_partial_confirmation_shows_full_required_text_without_writing(self):
+        with (patch.object(cli, 'usb_disks', return_value=[self.disk]),
+              patch('builtins.input', side_effect=['1', 'ERASE']),
+              patch.object(cli.subprocess, 'run') as run):
+            self.assertFalse(cli.flash_iso(self.image))
+        run.assert_not_called()
+        output = self.output.getvalue()
+        self.assertIn('ENTIRE line below, including the space and device path:', output)
+        self.assertIn('\n  ERASE /dev/sdy\n', output)
+        self.assertIn('Confirmation did not match. The required text is: ERASE /dev/sdy', output)
+        self.assertIn('Nothing was written to /dev/sdy.', output)
 
     def test_invalid_choices_never_unmount_or_write(self):
         for choice in ('2', '-1', 'invalid'):
@@ -406,11 +434,14 @@ class USBFlashingTests(unittest.TestCase):
         unmounted['children'][0]['mountpoints'] = []
         with (patch.object(cli, 'usb_disks', side_effect=[[self.disk, second], [self.disk, second], [unmounted]]),
               patch('builtins.input', side_effect=['2', 'ERASE /dev/sdz']), patch.object(cli.subprocess, 'run') as run):
-            cli.flash_iso(self.image)
+            self.assertTrue(cli.flash_iso(self.image))
         self.assertEqual([call.args[0] for call in run.call_args_list], [
             ['sudo', '--', 'umount', '--all-targets', '--', '/dev/sdz1'],
-            ['sudo', '--', 'dd', f'if={self.image}', 'of=/dev/sdz', 'bs=4M', 'status=progress', 'conv=fsync,nocreat']])
+            ['sudo', '--', 'dd', f'if={self.image}', 'of=/dev/sdz', 'bs=4M', 'oflag=dsync',
+             'status=progress', 'conv=fsync,nocreat']])
         self.assertIn('DISPOSABLE-USB-B', self.output.getvalue())
+        self.assertIn('Writing ', self.output.getvalue())
+        self.assertIn('Wait for the "Flashed" success message', self.output.getvalue())
         self.assertIn('Flashed guaranine-kairos.iso to /dev/sdz.', self.output.getvalue())
 
     def test_device_changes_before_or_after_unmount_never_start_a_write(self):
