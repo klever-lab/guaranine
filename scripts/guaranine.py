@@ -406,26 +406,57 @@ fi
     return image
 
 
+def iso_source():
+    """Identify the checkout and actual public inputs, including local edits."""
+    commit = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
+                            check=True, capture_output=True, text=True, timeout=10).stdout.strip()
+    sources = hashlib.sha256()
+    paths = [ROOT / 'guaranine', ROOT / 'scripts/guaranine.py', ROOT / 'requirements.txt',
+             *sorted((ROOT / 'kairos').rglob('*'))]
+    for path in paths:
+        if path.is_file():
+            sources.update(str(path.relative_to(ROOT)).encode() + b'\0' + bytes.fromhex(digest(path)))
+    return {'commit': commit, 'sources_sha256': sources.hexdigest()}
+
+
+def record_iso_source(image, source):
+    if iso_source() != source:
+        raise ValueError('The source changed while building the ISO; rerun ./guaranine iso before flashing')
+    private_write(image.parent / 'source.json', json.dumps(source, indent=2) + '\n')
+
+
 def prepare_iso(_args):
     directory = operator_directory()
     settings = operator_settings()
     installer = directory / 'installer'
     key, config_path = installer / 'tailscale-key.json', installer / 'boot.yaml'
     image = installer / 'image/guaranine-kairos.iso'
+    current_source = iso_source()
     if image.exists():
         record = auth_record(key, reusable=True)
         protected(image)
-        if getattr(_args, 'rebuild', False):
+        saved_source = None
+        metadata = image.parent / 'source.json'
+        if metadata.exists():
+            try:
+                saved_source = json.loads(protected(metadata).read_text())
+            except (json.JSONDecodeError, UnicodeError):
+                pass
+        if getattr(_args, 'rebuild', False) or saved_source != current_source:
+            print('Rebuilding the saved ISO from the current checkout.' if getattr(_args, 'rebuild', False)
+                  else 'Saved ISO source is outdated or unknown; rebuilding automatically.')
             source = build_base(directory)
             config = yaml.safe_load(protected(config_path).read_text())
             auth_record(key, reusable=True)
+            replacement = build_image(config, 'iso', installer / ('image-build-' + str(time.time_ns())), source)
+            record_iso_source(replacement, current_source)
+            auth_record(key, reusable=True)
             previous = installer / ('image-previous-' + str(time.time_ns()))
             image.parent.rename(previous)
+            replacement.parent.rename(image.parent)
             print(f'Previous ISO and build logs saved at {previous}')
-            image = build_image(config, 'iso', installer / 'image', source)
-            auth_record(key, reusable=True)
         else:
-            print('Reusing the saved ISO. Use ./guaranine iso --rebuild to apply updated boot defaults.')
+            print('Reusing the saved ISO; its commit and source files match the current checkout.')
     else:
         if installer.exists() and set(installer.iterdir()) != {key}:
             raise ValueError(f'{installer} contains an incomplete build; inspect its protected logs and revoke '
@@ -440,8 +471,10 @@ def prepare_iso(_args):
         config = machine_config(record['key'], (directory / 'ssh_key.pub').read_text(), wifi=wifi)
         private_write(config_path, cloud_yaml(config))
         image = build_image(config, 'iso', installer / 'image', source)
+        record_iso_source(image, current_source)
         auth_record(key, reusable=True)
     print(f'Private shared ISO ready: {image}')
+    print(f'ISO source: commit {current_source["commit"][:12]}, build inputs {current_source["sources_sha256"][:12]}.')
     expires = datetime.fromisoformat(record['expires'].replace('Z', '+00:00')).astimezone()
     print(f'New Tailscale registrations expire on {expires:%A, %B %-d, %Y at %-I:%M:%S %p %Z}.')
     if flash_iso(image):
@@ -743,8 +776,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('init', help='Create private Kairos operator files once').set_defaults(
         action=lambda _args: initialize(operator_directory()))
-    iso = commands.add_parser('iso', help='Build/reuse a private Wi-Fi-capable ISO and offer USB flashing')
-    iso.add_argument('--rebuild', action='store_true', help='Rebuild using the saved Wi-Fi profile and unexpired registration key')
+    iso = commands.add_parser('iso', help='Build/update a private Wi-Fi-capable ISO and offer USB flashing')
+    iso.add_argument('--rebuild', action='store_true', help='Force a rebuild even when the saved ISO source matches')
     iso.set_defaults(action=prepare_iso)
     commands.add_parser('controlplane', help='Build/reuse the private Azure VHD').set_defaults(action=prepare_controlplane)
     commands.add_parser('bootstrap', help='Connect to the prepared cloud server and save its kubeconfig').set_defaults(action=bootstrap)

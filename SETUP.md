@@ -4,7 +4,7 @@ Run these commands from the repository root on a Linux operator computer. Use th
 
 ## Prerequisites
 
-Install Python 3.12+, `uv`, Docker, `sudo`, OpenSSH client tools, Tailscale and `nmcli`. Image building needs privileged Docker access and scratch space for uncompressed disk images; USB flashing also uses sudo. Azure operations need the Terraform version in [.terraform-version](.terraform-version), Azure CLI, AzCopy and `qemu-img`. Cluster checks use a `kubectl` version matching the pinned K3s release in [kairos/versions.json](kairos/versions.json).
+Install Git, Python 3.12+, `uv`, Docker, `sudo`, OpenSSH client tools, Tailscale and `nmcli`. Image building needs privileged Docker access and scratch space for uncompressed disk images; USB flashing also uses sudo. Azure operations need the Terraform version in [.terraform-version](.terraform-version), Azure CLI, AzCopy and `qemu-img`. Cluster checks use a `kubectl` version matching the pinned K3s release in [kairos/versions.json](kairos/versions.json).
 
 Before building laptop media, read the [hardware inventory, network requirements and qualification limits](docs/hardware.md). For an existing deployment, complete the [migration prerequisites](docs/operations.md#migrate-an-older-deployment) before provisioning a replacement.
 

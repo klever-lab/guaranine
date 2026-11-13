@@ -49,6 +49,48 @@ class PrivateConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError): cli.protected(path)
         with self.assertRaises(ValueError): cli.external(ROOT / 'private')
 
+    def test_iso_source_tracks_commits_and_distinct_uncommitted_build_inputs(self):
+        paths = ['guaranine', 'scripts/guaranine.py', 'requirements.txt',
+                 'kairos/Dockerfile', 'kairos/worker.yaml']
+        for relative in paths:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('DISPOSABLE source\n')
+        def git(*arguments):
+            return subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(self.root),
+                *arguments], check=True, capture_output=True, text=True).stdout.strip()
+        git('init', '--quiet')
+        git('add', '.')
+        def commit():
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '--quiet', '--allow-empty', '-m', 'Fixture')
+        commit()
+        with patch.object(cli, 'ROOT', self.root):
+            original = cli.iso_source()
+            self.assertEqual(original['commit'], git('rev-parse', 'HEAD'))
+            self.assertEqual(cli.iso_source(), original)
+            for relative in paths:
+                with self.subTest(path=relative):
+                    path = self.root / relative
+                    contents = path.read_text()
+                    path.write_text('first uncommitted edit\n')
+                    first = cli.iso_source()
+                    path.write_text('second uncommitted edit\n')
+                    second = cli.iso_source()
+                    self.assertEqual(first['commit'], original['commit'])
+                    self.assertEqual(second['commit'], original['commit'])
+                    self.assertNotEqual(original['sources_sha256'], first['sources_sha256'])
+                    self.assertNotEqual(first['sources_sha256'], second['sources_sha256'])
+                    path.write_text(contents)
+            extra = self.root / 'kairos/new-input.yaml'
+            extra.write_text('new untracked build input\n')
+            self.assertNotEqual(cli.iso_source()['sources_sha256'], original['sources_sha256'])
+            extra.unlink()
+            self.assertEqual(cli.iso_source(), original)
+            commit()
+            self.assertNotEqual(cli.iso_source()['commit'], original['commit'])
+            self.assertEqual(cli.iso_source()['sources_sha256'], original['sources_sha256'])
+
     def test_expiry_role_and_small_clock_skew(self):
         now = datetime.now(timezone.utc)
         cli.auth_record(self.key(created=now + timedelta(seconds=0.4), expires=now + timedelta(hours=24)),
@@ -364,27 +406,119 @@ class InstallationTests(unittest.TestCase):
         self.worker_setup()
         image = cli.output_directory(self.root / 'installer/image') / 'guaranine-kairos.iso'
         cli.private_write(image, 'OLD-DISPOSABLE-ISO')
+        receipt = image.parent / 'source.json'
+        current = {'commit': 'a' * 40, 'sources_sha256': 'b' * 64}
         boot = (self.root / 'installer/boot.yaml').read_text()
         key = (self.root / 'installer/tailscale-key.json').read_text()
-        def build(config, kind, directory, source):
-            self.assertEqual(config, yaml.safe_load(boot))
-            self.assertEqual((kind, source), ('iso', 'PUBLIC-BASE'))
-            archive = list((self.root / 'installer').glob('image-previous-*'))
-            self.assertEqual(len(archive), 1)
-            self.assertEqual((archive[0] / image.name).read_text(), 'OLD-DISPOSABLE-ISO')
+        cases = [('missing metadata', None, False), ('invalid metadata', '{', False),
+                 ('invalid metadata encoding', b'\xff', False),
+                 ('new commit', json.dumps({**current, 'commit': 'c' * 40}), False),
+                 ('uncommitted edit', json.dumps({**current, 'sources_sha256': 'd' * 64}), False),
+                 ('explicit rebuild', json.dumps(current), True)]
+        for reason, previous_source, forced in cases:
+            with self.subTest(reason=reason):
+                receipt.unlink(missing_ok=True)
+                if previous_source is not None:
+                    cli.private_write(receipt, '')
+                    receipt.write_bytes(previous_source if isinstance(previous_source, bytes) else previous_source.encode())
+                image.write_text('OLD-DISPOSABLE-ISO')
+                previous_archives = set(image.parent.parent.glob('image-previous-*'))
+                def build(config, kind, directory, source):
+                    self.assertEqual(config, yaml.safe_load(boot))
+                    self.assertEqual((kind, source), ('iso', 'PUBLIC-BASE'))
+                    self.assertEqual(image.read_text(), 'OLD-DISPOSABLE-ISO')
+                    self.assertEqual(set(image.parent.parent.glob('image-previous-*')), previous_archives)
+                    cli.output_directory(directory)
+                    cli.private_write(directory / image.name, 'NEW-DISPOSABLE-ISO')
+                    return directory / image.name
+                with (patch.object(cli, 'iso_source', return_value=current),
+                      patch.object(cli, 'build_base', return_value='PUBLIC-BASE') as base,
+                      patch.object(cli, 'build_image', side_effect=build) as builder,
+                      patch.object(cli, 'mint') as mint, patch.object(cli, 'operator_wifi') as wifi,
+                      patch.object(cli, 'flash_iso', return_value=False), contextlib.redirect_stdout(io.StringIO())):
+                    cli.prepare_iso(SimpleNamespace(rebuild=forced))
+                base.assert_called_once()
+                builder.assert_called_once()
+                mint.assert_not_called()
+                wifi.assert_not_called()
+                self.assertEqual((self.root / 'installer/boot.yaml').read_text(), boot)
+                self.assertEqual((self.root / 'installer/tailscale-key.json').read_text(), key)
+                self.assertEqual(image.read_text(), 'NEW-DISPOSABLE-ISO')
+                self.assertEqual(json.loads(cli.protected(receipt).read_text()), current)
+                archives = set(image.parent.parent.glob('image-previous-*')) - previous_archives
+                self.assertEqual(len(archives), 1)
+                self.assertEqual((archives.pop() / image.name).read_text(), 'OLD-DISPOSABLE-ISO')
+
+    def test_failed_iso_rebuild_keeps_old_image_and_can_retry(self):
+        self.worker_setup()
+        image = cli.output_directory(self.root / 'installer/image') / 'guaranine-kairos.iso'
+        cli.private_write(image, 'OLD-DISPOSABLE-ISO')
+        source = {'commit': 'a' * 40, 'sources_sha256': 'b' * 64}
+        def build(_config, _kind, directory, _source):
             cli.output_directory(directory)
+            if not list(directory.parent.glob('image-build-*/build.log')):
+                cli.private_write(directory / 'build.log', 'DISPOSABLE failure diagnostics')
+                raise ValueError('DISPOSABLE failed rebuild')
             cli.private_write(directory / image.name, 'NEW-DISPOSABLE-ISO')
             return directory / image.name
-        with (patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
+        with (patch.object(cli, 'iso_source', return_value=source),
+              patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
               patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'mint') as mint,
-              patch.object(cli, 'operator_wifi') as wifi, patch.object(cli, 'flash_iso', return_value=False),
+              patch.object(cli, 'operator_wifi') as wifi, patch.object(cli, 'flash_iso', return_value=False) as flash,
               contextlib.redirect_stdout(io.StringIO())):
-            cli.prepare_iso(SimpleNamespace(rebuild=True))
+            with self.assertRaisesRegex(ValueError, 'failed rebuild'):
+                cli.prepare_iso(None)
+            flash.assert_not_called()
+            self.assertEqual(image.read_text(), 'OLD-DISPOSABLE-ISO')
+            self.assertFalse((image.parent / 'source.json').exists())
+            self.assertFalse(list(image.parent.parent.glob('image-previous-*')))
+            cli.prepare_iso(None)
         mint.assert_not_called()
         wifi.assert_not_called()
-        self.assertEqual((self.root / 'installer/boot.yaml').read_text(), boot)
-        self.assertEqual((self.root / 'installer/tailscale-key.json').read_text(), key)
         self.assertEqual(image.read_text(), 'NEW-DISPOSABLE-ISO')
+        self.assertEqual(json.loads((image.parent / 'source.json').read_text()), source)
+
+    def test_source_change_during_iso_build_never_flashes_or_certifies_output(self):
+        self.worker_setup()
+        image = cli.output_directory(self.root / 'installer/image') / 'guaranine-kairos.iso'
+        cli.private_write(image, 'OLD-DISPOSABLE-ISO')
+        source = {'commit': 'a' * 40, 'sources_sha256': 'b' * 64}
+        current = [source]
+        def build(_config, _kind, directory, _source):
+            cli.output_directory(directory)
+            cli.private_write(directory / image.name, 'MIXED-DISPOSABLE-ISO')
+            current[0] = {**source, 'sources_sha256': 'c' * 64}
+            return directory / image.name
+        with (patch.object(cli, 'iso_source', side_effect=lambda: current[0]),
+              patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
+              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'flash_iso') as flash,
+              contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError)):
+            cli.prepare_iso(None)
+        flash.assert_not_called()
+        self.assertEqual(image.read_text(), 'OLD-DISPOSABLE-ISO')
+        self.assertFalse(list(image.parent.parent.glob('*/source.json')))
+        self.assertFalse(list(image.parent.parent.glob('image-previous-*')))
+
+    def test_initial_iso_build_records_source_before_offering_flash(self):
+        self.worker_setup()
+        (self.root / 'installer/boot.yaml').unlink()
+        source = {'commit': 'a' * 40, 'sources_sha256': 'b' * 64}
+        def build(_config, kind, directory, base):
+            self.assertEqual((kind, base), ('iso', 'PUBLIC-BASE'))
+            cli.output_directory(directory)
+            image = directory / 'guaranine-kairos.iso'
+            cli.private_write(image, 'NEW-DISPOSABLE-ISO')
+            return image
+        def flash(image):
+            self.assertEqual(json.loads(cli.protected(image.parent / 'source.json').read_text()), source)
+            return False
+        with (patch.object(cli, 'iso_source', return_value=source),
+              patch.object(cli, 'operator_wifi', return_value='DISPOSABLE-WIFI'),
+              patch.object(cli, 'private_command', return_value='linux'),
+              patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
+              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'flash_iso', side_effect=flash),
+              contextlib.redirect_stdout(io.StringIO())):
+            cli.prepare_iso(None)
 
     def test_missing_wifi_firmware_stops_before_registration_key_or_media(self):
         cli.private_write(self.root / 'operator.yaml', yaml.safe_dump({
@@ -447,9 +581,12 @@ class InstallationTests(unittest.TestCase):
         self.worker_setup()
         image = cli.output_directory(self.root / 'installer/image') / 'guaranine-kairos.iso'
         cli.private_write(image, 'DISPOSABLE-ISO')
+        source = {'commit': 'a' * 40, 'sources_sha256': 'b' * 64}
+        cli.private_write(image.parent / 'source.json', json.dumps(source))
         for flashed in (False, True):
             output = io.StringIO()
             with (self.subTest(flashed=flashed), patch.object(cli, 'flash_iso', return_value=flashed),
+                  patch.object(cli, 'iso_source', return_value=source),
                   patch.object(cli, 'build_base') as build, patch.object(cli, 'mint') as mint,
                   contextlib.redirect_stdout(output)):
                 cli.prepare_iso(None)

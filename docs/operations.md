@@ -14,15 +14,17 @@ Use the [networking guide](security.md) when checking addresses, access policy o
 
 ## Image batches and retries
 
-Rerunning `./guaranine iso` reuses a completed image while its registration key is valid. It retains the original captured network/profile; changing the operator's active Wi-Fi does not modify an existing ISO. To change networks or start a new batch, revoke the old key in Tailscale, archive the private `installer/` directory and build again. A key-only retry reuses the same key.
+`./guaranine iso` records the Git commit and a hash of the public build inputs in `installer/image/source.json`, beside the ISO. It reuses the image only when both match the current checkout and its registration key is valid. A new commit, local changes to the CLI, launcher, runtime requirements or Kairos files, or missing/invalid source metadata automatically triggers a rebuild. Existing images without this record are rebuilt on their next use. The command prints the source commit and input hash before offering USB flashing.
 
-To apply updated image or boot defaults to that same network and unexpired batch, use `./guaranine iso --rebuild`. It keeps the saved Wi-Fi profile and key, saves the previous image directory, rebuilds the ISO and offers USB flashing again. An existing USB changes only after a successful flash. Builds, installation and the final Ready check show elapsed status while keeping subprocess diagnostics private.
+Rebuilds keep the saved Wi-Fi profile and unexpired registration key. Changing the operator's active Wi-Fi does not change that saved profile. To change networks or start a new batch, revoke the old key in Tailscale, archive the private `installer/` directory and build again. A key-only retry reuses the same key. `./guaranine iso --rebuild` forces a rebuild even when the source matches.
+
+Replacement images are completed before the previous image directory is archived. A failed replacement leaves the previous ISO available and its protected build logs in `installer/image-build-*`; rerunning the command retries the update. Source changes during a build stop the command before flashing. An existing USB changes only after a successful flash. Builds, installation and the final Ready check show elapsed status while keeping subprocess diagnostics private.
 
 The USB confirmation identifies the selected drive, asks for `ERASE` and explains a mismatch. Skipping or cancelling flashing leaves the ISO saved and prints the retry command; laptop boot instructions appear only after a successful USB write. Flashing uses `dd` with synchronized block writes and periodic byte/rate statistics, followed by a final flush before reporting success; updates can pause while USB I/O is pending.
 
 Incomplete builds preserve outputs and protected logs. Inspect them before revoking the batch key, archiving outputs and retrying. Failed subprocesses can also leave protected `error-*.log` files. Do not put diagnostic contents in public issues or logs. The CLI does not automatically repeat key-creation POSTs after ambiguous transport failures; inspect the live Tailscale state before retrying.
 
-The same completed-image reuse rule applies to `./guaranine controlplane`, under `nodes/guaranine-controlplane/`. An incomplete controller image needs inspection before another build. `bootstrap` refuses to overwrite an existing kubeconfig or `controlplane-known-hosts`; inspect those files instead of treating it as a repeatable repair command.
+`./guaranine controlplane` reuses a completed VHD under `nodes/guaranine-controlplane/` while its registration key is valid. An incomplete controller image needs inspection before another build. `bootstrap` refuses to overwrite an existing kubeconfig or `controlplane-known-hosts`; inspect those files instead of treating it as a repeatable repair command.
 
 For worker retries, follow the [installation boundaries](../SETUP.md#install-a-worker), including the check after an interrupted remote install. [Enrollment limits](security.md#private-material-and-enrollment) explain why ending a batch does not retire its devices.
 
