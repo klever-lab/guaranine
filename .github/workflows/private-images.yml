@@ -48,5 +48,8 @@ jobs:
         run: |
           sudo apt-get update --error-on=any
           sudo apt-get install --yes --no-install-recommends qemu-system-x86 ovmf
+          if test -c /dev/kvm; then
+            sudo chmod a+rw /dev/kvm
+          fi
       - name: Verify the selected image suite
         run: python3 scripts/test-private-images.py --suite "${{ matrix.suite }}"
