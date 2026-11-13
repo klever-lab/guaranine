@@ -4,6 +4,8 @@
 
 Use a 2.4-GHz WPA2-Personal network with 802.11g clients enabled for this mixed fleet; its older single-band cards cannot join a 5-GHz-only SSID. Disable Secure Boot for this image. Built-in Wi-Fi must work from live boot through installation and normal operation, without Ethernet, adapters or external bridges.
 
+New laptop ISOs and installed workers enable `efi=debug` by default so EFI startup diagnostics can be photographed without editing GRUB. The native worker profile owns the value; AuroraBoot appends the same value to live boot entries. Updating an existing USB follows the [image rebuild procedure](operations.md#image-batches-and-retries).
+
 ## Laptop models
 
 These model names are confirmed by the operator. Coverage targets their factory Wi-Fi options, including variants that cannot be identified while the laptops are powered off.
@@ -21,11 +23,13 @@ The earlier Toshiba series guide also contains an RTL8192E regulatory entry. Tha
 
 ## Qualification and limits
 
-The [image recipe](../kairos/Dockerfile) rejects missing kernel modules, chipset PCI aliases or required firmware paths before a registration key is issued. It places Intel firmware at the names requested by the pinned kernel and extracts checksum-pinned Broadcom `b43` firmware with upstream `b43-fwcutter`. Atheros PCI `ath9k` radios need no external Wi-Fi firmware. Adding firmware cannot supply a missing kernel driver.
+The [image recipe](../kairos/Dockerfile) rejects missing kernel modules, chipset PCI aliases or required firmware paths before a registration key is issued. It places Intel firmware at the names requested by the pinned kernel and extracts checksum-pinned Broadcom `b43` firmware with upstream `b43-fwcutter`. Atheros PCI `ath9k` radios need no external Wi-Fi firmware. Only firmware bundles needed by the documented inventory are copied; unrelated radio families are excluded. Adding firmware cannot supply a missing kernel driver.
 
 The [boot checks](../scripts/test-private-images.py) exercise BIOS/UEFI USB boot, an older CPU baseline, installation and reboot, plus WPA2 association, DHCP and AP outage recovery with `mac80211_hwsim`. They also check distinct live SSH identities, the controller's missing-data-volume guard, persistent worker configuration and unchanged unrelated guest disks. [Development](development.md#disposable-image-checks) owns the command and CI workflow.
 
 Recorded result on 2026-11-12: the full disposable image suite passed, including Wi-Fi after BIOS and UEFI worker installation. This is a software qualification record. The installed physical cards and their RF behavior have not been measured; lid/suspend behavior and real WAN recovery also need hardware/live-network checks. Keep those pending checks distinct from the simulated-radio and firmware-path results.
+
+A physical Inspiron 5558 initially failed during UEFI startup with GRUB reporting `start_image() returned 0x8000000000000001`, with Secure Boot disabled. The operator subsequently reported reaching Kairos after adding `efi=debug`, and the live laptop appeared online in Tailscale. This records a successful physical live boot; it does not establish that the flag caused the recovery or verify installation and post-install Wi-Fi. The ISO also reached Linux in isolated UEFI checks using the host CPU with 2 GiB RAM and an emulated Broadwell CPU with 4 GiB RAM; its kernel checksum matches the running controller's kernel. The initial failure's cause remains unconfirmed.
 
 The inventory above owns model names. There is no second model list or manual qualification flag in operator configuration. Before adding a model or changing the kernel, firmware or installer, verify its actual radio variants against the recipe's driver/alias/firmware checks, then rerun the relevant build and boot checks. Confirm physical boot, installation and post-install Wi-Fi on the target unit before extending a hardware compatibility claim.
 

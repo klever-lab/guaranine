@@ -3,7 +3,5 @@
   "auroraboot": "quay.io/kairos/auroraboot@sha256:5c12af1ecbb54193420abe0643f459a9812a2f90c88bba86a889dbcdf53e6fdf",
   "k3s": "v1.37.1+k3s1",
   "k3s_sha256": "92b94582eb7b34a8cf532e6006842b9ed215a6783cf56a3dd6271fd35243b2c0",
-  "tailscale": "1.102.3",
-  "tailscale_sha256": "36ddd9b51be57ffc2990cf76323cfa13643bfbb1b8a969f6183fa164741cdef5",
   "agent_sha256": "3091ab827703deef2eaa8362e8e78a7c849fefb8c02c5c6034ddd7dc717e9c2f"
 }

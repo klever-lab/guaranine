@@ -39,15 +39,19 @@ uv run --no-project --with-requirements requirements.txt python scripts/test-pri
 
 The [image harness](../scripts/test-private-images.py) builds ISO/VHD fixtures using disposable credentials and restricted QEMU networking. Test-only access-point tools are mounted into guests, outside the production image and installed filesystem. Image qualification coverage, the recorded result and remaining physical/live-network checks belong in [Laptop hardware](hardware.md#qualification-and-limits).
 
+The default runs all eight guests. Use `--suite live`, `--suite controller`, `--suite worker-bios` or `--suite worker-uefi` to run only the three live boots, controller data guard, BIOS install/reboot pair or UEFI install/reboot pair. Every suite builds its own disposable base/tools/media. The live suite keeps its three-way SSH identity comparison in one process; all suites retain guest disk hashing. Logs include base, tools, media and guest durations, plus each guest's KVM/TCG and CPU selection. Legacy CPU coverage always uses TCG.
+
 ## CI
 
 [Repository validation](../.github/workflows/validate.yml) runs on pushes and pull requests, including documentation changes. It runs repository checks and firewall packet checks.
 
-[Private image builds](../.github/workflows/private-images.yml) runs for changes to the image/configuration, Kubernetes manifests, CLI, image harness, launcher, runtime requirements or its own workflow; it also supports manual dispatch. A docs-only change does not trigger image builds. The workflow does not publish images or guest state.
+[Private image builds](../.github/workflows/private-images.yml) runs for changes to the image/configuration, Kubernetes manifests, CLI, image harness, launcher, runtime requirements or its own workflow; it also supports manual dispatch. One `ubuntu-24.04` matrix runs the four image suites independently, with fail-fast disabled so every suite reports its result. A docs-only change does not trigger image builds. The workflow does not cache or publish private configuration, media or guest state.
+
+Measure feedback time from the workflow's `created_at` through the latest job's `completed_at`, including queue time; do not sum parallel job durations. The successful [baseline run](https://github.com/klever-lab/guaranine/actions/runs/43333532181) took 33m32s including its 4s queue (33m28s job runtime). A new successful full matrix run is required before claiming a measured improvement.
 
 ## Dependency pins
 
-[kairos/versions.json](../kairos/versions.json) owns Kairos, AuroraBoot, K3s and Tailscale versions/checksums. [kairos/Dockerfile](../kairos/Dockerfile) pins the base, firmware images and network-tool packages, including the Broadcom firmware extraction input. Keep those facts in their source files rather than copying version tables into prose.
+[kairos/versions.json](../kairos/versions.json) owns Kairos, AuroraBoot and K3s versions/checksums. [kairos/Dockerfile](../kairos/Dockerfile) pins the base, upstream Tailscale layer, firmware images and network-tool packages, including the Broadcom firmware extraction input. Keep those facts in their source files rather than copying version tables into prose.
 
 [.terraform-version](../.terraform-version) and [terraform-checksums.json](../scripts/terraform-checksums.json) must agree. [terraform_tool.py](../scripts/terraform_tool.py) uses an exact installed CLI or downloads a checksum-verified temporary copy. Each root owns its AzureRM requirement and provider lock file. [requirements.txt](../requirements.txt) and [requirements-dev.txt](../requirements-dev.txt) own runtime and validation dependencies.
 

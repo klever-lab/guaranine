@@ -20,6 +20,18 @@ stages:
         VOLUMES: ""
         PERSISTENT_STATE_PATHS: ""
   initramfs:
+    - name: Use a temporary Tailscale identity on live USB media
+      if: '[ -f /run/cos/live_mode ]'
+      files:
+        - path: /run/guaranine-tailscale-live.env
+          permissions: 0600
+          content: |
+            FLAGS="--state=mem:"
+        - path: /run/systemd/system/tailscaled.service.d/live.conf
+          permissions: 0644
+          content: |
+            [Service]
+            EnvironmentFile=/run/guaranine-tailscale-live.env
     - name: Configure host networking and services
       files:
         - path: /etc/ssh/sshd_config.d/00-guaranine.conf

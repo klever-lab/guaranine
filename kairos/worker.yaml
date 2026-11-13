@@ -2,6 +2,8 @@
 name: Guaranine worker
 install:
   poweroff: true
+  grub_options:
+    extra_cmdline: efi=debug
 # Native manual-install requires an administrator in the submitted configuration.
 users:
   - name: root

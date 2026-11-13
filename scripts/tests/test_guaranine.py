@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -88,6 +89,7 @@ class PrivateConfigTests(unittest.TestCase):
             role='worker', cluster_endpoint='https://100.64.0.1:6443', token='AGENT-ONLY', wifi=wifi)
         self.assertEqual(worker['hostname'], 'worker-one')
         self.assertTrue(worker['install']['poweroff'])
+        self.assertEqual(worker['install']['grub_options']['extra_cmdline'], 'efi=debug')
         self.assertEqual(worker['users'][0]['groups'], ['admin'])
         self.assertTrue(worker['users'][0]['lock_passwd'])
         text = cli.cloud_yaml(worker)
@@ -238,7 +240,11 @@ class InstallationTests(unittest.TestCase):
         def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
         def command(args, directory, **kwargs):
             if 'test -f /run/cos/live_mode' in args[-1]: return 'live'
-            if 'kubectl get node' in args[-1]: return ''
+            if 'cat /sys/class/dmi/id/product_name' in args[-1]: return 'Inspiron 5558\n'
+            if args[-1] == 'k3s kubectl get nodes -o json': return '{"items":[]}'
+            if args[-1].startswith('timeout 600'):
+                return json.dumps({'status': {'conditions': [{'type': 'Ready', 'status': 'True'}],
+                    'addresses': [{'type': 'InternalIP', 'address': '100.64.0.9'}]}})
             if 'server/agent-token' in args[-1]: return token
             self.assertIn('manual-install', args[-1])
             self.assertEqual(args[-1], 'kairos-agent --strict-validation manual-install --device /dev/vdb /dev/stdin')
@@ -249,9 +255,10 @@ class InstallationTests(unittest.TestCase):
             self.assertEqual(next(f['content'] for f in files if f['path'].endswith('/token')).strip(), token)
             self.assertTrue(any(f['path'].endswith('/wifi.conf') for f in files))
             return ''
-        with (patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
+        with (patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
+              patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
               patch.object(cli, 'private_command', side_effect=command) as calls,
-              patch('builtins.input', side_effect=['100.64.0.8', 'worker-one', '1', 'ERASE worker-one /dev/vdb']),
+              patch('builtins.input', side_effect=['worker-one', '1', 'ERASE']),
               contextlib.redirect_stdout(io.StringIO())):
             cli.install_worker(None)
         self.assertEqual(len([call for call in calls.call_args_list if 'manual-install' in call.args[0][-1]]), 1)
@@ -261,15 +268,123 @@ class InstallationTests(unittest.TestCase):
         disk = self.worker_setup()
         @contextlib.contextmanager
         def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
-        for answer, disks in [('cancel', [[disk]]), ('ERASE worker-one /dev/vdb', [[disk], []])]:
-            with (self.subTest(answer=answer), patch.object(cli, 'verified_connection', verified),
+        for answer, disks in [('cancel', [[disk]]), ('ERASE', [[disk], []])]:
+            with (self.subTest(answer=answer), patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
+                  patch.object(cli, 'verified_connection', verified),
                   patch.object(cli, 'read_disks', side_effect=disks),
-                  patch.object(cli, 'private_command', side_effect=['live', '']) as calls,
-                  patch('builtins.input', side_effect=['100.64.0.8', 'worker-one', '1', answer]),
+                  patch.object(cli, 'private_command', side_effect=['live', 'Inspiron 5558', '{"items":[]}']) as calls,
+                  patch('builtins.input', side_effect=['worker-one', '1', answer]),
                   contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError)):
                 cli.install_worker(None)
             self.assertFalse((self.root / 'nodes/worker-one').exists())
             self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
+
+    def test_full_worker_walkthrough_needs_no_ip_or_fingerprint_transcription(self):
+        disk = {**self.worker_setup(), 'type': 'disk', 'ro': False, 'mountpoints': []}
+        cli.output_directory(self.root / 'nodes/inspiron-5558-2')
+        token = 'K10' + 'ab' * 32 + '::agent:DISPOSABLE'
+        blob = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\x11' * 32
+        key = '100.64.0.8 ssh-ed25519 ' + base64.b64encode(blob).decode() + '\n'
+        prompts, sent = [], []
+        answers = iter(['yes', '', '1', 'ERASE'])
+        confirmed = False
+        def answer(prompt):
+            nonlocal confirmed
+            prompts.append(prompt)
+            value = next(answers)
+            confirmed = confirmed or value == 'ERASE'
+            return value
+        def command(arguments, directory, **kwargs):
+            if arguments[0] == 'ssh-keygen':
+                return '256 SHA256:DISPOSABLE no comment (ED25519)\n'
+            if arguments[0] == 'tailscale':
+                return json.dumps({'BackendState': 'Running', 'Peer': {'laptop': {
+                    'HostName': 'guaranine-live-aaaa', 'Online': True, 'Tags': ['tag:guaranine-worker'],
+                    'TailscaleIPs': ['100.64.0.8']}}})
+            remote = arguments[-1]
+            if 'live_mode' in remote: return 'live'
+            if remote == 'cat /sys/class/dmi/id/product_name': return 'Inspiron 5558\n'
+            if remote == 'k3s kubectl get nodes -o json':
+                return '{"items":[{"metadata":{"name":"inspiron-5558"}}]}'
+            if remote.startswith('lsblk '): return json.dumps({'blockdevices': [disk]})
+            if remote.startswith('cat /var/lib/rancher/k3s/server/agent-token'): return token
+            if 'manual-install' in remote:
+                self.assertTrue(confirmed)
+                sent.append(remote)
+                config = yaml.safe_load(kwargs['data'])
+                self.assertEqual(config['hostname'], 'inspiron-5558-3')
+                self.assertEqual(config['install']['grub_options']['extra_cmdline'], 'efi=debug')
+                return ''
+            if remote.startswith('timeout 600'):
+                return json.dumps({'status': {'conditions': [{'type': 'Ready', 'status': 'True'}],
+                    'addresses': [{'type': 'InternalIP', 'address': '100.64.0.90'}]}})
+            self.fail('Unexpected command in install walkthrough: ' + remote)
+        output = io.StringIO()
+        with (patch.object(cli, 'private_command', side_effect=command),
+              patch.object(cli.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout=key)),
+              patch('builtins.input', side_effect=answer), contextlib.redirect_stdout(output)):
+            cli.install_worker(None)
+        self.assertEqual(len(prompts), 4)
+        self.assertEqual(len(sent), 1)
+        self.assertIn('Found one laptop', output.getvalue())
+        self.assertIn('inspiron-5558-3 is Ready at 100.64.0.90', output.getvalue())
+        self.assertNotIn(token, output.getvalue())
+        self.assertFalse(any('IPv4 address' in prompt or 'fingerprint shown' in prompt for prompt in prompts))
+
+    def test_ready_check_can_resume_without_a_valid_installer_key(self):
+        self.worker_setup()
+        node = cli.output_directory(self.root / 'nodes/worker-one')
+        cli.private_write(node / 'config.yaml', 'DISPOSABLE')
+        ready = json.dumps({'status': {'conditions': [{'type': 'Ready', 'status': 'True'}],
+            'addresses': [{'type': 'InternalIP', 'address': '100.64.0.90'}]}})
+        with (patch.object(cli, 'auth_record') as auth, patch.object(cli, 'choose_laptop') as choose,
+              patch.object(cli, 'private_command', return_value=ready) as command,
+              contextlib.redirect_stdout(io.StringIO())):
+            cli.install_worker(SimpleNamespace(wait='worker-one'))
+        auth.assert_not_called()
+        choose.assert_not_called()
+        self.assertEqual(command.call_count, 1)
+        self.assertIn('kubectl wait', command.call_args.args[0][-1])
+        self.assertNotIn('manual-install', command.call_args.args[0][-1])
+
+    def test_ready_check_rejects_unready_or_lan_address_and_explains_resume(self):
+        for state, address in [('False', '100.64.0.9'), ('True', '192.168.1.2')]:
+            raw = json.dumps({'status': {'conditions': [{'type': 'Ready', 'status': state}],
+                'addresses': [{'type': 'InternalIP', 'address': address}]}})
+            output = io.StringIO()
+            with (self.subTest(state=state, address=address), patch.object(cli, 'private_command', return_value=raw),
+                  contextlib.redirect_stdout(output), self.assertRaises(ValueError)):
+                cli.wait_for_worker('worker-one', ['ssh'], self.root)
+            self.assertNotIn('Connected to the controller.', output.getvalue())
+        with (patch.object(cli, 'private_command', side_effect=ValueError('DISPOSABLE failure')),
+              contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, '--wait worker-one')):
+            cli.wait_for_worker('worker-one', ['ssh'], self.root)
+
+    def test_iso_rebuild_keeps_network_and_key_and_preserves_previous_image(self):
+        self.worker_setup()
+        image = cli.output_directory(self.root / 'installer/image') / 'guaranine-kairos.iso'
+        cli.private_write(image, 'OLD-DISPOSABLE-ISO')
+        boot = (self.root / 'installer/boot.yaml').read_text()
+        key = (self.root / 'installer/tailscale-key.json').read_text()
+        def build(config, kind, directory, source):
+            self.assertEqual(config, yaml.safe_load(boot))
+            self.assertEqual((kind, source), ('iso', 'PUBLIC-BASE'))
+            archive = list((self.root / 'installer').glob('image-previous-*'))
+            self.assertEqual(len(archive), 1)
+            self.assertEqual((archive[0] / image.name).read_text(), 'OLD-DISPOSABLE-ISO')
+            cli.output_directory(directory)
+            cli.private_write(directory / image.name, 'NEW-DISPOSABLE-ISO')
+            return directory / image.name
+        with (patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
+              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'mint') as mint,
+              patch.object(cli, 'operator_wifi') as wifi, patch.object(cli, 'flash_iso', return_value=False),
+              contextlib.redirect_stdout(io.StringIO())):
+            cli.prepare_iso(SimpleNamespace(rebuild=True))
+        mint.assert_not_called()
+        wifi.assert_not_called()
+        self.assertEqual((self.root / 'installer/boot.yaml').read_text(), boot)
+        self.assertEqual((self.root / 'installer/tailscale-key.json').read_text(), key)
+        self.assertEqual(image.read_text(), 'NEW-DISPOSABLE-ISO')
 
     def test_missing_wifi_firmware_stops_before_registration_key_or_media(self):
         cli.private_write(self.root / 'operator.yaml', yaml.safe_dump({
@@ -282,6 +397,51 @@ class InstallationTests(unittest.TestCase):
         mint.assert_not_called()
         image.assert_not_called()
         self.assertFalse((self.root / 'installer').exists())
+
+    def test_laptop_discovery_waits_and_selects_only_online_tagged_live_peers(self):
+        first = {'HostName': 'guaranine-live-aaaa', 'Online': True, 'Tags': ['tag:guaranine-worker'],
+                 'TailscaleIPs': ['fd7a:115c:a1e0::8', '100.64.0.8']}
+        second = {**first, 'HostName': 'guaranine-live-bbbb', 'TailscaleIPs': ['100.64.0.9']}
+        peers = {'second': second, 'first': first,
+                 'offline': {**first, 'Online': False},
+                 'installed': {**first, 'HostName': 'worker-one'},
+                 'controller': {**first, 'Tags': ['tag:guaranine-controlplane']},
+                 'untagged': {**first, 'Tags': []}}
+        output = io.StringIO()
+        with (patch.object(cli, 'private_command', side_effect=[
+                  json.dumps({'BackendState': 'Running', 'Peer': None}),
+                  json.dumps({'BackendState': 'Running', 'Peer': peers})]) as command,
+              patch.object(cli.time, 'sleep') as sleep, patch('builtins.input', return_value='2'),
+              contextlib.redirect_stdout(output)):
+            self.assertEqual(cli.choose_laptop(self.root), '100.64.0.9')
+        sleep.assert_called_once_with(2)
+        self.assertTrue(all(call.args[0] == ['tailscale', 'status', '--json'] for call in command.call_args_list))
+        self.assertIn('Boot the laptop from the Guaranine USB', output.getvalue())
+        self.assertIn('1. guaranine-live-aaaa | 100.64.0.8', output.getvalue())
+        self.assertIn('2. guaranine-live-bbbb | 100.64.0.9', output.getvalue())
+        self.assertNotIn('worker-one', output.getvalue())
+
+    def test_laptop_selection_cancellation_never_contacts_a_node(self):
+        self.worker_setup()
+        peer = {'HostName': 'guaranine-live-aaaa', 'Online': True, 'Tags': ['tag:guaranine-worker'],
+                'TailscaleIPs': ['100.64.0.8']}
+        second = {**peer, 'HostName': 'guaranine-live-bbbb', 'TailscaleIPs': ['100.64.0.9']}
+        status = json.dumps({'BackendState': 'Running', 'Peer': {'laptop': peer, 'second': second}})
+        for answer in ('', '0', '3', '100.64.0.8'):
+            with (self.subTest(answer=answer), patch.object(cli, 'private_command', return_value=status) as command,
+                  patch.object(cli, 'verified_connection') as connect, patch('builtins.input', return_value=answer),
+                  contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'selection cancelled')):
+                cli.install_worker(None)
+            connect.assert_not_called()
+            self.assertEqual([call.args[0] for call in command.call_args_list], [['tailscale', 'status', '--json']])
+
+    def test_laptop_discovery_explains_disconnected_operator(self):
+        with (patch.object(cli, 'private_command', return_value='{"BackendState":"NeedsLogin"}'),
+              patch.object(cli.time, 'sleep') as sleep, patch('builtins.input') as prompt,
+              contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'Connect this operator')):
+            cli.choose_laptop(self.root)
+        sleep.assert_not_called()
+        prompt.assert_not_called()
 
     def test_reused_iso_only_prints_laptop_steps_after_usb_write(self):
         self.worker_setup()
@@ -299,21 +459,30 @@ class InstallationTests(unittest.TestCase):
             self.assertEqual('./guaranine worker' in output.getvalue(), flashed)
             self.assertEqual('USB flashing was not completed.' in output.getvalue(), not flashed)
 
-    def test_ssh_hostkey_requires_physical_fingerprint_and_is_pinned(self):
+    def test_ssh_hostkey_displays_fingerprint_and_requires_confirmation_before_pinning(self):
         blob = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\x11' * 32
         raw = '100.64.0.8 ssh-ed25519 ' + base64.b64encode(blob).decode() + '\n'
         fingerprint = 'SHA256:' + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip('=')
         result = subprocess.CompletedProcess([], 0, stdout=raw)
-        with patch.object(cli.subprocess, 'run', return_value=result), patch('builtins.input', return_value=fingerprint):
-            with cli.verified_connection('100.64.0.8', self.root) as (command, hosts):
-                self.assertIn('StrictHostKeyChecking=yes', command)
-                self.assertIn('GlobalKnownHostsFile=/dev/null', command)
-                self.assertEqual(hosts.read_text(), raw)
-                self.assertEqual(hosts.stat().st_mode & 0o777, 0o600)
-            self.assertFalse(hosts.exists())
-        with patch.object(cli.subprocess, 'run', return_value=result), patch('builtins.input', return_value='SHA256:WRONG'):
-            with self.assertRaises(ValueError):
-                with cli.verified_connection('100.64.0.8', self.root): self.fail('Untrusted SSH key accepted')
+        run = subprocess.run
+        def key_command(arguments, **kwargs):
+            return result if arguments[0] == 'ssh-keyscan' else run(arguments, **kwargs)
+        for answer in ('yes', 'Y'):
+            output = io.StringIO()
+            with (patch.object(cli.subprocess, 'run', side_effect=key_command), patch('builtins.input', return_value=answer),
+                  contextlib.redirect_stdout(output)):
+                with cli.verified_connection('100.64.0.8', self.root) as (command, hosts):
+                    self.assertIn('StrictHostKeyChecking=yes', command)
+                    self.assertIn('GlobalKnownHostsFile=/dev/null', command)
+                    self.assertEqual(hosts.read_text(), raw)
+                    self.assertEqual(hosts.stat().st_mode & 0o777, 0o600)
+                self.assertFalse(hosts.exists())
+            self.assertIn(fingerprint, output.getvalue())
+            self.assertIn('laptop screen or protected VM console', output.getvalue())
+        for answer in ('', 'no', 'SHA256:WRONG'):
+            with (patch.object(cli.subprocess, 'run', side_effect=key_command), patch('builtins.input', return_value=answer),
+                  contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'identity not confirmed')):
+                with cli.verified_connection('100.64.0.8', self.root): self.fail('Unconfirmed SSH key accepted')
 
     def test_data_disk_with_signatures_is_never_formatted(self):
         disk = {'path': '/dev/vdb', 'size': 64 * 2**30, 'model': 'Fixture', 'serial': 'disk-b', 'tran': 'virtio'}
@@ -406,16 +575,14 @@ class USBFlashingTests(unittest.TestCase):
         prompt.assert_not_called()
         run.assert_not_called()
 
-    def test_partial_confirmation_shows_full_required_text_without_writing(self):
+    def test_wrong_confirmation_explains_required_word_without_writing(self):
         with (patch.object(cli, 'usb_disks', return_value=[self.disk]),
-              patch('builtins.input', side_effect=['1', 'ERASE']),
+              patch('builtins.input', side_effect=['1', 'yes']),
               patch.object(cli.subprocess, 'run') as run):
             self.assertFalse(cli.flash_iso(self.image))
         run.assert_not_called()
         output = self.output.getvalue()
-        self.assertIn('ENTIRE line below, including the space and device path:', output)
-        self.assertIn('\n  ERASE /dev/sdy\n', output)
-        self.assertIn('Confirmation did not match. The required text is: ERASE /dev/sdy', output)
+        self.assertIn('Confirmation did not match. The required text is: ERASE', output)
         self.assertIn('Nothing was written to /dev/sdy.', output)
 
     def test_invalid_choices_never_unmount_or_write(self):
@@ -433,7 +600,7 @@ class USBFlashingTests(unittest.TestCase):
         unmounted = copy.deepcopy(second)
         unmounted['children'][0]['mountpoints'] = []
         with (patch.object(cli, 'usb_disks', side_effect=[[self.disk, second], [self.disk, second], [unmounted]]),
-              patch('builtins.input', side_effect=['2', 'ERASE /dev/sdz']), patch.object(cli.subprocess, 'run') as run):
+              patch('builtins.input', side_effect=['2', 'ERASE']), patch.object(cli.subprocess, 'run') as run):
             self.assertTrue(cli.flash_iso(self.image))
         self.assertEqual([call.args[0] for call in run.call_args_list], [
             ['sudo', '--', 'umount', '--all-targets', '--', '/dev/sdz1'],
@@ -449,7 +616,7 @@ class USBFlashingTests(unittest.TestCase):
         for reports in ([[self.disk], [changed]], [[self.disk], [self.disk], [changed]],
                         [[self.disk], [self.disk], [self.disk]]):
             with (self.subTest(reports=reports), patch.object(cli, 'usb_disks', side_effect=reports),
-                  patch('builtins.input', side_effect=['1', 'ERASE /dev/sdy']),
+                  patch('builtins.input', side_effect=['1', 'ERASE']),
                   patch.object(cli.subprocess, 'run') as run, self.assertRaises(ValueError)):
                 cli.flash_iso(self.image)
             self.assertTrue(all('dd' not in call.args[0] for call in run.call_args_list))
@@ -462,7 +629,7 @@ class USBFlashingTests(unittest.TestCase):
                 subprocess.CompletedProcess(['umount'], 0), subprocess.CalledProcessError(1, ['dd'])]
             with (self.subTest(fail_unmount=fail_unmount),
                   patch.object(cli, 'usb_disks', side_effect=[[self.disk], [self.disk], [unmounted]]),
-                  patch('builtins.input', side_effect=['1', 'ERASE /dev/sdy']),
+                  patch('builtins.input', side_effect=['1', 'ERASE']),
                   patch.object(cli.subprocess, 'run', side_effect=effects) as run,
                   self.assertRaises(subprocess.CalledProcessError)):
                 cli.flash_iso(self.image)

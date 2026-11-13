@@ -16,13 +16,23 @@ Use the [networking guide](security.md) when checking addresses, access policy o
 
 Rerunning `./guaranine iso` reuses a completed image while its registration key is valid. It retains the original captured network/profile; changing the operator's active Wi-Fi does not modify an existing ISO. To change networks or start a new batch, revoke the old key in Tailscale, archive the private `installer/` directory and build again. A key-only retry reuses the same key.
 
-The USB confirmation displays the full required text on its own line and explains a mismatch. Skipping or cancelling flashing leaves the ISO saved and prints the retry command; laptop boot instructions appear only after a successful USB write. Flashing uses `dd` with synchronized block writes and periodic byte/rate statistics, followed by a final flush before reporting success; updates can pause while USB I/O is pending.
+To apply updated image or boot defaults to that same network and unexpired batch, use `./guaranine iso --rebuild`. It keeps the saved Wi-Fi profile and key, saves the previous image directory, rebuilds the ISO and offers USB flashing again. An existing USB changes only after a successful flash. Builds, installation and the final Ready check show elapsed status while keeping subprocess diagnostics private.
+
+The USB confirmation identifies the selected drive, asks for `ERASE` and explains a mismatch. Skipping or cancelling flashing leaves the ISO saved and prints the retry command; laptop boot instructions appear only after a successful USB write. Flashing uses `dd` with synchronized block writes and periodic byte/rate statistics, followed by a final flush before reporting success; updates can pause while USB I/O is pending.
 
 Incomplete builds preserve outputs and protected logs. Inspect them before revoking the batch key, archiving outputs and retrying. Failed subprocesses can also leave protected `error-*.log` files. Do not put diagnostic contents in public issues or logs. The CLI does not automatically repeat key-creation POSTs after ambiguous transport failures; inspect the live Tailscale state before retrying.
 
 The same completed-image reuse rule applies to `./guaranine controlplane`, under `nodes/guaranine-controlplane/`. An incomplete controller image needs inspection before another build. `bootstrap` refuses to overwrite an existing kubeconfig or `controlplane-known-hosts`; inspect those files instead of treating it as a repeatable repair command.
 
 For worker retries, follow the [installation boundaries](../SETUP.md#install-a-worker), including the check after an interrupted remote install. [Enrollment limits](security.md#private-material-and-enrollment) explain why ending a batch does not retire its devices.
+
+## Laptop discovery
+
+The worker command reads the operator's local `tailscale status --json` and waits for an online peer with the `guaranine-live-` hostname prefix and `tag:guaranine-worker` tag. It checks every two seconds until a candidate appears; Ctrl+C cancels the wait. A single candidate is selected automatically; several candidates produce a numbered menu. It then waits up to two minutes for SSH startup. The operator must be connected to Tailscale. No LAN discovery or manual IP lookup is needed.
+
+These names and tags identify candidates; they do not replace the SSH fingerprint verification or live-media check in the [worker installation procedure](../SETUP.md#install-a-worker).
+
+Laptop names are suggested from DMI model information, with a suffix when a name already exists in Kubernetes or private operator outputs. Installation is issued once after disk confirmation. A lost installation connection leaves the outcome uncertain; the command can still confirm success if the installed worker subsequently joins. It waits up to ten minutes for Ready and requires a Tailscale internal address before reporting success. The [resume command](../SETUP.md#install-a-worker) performs only that verification, using saved operator outputs and pinned controller SSH; it does not require an unexpired installer key or contact the laptop for installation.
 
 ## Retire a worker
 

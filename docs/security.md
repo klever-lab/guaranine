@@ -41,4 +41,6 @@ Only public inputs enter Docker layers and the public base's build cache. Privat
 
 The Tailscale API token stays on the operator. The controller gets a single-use registration key; a laptop ISO gets a reusable key. Both are preauthorized, non-ephemeral, role-tagged and valid for at most 24 hours. The ISO contains an operator public SSH key and network access, with no K3s token or installation target. After disk confirmation, workers receive the secure CA-pinned agent token over pinned controller SSH, never the server token. [SETUP.md](../SETUP.md#install-a-worker) owns identity verification and erasure confirmations.
 
+Live USB sessions run `tailscaled --state=mem:` through a conditional runtime environment override. This registers a temporary, ephemeral device even with the reusable non-ephemeral key; Tailscale removes disconnected ephemeral devices. The override exists only under `/run` and is absent after installation, so installed workers retain persistent identities. No device cleanup service or second registration key is needed.
+
 The registration window limits new registrations, not device lifetime. Expiry or revocation does not remove registered nodes, prevent copied media from booting, or revoke copied join credentials. The ISO is not hardware-bound. Retire identities deliberately using the [operations guide](operations.md#retire-a-worker).

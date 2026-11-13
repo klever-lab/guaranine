@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Build and boot disposable native Kairos images; never publish credentials or media."""
+import argparse
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
@@ -14,6 +16,17 @@ import guaranine as cli
 
 
 PUBLIC_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER'
+
+
+@contextmanager
+def timed(label):
+    started = time.monotonic()
+    print(f'{label}: starting', flush=True)
+    try:
+        yield
+    finally:
+        print(f'{label}: {time.monotonic() - started:.1f}s elapsed', flush=True)
+
 
 WIFI_CHECK = '''#!/bin/sh
 set -eu
@@ -123,6 +136,8 @@ def fixture(role=None):
         checks += ['! mountpoint -q /var/lib/rancher/k3s', '! systemctl is-active --quiet k3s']
     elif role == 'worker':
         checks += ['! test -f /run/cos/live_mode', 'test "$(hostname)" = fixture-worker',
+                   '! test -e /run/guaranine-tailscale-live.env',
+                   '! test -e /run/systemd/system/tailscaled.service.d/live.conf',
                    'test "$(cat /etc/rancher/k3s/token)" = DISPOSABLE-AGENT',
                    'test "$(stat -c %a /etc/rancher/k3s/token)" = 600',
                    '! test -f /etc/rancher/k3s/agent-token',
@@ -132,9 +147,14 @@ def fixture(role=None):
                    'systemctl show k3s.service --property=Environment --value | grep -q K3S_ROLE=agent']
     else:
         checks += ['test -f /run/cos/live_mode', 'test -f /etc/guaranine/wifi.conf',
+                   'grep -qx \'FLAGS="--state=mem:"\' /run/guaranine-tailscale-live.env',
+                   'systemctl show tailscaled.service --property=EnvironmentFiles --value | '
+                   'grep -q /run/guaranine-tailscale-live.env',
+                   'tr \'\\0\' \'\\n\' < /proc/"$(systemctl show tailscaled.service --property=MainPID --value)"/cmdline | '
+                   'grep -qx -- --state=mem:',
                    '! test -f /etc/rancher/k3s/token', '! systemctl is-active --quiet k3s']
     if role != 'controlplane':
-        checks += ['test -f /run/fixture-wifi-ok']
+        checks += ['test -f /run/fixture-wifi-ok', 'grep -qw efi=debug /proc/cmdline']
         config['stages']['boot'].append({'name': 'Verify WPA2 Wi-Fi, DHCP and AP recovery', 'files': [
             cli.config_file('/run/fixture-wifi-check', WIFI_CHECK, 0o700),
             cli.config_file('/run/fixture-hostapd.conf', 'interface=wlan1\ndriver=nl80211\nssid=test\n'
@@ -148,14 +168,17 @@ def fixture(role=None):
 
 
 def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=False):
+    started = time.monotonic()
+    acceleration = ['-accel', 'kvm', '-cpu', 'host'] if os.access('/dev/kvm', os.R_OK | os.W_OK) else ['-accel', 'tcg', '-cpu', 'max']
+    if legacy_cpu:
+        acceleration = ['-accel', 'tcg', '-cpu', 'Opteron_G1']
+    print(f'Fixture {number}: {"UEFI" if uefi else "BIOS"} {"installation" if install else "boot"}; '
+          f'accelerator={acceleration[1].upper()} cpu={acceleration[3]}', flush=True)
     disk = directory / f'data-{number}.raw'
     with disk.open('xb') as stream:
         stream.truncate(16 * 1024**3)
         stream.write(b'DISPOSABLE DATA MUST SURVIVE UNAUTHORIZED BOOT\n')
     before = None if install else cli.digest(disk)
-    acceleration = ['-accel', 'kvm', '-cpu', 'host'] if os.access('/dev/kvm', os.R_OK | os.W_OK) else ['-accel', 'tcg', '-cpu', 'max']
-    if legacy_cpu:
-        acceleration = ['-accel', 'tcg', '-cpu', 'Opteron_G1']
     command = ['qemu-system-x86_64', *acceleration, '-m', '2048', '-smp', '2', '-display', 'none',
                '-serial', 'stdio', '-monitor', 'none', '-uuid', f'00000000-0000-4000-8000-{number:012}',
                '-netdev', 'user,id=n0,restrict=on', '-device', 'virtio-net-pci,netdev=n0']
@@ -210,39 +233,60 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
                     process.kill()
                     process.wait()
     finally:
-        if not install and cli.digest(disk) != before:
-            raise ValueError('Live/uninitialized cloud boot modified an existing guest data disk')
+        try:
+            if not install and cli.digest(disk) != before:
+                raise ValueError('Live/uninitialized cloud boot modified an existing guest data disk')
+        finally:
+            print(f'Fixture {number}: {time.monotonic() - started:.1f}s elapsed', flush=True)
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--suite', choices=('all', 'live', 'controller', 'worker-bios', 'worker-uefi'),
+                        default='all', help='Run one independent suite (default: all)')
+    suite = parser.parse_args().suite
     os.umask(0o077)
-    with tempfile.TemporaryDirectory(prefix='guaranine-image-tests-', ignore_cleanup_errors=True) as temporary:
+    with (timed(f'Image suite {suite}'),
+          tempfile.TemporaryDirectory(prefix='guaranine-image-tests-', ignore_cleanup_errors=True) as temporary):
         directory = Path(temporary)
         try:
-            source = cli.build_base(directory)
-            wifi_tools(directory)
-            iso = cli.build_image(fixture(), 'iso', directory / 'iso', source)
-            keys = {boot(iso, directory, 1), boot(iso, directory, 2, legacy_cpu=True),
-                    boot(iso, directory, 3, uefi=True)}
-            if len(keys) != 3:
-                raise ValueError('The same shared ISO reused an SSH host identity')
-            iso.unlink()
-            vhd = cli.build_image(fixture('controlplane'), 'vhd', directory / 'vhd', source)
-            boot(vhd, directory, 4, uefi=True)
-            vhd.unlink()
-
-            # Only this disposable fixture authorizes installation onto its QEMU disk.
-            installer = fixture()
-            installer['stages']['boot'].append({'name': 'Install the disposable worker',
-                'files': [cli.config_file('/run/fixture-worker.yaml', cli.cloud_yaml(fixture('worker')))],
-                'commands': ['test -f /run/fixture-wifi-ok && kairos-agent --strict-validation manual-install '
-                             '--device /dev/vda /dev/stdin < /run/fixture-worker.yaml']})
-            install_iso = cli.build_image(installer, 'iso', directory / 'install', source)
-            worker = boot(install_iso, directory, 5, install=True)
-            boot(worker, directory, 6)
-            worker = boot(install_iso, directory, 7, install=True, uefi=True)
-            install_iso.unlink()
-            boot(worker, directory, 8, uefi=True)
+            with timed('Base image build'):
+                source = cli.build_base(directory)
+            with timed('Test-only Wi-Fi tools'):
+                wifi_tools(directory)
+            if suite in ('all', 'live'):
+                with timed('Live ISO build'):
+                    iso = cli.build_image(fixture(), 'iso', directory / 'iso', source)
+                keys = {boot(iso, directory, 1), boot(iso, directory, 2, legacy_cpu=True),
+                        boot(iso, directory, 3, uefi=True)}
+                if len(keys) != 3:
+                    raise ValueError('The same shared ISO reused an SSH host identity')
+                iso.unlink()
+                print('Live suite passed: BIOS, legacy CPU and UEFI boots have distinct SSH identities.', flush=True)
+            if suite in ('all', 'controller'):
+                with timed('Controller VHD build'):
+                    vhd = cli.build_image(fixture('controlplane'), 'vhd', directory / 'vhd', source)
+                boot(vhd, directory, 4, uefi=True)
+                vhd.unlink()
+                print('Controller suite passed: missing data kept K3s stopped.', flush=True)
+            if suite in ('all', 'worker-bios', 'worker-uefi'):
+                # Only this disposable fixture authorizes installation onto its QEMU disk.
+                installer = fixture()
+                installer['stages']['boot'].append({'name': 'Install the disposable worker',
+                    'files': [cli.config_file('/run/fixture-worker.yaml', cli.cloud_yaml(fixture('worker')))],
+                    'commands': ['test -f /run/fixture-wifi-ok && kairos-agent --strict-validation manual-install '
+                                 '--device /dev/vda /dev/stdin < /run/fixture-worker.yaml']})
+                with timed('Worker installer ISO build'):
+                    install_iso = cli.build_image(installer, 'iso', directory / 'install', source)
+                if suite in ('all', 'worker-bios'):
+                    worker = boot(install_iso, directory, 5, install=True)
+                    boot(worker, directory, 6)
+                    print('BIOS worker suite passed: installed, powered off and rebooted with its configuration.', flush=True)
+                if suite in ('all', 'worker-uefi'):
+                    worker = boot(install_iso, directory, 7, install=True, uefi=True)
+                    boot(worker, directory, 8, uefi=True)
+                    print('UEFI worker suite passed: installed, powered off and rebooted with its configuration.', flush=True)
+                install_iso.unlink()
         except Exception:
             # This harness creates disposable credentials only. Keep failed CI diagnosable.
             logs = [*directory.glob('error-*.log'), *directory.glob('boot-*.log'),
@@ -252,9 +296,7 @@ def main():
                 if log.exists():
                     print(f'Fixture diagnostics ({log.name}):\n{log.read_text(errors="replace")[-8000:]}', file=sys.stderr)
             raise
-    print('BIOS, UEFI and legacy CPU ISO boots passed; Wi-Fi authenticated, obtained DHCP and reconnected; '
-          'VHD blocked missing data; BIOS and UEFI workers installed and rebooted with their configuration; '
-          'other guest disks unchanged')
+    print(f'Image suite {suite} passed; all selected Wi-Fi, configuration and disk-safety assertions passed.')
 
 
 if __name__ == '__main__':

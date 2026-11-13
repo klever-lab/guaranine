@@ -4,7 +4,7 @@ Run these commands from the repository root on a Linux operator computer. Use th
 
 ## Prerequisites
 
-Install Python 3.12+, `uv`, Docker, `sudo`, OpenSSH client tools and `nmcli`. Image building needs privileged Docker access and scratch space for uncompressed disk images; USB flashing also uses sudo. Azure operations need the Terraform version in [.terraform-version](.terraform-version), Azure CLI, AzCopy and `qemu-img`. Cluster checks use a `kubectl` version matching the pinned K3s release in [kairos/versions.json](kairos/versions.json).
+Install Python 3.12+, `uv`, Docker, `sudo`, OpenSSH client tools, Tailscale and `nmcli`. Image building needs privileged Docker access and scratch space for uncompressed disk images; USB flashing also uses sudo. Azure operations need the Terraform version in [.terraform-version](.terraform-version), Azure CLI, AzCopy and `qemu-img`. Cluster checks use a `kubectl` version matching the pinned K3s release in [kairos/versions.json](kairos/versions.json).
 
 Before building laptop media, read the [hardware inventory, network requirements and qualification limits](docs/hardware.md). For an existing deployment, complete the [migration prerequisites](docs/operations.md#migrate-an-older-deployment) before provisioning a replacement.
 
@@ -95,7 +95,7 @@ After the VM registers with Tailscale, find its verified tailnet IPv4 address. R
 ./guaranine bootstrap
 ```
 
-Compare the SSH fingerprint with protected VM console output. For a new deployment, explicitly choose the NEW EMPTY retained data disk and type `INITIALIZE /dev/DISK` for the selected device. Existing filesystem signatures are refused. Recovery reuses the retained/restored `GUARANINE_DATA` volume without formatting it; follow the [restore procedure](docs/operations.md#restore-on-another-cloud-vm) for an existing cluster.
+Compare the displayed SSH fingerprint with protected VM console output and enter `yes` if they match. For a new deployment, explicitly choose the NEW EMPTY retained data disk and type `INITIALIZE /dev/DISK` for the selected device. Existing filesystem signatures are refused. Recovery reuses the retained/restored `GUARANINE_DATA` volume without formatting it; follow the [restore procedure](docs/operations.md#restore-on-another-cloud-vm) for an existing cluster.
 
 Bootstrap waits for the node to become Ready, saves a private kubeconfig and pinned server host key, and records the Tailscale endpoint in `operator.yaml`.
 
@@ -116,7 +116,7 @@ Capture supports open, WPA personal or WPA3 personal authentication. Enterprise 
 
 The CLI prints the ISO path and registration expiry in local time. Complete enrollment before that deadline; read the [enrollment limits](docs/security.md#private-material-and-enrollment) when handling the media. Changing a network or reusing a batch follows the [image retry procedure](docs/operations.md#image-batches-and-retries).
 
-Interactive terminals offer a numbered USB menu. Enter skips it. Choose by path/model/size/serial/label and type the exact `ERASE /dev/DEVICE` phrase. The CLI rechecks the drive, unmounts it, writes the image with progress and flushes it. System mounts, active encrypted/LVM volumes and the ISO's own disk are excluded. Redirected runs never prompt for flashing.
+Interactive terminals offer a numbered USB menu. Enter skips it. Choose by path/model/size/serial/label and type `ERASE` to confirm that drive. The CLI rechecks the drive, unmounts it, writes the image with progress and flushes it. System mounts, active encrypted/LVM volumes and the ISO's own disk are excluded. Redirected runs never prompt for flashing.
 
 ## Install a worker
 
@@ -126,10 +126,18 @@ Boot the shared USB. Wi-Fi connects automatically and the laptop stays live unti
 ./guaranine worker
 ```
 
-Enter its Tailscale IPv4 and the SSH fingerprint displayed on its console. Every remote command uses that pinned host key and the operator's SSH key. Choose a unique worker name and an unmounted, writable disk of at least 16 GiB. There is no default disk. The exact `ERASE NAME /dev/DISK` confirmation authorizes erasure; cancellation before it sends no installation configuration.
+The command finds the laptop automatically. If several are online, choose its number. Compare the displayed SSH fingerprint with the one on the laptop screen and enter `yes` if they match; no fingerprint transcription is required. Every remote command uses that pinned host key and the operator's SSH key.
+
+Press Enter to accept the suggested laptop name, or type your own. Choose its installation disk by number, checking the displayed model, size and serial. The disk must be unmounted, writable and at least 16 GiB. There is no default disk. Type `ERASE` to authorize erasing the selected disk; cancellation before it sends no installation configuration.
 
 The CLI rechecks the disk and batch expiry, then streams the approved configuration to native `kairos-agent --strict-validation manual-install`. Name, join credentials and captured Wi-Fi configuration are saved privately under `nodes/NAME/`.
 
-After installation powers off, remove the USB and boot the laptop. Its persistent Tailscale identity can have a different address from the live session. Require `kubectl get node NAME -o wide` to report Ready with a Tailscale address. A transport error during installation can occur after disk changes started; inspect the laptop before retrying.
+When the laptop powers off, remove the USB and turn it on again. Leave the command running: it checks the controller and reports when the worker is Ready, including its persistent Tailscale address. No separate `kubectl` or SSH command is required for this check. A transport error during installation can occur after disk changes started; inspect the laptop before retrying.
+
+If the final check was interrupted or timed out, resume verification without reinstalling:
+
+```bash
+./guaranine worker --wait YOUR_LAPTOP_NAME
+```
 
 Continue with [operations](docs/operations.md) for maintenance, backups and recovery, or [development](docs/development.md) for validation.
