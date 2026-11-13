@@ -28,6 +28,8 @@ The installed system carries its Wi-Fi profile forward and keeps its own persist
 
 K3s starts after the firewall and Tailscale registration service. The server additionally binds its service to the ext4 volume labeled `GUARANINE_DATA` at `/var/lib/rancher/k3s`; an absent mount prevents the server from starting. Worker and server settings live in native role profiles, rather than generated copies of shared machine policy.
 
+AuroraBoot creates the controller's OS persistent partition on first boot. Its native profile refreshes block-device events and waits for udev before Kairos grows or mounts that filesystem, so fast boots do not race filesystem-label discovery. The retained K3s data disk is separate.
+
 ## Controller resources
 
 The current coordinator defaults are `Standard_B2ls_v2` (2 vCPUs, 4 GiB RAM), a 32-GiB OS SSD and a separate 64-GiB data SSD at LUN 0. The [Terraform variables](../infra/azure/coordinator/main.tf) own their exact constraints. Perform the [cloud preflight](../SETUP.md#cloud-preflight) against the selected region, SKU and subscription.

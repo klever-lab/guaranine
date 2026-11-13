@@ -2,6 +2,10 @@
 name: Guaranine control plane
 hostname: guaranine-controlplane
 stages:
+  rootfs:
+    - name: Publish filesystem labels after first-boot partition creation
+      commands:
+        - udevadm trigger --action=change --subsystem-match=block && udevadm settle --timeout=30
   initramfs:
     - name: Configure the K3s server and retained data volume
       files:
