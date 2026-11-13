@@ -200,9 +200,23 @@ def flash_iso(image):
             raise ValueError('The selected USB drive changed or is still mounted; nothing was flashed')
         print(f'Writing {image.stat().st_size / 2**20:.1f} MiB to {path}…', flush=True)
         print('Do not remove the USB.', flush=True)
-        subprocess.run(['sudo', '--', 'dd', f'if={image}', f'of={path}', 'bs=4M', 'oflag=dsync',
-                        'status=progress', 'conv=fsync,nocreat'],
-                       check=True, timeout=900)
+        log = image.parent / ('flash-' + str(time.time_ns()) + '.log')
+        private_write(log, f'Image: {image}\nUSB: {path}\n')
+        print(f'Flash log: {log}', flush=True)
+        try:
+            with subprocess.Popen(['tee', '--append', '--', str(log)], stdin=subprocess.PIPE,
+                                  stdout=sys.stderr) as logger:
+                with logger.stdin:
+                    subprocess.run(['sudo', '--', 'dd', f'if={image}', f'of={path}', 'bs=4M', 'oflag=dsync',
+                                    'status=progress', 'conv=fsync,nocreat'],
+                                   stdout=logger.stdin, stderr=subprocess.STDOUT, check=True, timeout=900)
+            if logger.returncode:
+                raise subprocess.CalledProcessError(logger.returncode, ['tee'])
+        except (OSError, subprocess.SubprocessError) as error:
+            with log.open('a') as saved:
+                saved.write(f'\n{type(error).__name__}: {error}\n')
+            raise ValueError(f'USB write failed; the USB may be incomplete. ISO saved: {image}. '
+                             f'Private log: {log}') from error
         print(f'\nFlashed {image.name} to {path}. You can remove the USB.')
         return True
     except (EOFError, KeyboardInterrupt):

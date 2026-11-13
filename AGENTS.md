@@ -17,6 +17,7 @@ Read [README.md](README.md) first, then [SETUP.md](SETUP.md).
 - Laptop workers must support built-in Wi-Fi from initial boot through installation and normal operation, without requiring Ethernet, adapters or external bridges. Verify OS, installer and driver support for the target laptops before recommending a platform or building installation media.
 - Terraform owns infrastructure, Kairos configuration owns the OS and K3s setup, and Kubernetes manifests own workloads.
 - Keep README.md short, setup instructions in SETUP.md and other documentation in docs/, the CLI in `scripts/guaranine.py`, and each Terraform root in one `main.tf`.
+- Run Python snippets through `uv` with `requirements.txt`, as `./guaranine` does.
 - Avoid helper-file proliferation, duplicate metadata and repeated operational facts; maintain each fact in its owning guide.
 
 ## Documentation (read/write)

@@ -904,7 +904,50 @@ class USBFlashingTests(unittest.TestCase):
                   patch.object(cli, 'usb_disks', side_effect=[[self.disk], [self.disk], [unmounted]]),
                   patch('builtins.input', side_effect=['1', 'ERASE']),
                   patch.object(cli.subprocess, 'run', side_effect=effects) as run,
-                  self.assertRaises(subprocess.CalledProcessError)):
+                  self.assertRaises(subprocess.CalledProcessError if fail_unmount else ValueError)):
                 cli.flash_iso(self.image)
             self.assertEqual(run.call_count, 1 if fail_unmount else 2)
         self.assertNotIn('Flashed ', self.output.getvalue())
+
+    def test_flash_logs_preserve_output_permissions_and_failure_details(self):
+        unmounted = copy.deepcopy(self.disk)
+        unmounted['children'][0]['mountpoints'] = []
+        real_run = subprocess.run
+        for outcome in ('success', 'write-error', 'timeout'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryFile(mode='w+') as terminal:
+                self.output.seek(0)
+                self.output.truncate()
+                previous_logs = set(self.image.parent.glob('flash-*.log'))
+                def write(arguments, **kwargs):
+                    self.assertIn('dd', arguments)
+                    script = ('import os,sys; os.write(1,b"DISPOSABLE stdout\\n"); '
+                              'os.write(2,b"\\r12582912 bytes copied\\n"); '
+                              'sys.exit(' + ('1' if outcome == 'write-error' else '0') + ')')
+                    result = real_run([sys.executable, '-c', script], **kwargs)
+                    if outcome == 'timeout':
+                        raise subprocess.TimeoutExpired(arguments, 900)
+                    return result
+                with (patch.object(cli, 'usb_disks', return_value=[unmounted]),
+                      patch('builtins.input', side_effect=['1', 'ERASE']),
+                      patch.object(cli.subprocess, 'run', side_effect=write),
+                      contextlib.redirect_stderr(terminal)):
+                    if outcome == 'success':
+                        self.assertTrue(cli.flash_iso(self.image))
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'USB write failed.*Private log:') as error:
+                            cli.flash_iso(self.image)
+                log, = set(self.image.parent.glob('flash-*.log')) - previous_logs
+                self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+                self.assertIn(str(log), self.output.getvalue())
+                terminal.seek(0)
+                visible = terminal.read()
+                for message in ('DISPOSABLE stdout', '12582912 bytes copied'):
+                    self.assertIn(message, visible)
+                    self.assertIn(message, log.read_text())
+                self.assertIn(b'\r12582912', log.read_bytes())
+                if outcome != 'success':
+                    self.assertIn(str(log), str(error.exception))
+                    self.assertIn('CalledProcessError' if outcome == 'write-error' else 'TimeoutExpired',
+                                  log.read_text())
+                self.assertEqual('Flashed ' in self.output.getvalue(), outcome == 'success')
+                self.assertEqual(self.image.read_text(), 'DISPOSABLE-ISO')
