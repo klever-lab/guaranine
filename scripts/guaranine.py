@@ -197,7 +197,7 @@ def flash_iso(image):
         subprocess.run(['sudo', '--', 'dd', f'if={image}', f'of={path}', 'bs=4M', 'oflag=dsync',
                         'status=progress', 'conv=fsync,nocreat'],
                        check=True, timeout=900)
-        print(f'Flashed {image.name} to {path}. You can now remove the USB drive.')
+        print(f'\nFlashed {image.name} to {path}. You can now remove the USB drive.')
         return True
     except (EOFError, KeyboardInterrupt):
         print(f'\nFlashing cancelled; the ISO is saved at {image}.')
