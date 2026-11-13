@@ -368,7 +368,7 @@ class InstallationTests(unittest.TestCase):
             cli.install_worker(None)
         self.assertEqual(len(prompts), 4)
         self.assertEqual(len(sent), 1)
-        self.assertIn('Found one laptop', output.getvalue())
+        self.assertIn('Found laptop', output.getvalue())
         self.assertIn('inspiron-5558-3 is Ready at 100.64.0.90', output.getvalue())
         self.assertNotIn(token, output.getvalue())
         self.assertFalse(any('IPv4 address' in prompt or 'fingerprint shown' in prompt for prompt in prompts))
@@ -397,7 +397,7 @@ class InstallationTests(unittest.TestCase):
             with (self.subTest(state=state, address=address), patch.object(cli, 'private_command', return_value=raw),
                   contextlib.redirect_stdout(output), self.assertRaises(ValueError)):
                 cli.wait_for_worker('worker-one', ['ssh'], self.root)
-            self.assertNotIn('Connected to the controller.', output.getvalue())
+            self.assertNotIn(' is Ready at ', output.getvalue())
         with (patch.object(cli, 'private_command', side_effect=ValueError('DISPOSABLE failure')),
               contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, '--wait worker-one')):
             cli.wait_for_worker('worker-one', ['ssh'], self.root)
@@ -572,7 +572,7 @@ class InstallationTests(unittest.TestCase):
     def test_laptop_discovery_explains_disconnected_operator(self):
         with (patch.object(cli, 'private_command', return_value='{"BackendState":"NeedsLogin"}'),
               patch.object(cli.time, 'sleep') as sleep, patch('builtins.input') as prompt,
-              contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'Connect this operator')):
+              contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'Connect this computer')):
             cli.choose_laptop(self.root)
         sleep.assert_not_called()
         prompt.assert_not_called()
@@ -594,7 +594,7 @@ class InstallationTests(unittest.TestCase):
             mint.assert_not_called()
             self.assertEqual('Boot the laptop from this USB.' in output.getvalue(), flashed)
             self.assertEqual('./guaranine worker' in output.getvalue(), flashed)
-            self.assertEqual('USB flashing was not completed.' in output.getvalue(), not flashed)
+            self.assertEqual('USB not flashed.' in output.getvalue(), not flashed)
 
     def test_ssh_hostkey_displays_fingerprint_and_requires_confirmation_before_pinning(self):
         blob = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\x11' * 32
@@ -719,7 +719,7 @@ class USBFlashingTests(unittest.TestCase):
             self.assertFalse(cli.flash_iso(self.image))
         run.assert_not_called()
         output = self.output.getvalue()
-        self.assertIn('Confirmation did not match. The required text is: ERASE', output)
+        self.assertIn('Confirmation must be ERASE.', output)
         self.assertIn('Nothing was written to /dev/sdy.', output)
 
     def test_invalid_choices_never_unmount_or_write(self):
@@ -745,7 +745,7 @@ class USBFlashingTests(unittest.TestCase):
              'status=progress', 'conv=fsync,nocreat']])
         self.assertIn('DISPOSABLE-USB-B', self.output.getvalue())
         self.assertIn('Writing ', self.output.getvalue())
-        self.assertIn('Wait for the "Flashed" success message', self.output.getvalue())
+        self.assertIn('Do not remove the USB.', self.output.getvalue())
         self.assertIn('Flashed guaranine-kairos.iso to /dev/sdz.', self.output.getvalue())
 
     def test_device_changes_before_or_after_unmount_never_start_a_write(self):

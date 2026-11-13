@@ -1,16 +1,16 @@
 # Guaranine setup
 
-Run these commands from the repository root on a Linux operator computer. Use the [documentation index](docs/README.md) for explanations and ongoing operations.
+Run these commands from the repository root on your Linux operator computer. See the [documentation index](docs/README.md) for background and ongoing operations.
 
 ## Prerequisites
 
-Install Git, Python 3.12+, `uv`, Docker, `sudo`, OpenSSH client tools, Tailscale and `nmcli`. Image building needs privileged Docker access and scratch space for uncompressed disk images; USB flashing also uses sudo. Azure operations need the Terraform version in [.terraform-version](.terraform-version), Azure CLI, AzCopy and `qemu-img`. Cluster checks use a `kubectl` version matching the pinned K3s release in [kairos/versions.json](kairos/versions.json).
+Install Git, Python 3.12+, `uv`, Docker, `sudo`, OpenSSH client tools, Tailscale and `nmcli`. Building images needs privileged Docker access and space for uncompressed disk images. USB flashing uses sudo. Azure needs the Terraform version in [.terraform-version](.terraform-version), Azure CLI, AzCopy and `qemu-img`. Use a `kubectl` version matching K3s in [kairos/versions.json](kairos/versions.json).
 
-Before building laptop media, read the [hardware inventory, network requirements and qualification limits](docs/hardware.md). For an existing deployment, complete the [migration prerequisites](docs/operations.md#migrate-an-older-deployment) before provisioning a replacement.
+Before building laptop media, read the [hardware inventory, network requirements and qualification limits](docs/hardware.md). Before replacing an existing deployment, complete the [migration prerequisites](docs/operations.md#migrate-an-older-deployment).
 
 ## Operator files
 
-Choose protected storage as described in [private material handling](docs/security.md#private-material-and-enrollment). The default operator directory is `~/.local/state/guaranine-kairos`; `GUARANINE_OPERATOR_DIR` may select another directory outside the checkout. Initialization creates a new directory and refuses to overwrite an existing one.
+Use [protected storage](docs/security.md#private-material-and-enrollment). The default is `~/.local/state/guaranine-kairos`; set `GUARANINE_OPERATOR_DIR` to use another directory outside the checkout. Initialization refuses to overwrite an existing directory.
 
 ```bash
 umask 077
@@ -18,7 +18,7 @@ export GUARANINE_OPERATOR_DIR="${GUARANINE_OPERATOR_DIR:-${XDG_STATE_HOME:-$HOME
 ./guaranine init
 ```
 
-Initialization creates an SSH key pair, separate K3s server/agent tokens and `operator.yaml`. Fill in the private `operator.yaml`:
+Initialization creates an SSH key pair, separate K3s server/agent tokens and `operator.yaml`. Fill in `operator.yaml`:
 
 ```yaml
 tailnet: YOUR_TAILNET
@@ -26,17 +26,17 @@ tailscale_api_token: YOUR_PRIVATE_TAILSCALE_API_TOKEN
 endpoint: null
 ```
 
-Leave `endpoint` null until bootstrap records the verified controller address.
+Leave `endpoint` null; bootstrap records the verified controller address.
 
 ## Tailnet access
 
-Apply the [tailnet policy procedure](docs/security.md#tailnet-policy) before starting nodes. Connect the operator to that tailnet and preserve its routes if another VPN is active.
+Apply the [tailnet policy](docs/security.md#tailnet-policy) before starting nodes. Connect the operator to that tailnet; preserve its routes if another VPN is active.
 
 ## Cloud preflight
 
-Verify the selected Azure for Students subscription, remaining credit, expiry, spending limit, region/SKU availability, quota and complete cost before provisioning. Do not apply with unknown credit/cost/quota or select an automatic paid fallback. Keep existing Azure services separate.
+Before provisioning, check your Azure for Students subscription, remaining credit, expiry, spending limit, region/SKU availability, quota and total cost. Do not apply with unknown credit/cost/quota or use an automatic paid fallback. Keep existing Azure services separate.
 
-Check the [controller resources](docs/architecture.md#controller-resources) and your actual Terraform variables. Account for compute, both disks, image/upload storage, public IPv4 and outbound traffic. Stopped VMs can still incur disk/image/IP costs.
+Check the [controller resources](docs/architecture.md#controller-resources) and your Terraform variables. Include compute, both disks, image/upload storage, public IPv4 and outbound traffic. Stopped VMs can still incur disk/image/IP costs.
 
 ## Controller image and Terraform
 
@@ -44,7 +44,7 @@ Check the [controller resources](docs/architecture.md#controller-resources) and 
 ./guaranine controlplane
 ```
 
-The VHD appears under `nodes/guaranine-controlplane/image/` in the operator directory. Check its fixed-VHD format and record the exact byte length and SHA-256:
+The VHD is in `nodes/guaranine-controlplane/image/` under the operator directory. Check its fixed-VHD format and record its byte length and SHA-256:
 
 ```bash
 controller_vhd="$GUARANINE_OPERATOR_DIR/nodes/guaranine-controlplane/image/guaranine-kairos.vhd"
@@ -53,11 +53,11 @@ stat --format=%s "$controller_vhd"
 sha256sum "$controller_vhd"
 ```
 
-For incomplete or expired outputs, follow [image batches and retries](docs/operations.md#image-batches-and-retries) before building again.
+For incomplete or expired builds, follow [image batches and retries](docs/operations.md#image-batches-and-retries).
 
-Copy the [image example](infra/azure/image/terraform.tfvars.example) to `$GUARANINE_OPERATOR_DIR/image.tfvars` and the [coordinator example](infra/azure/coordinator/terraform.tfvars.example) to `$GUARANINE_OPERATOR_DIR/coordinator.tfvars`; fill in real values. For image upload, use `image_ready = false`, the actual VHD size/hash and a unique `guaranine-kairos-...` name. New image contents require their own state file.
+Copy the [image example](infra/azure/image/terraform.tfvars.example) to `$GUARANINE_OPERATOR_DIR/image.tfvars` and the [coordinator example](infra/azure/coordinator/terraform.tfvars.example) to `$GUARANINE_OPERATOR_DIR/coordinator.tfvars`. Fill in your values. For upload, use `image_ready = false`, the VHD's actual size/hash and a unique `guaranine-kairos-...` name. Changed image contents need their own state file.
 
-Use native local state on protected operator storage, one operator at a time, with [off-machine backups](docs/operations.md#backup). Review every saved plan before applying it.
+Keep local Terraform state on protected operator storage with [off-machine backups](docs/operations.md#backup). Use one operator at a time. Review every saved plan before applying it.
 
 ```bash
 mkdir -p "$GUARANINE_OPERATOR_DIR/terraform"
@@ -70,9 +70,9 @@ terraform -chdir=infra/azure/image show "$GUARANINE_OPERATOR_DIR/image.tfplan"
 terraform -chdir=infra/azure/image apply "$GUARANINE_OPERATOR_DIR/image.tfplan"
 ```
 
-This first apply creates only upload staging. Obtain `upload_disk_id` and follow the [Azure direct-upload procedure](https://learn.microsoft.com/azure/virtual-machines/linux/disks-upload-vhd-to-managed-disk-cli): grant a short-lived write SAS, upload the exact VHD with AzCopy, then revoke disk access in an `EXIT` trap, including on failure. Keep shell tracing off and AzCopy logs/job plans private. SAS values and image contents never enter Terraform state.
+The first apply creates upload staging. Get `upload_disk_id` and follow the [Azure direct-upload procedure](https://learn.microsoft.com/azure/virtual-machines/linux/disks-upload-vhd-to-managed-disk-cli): grant a short-lived write SAS, upload the exact VHD with AzCopy, then revoke disk access in an `EXIT` trap, including on failure. Keep shell tracing off and AzCopy logs/job plans private. Keep SAS values and image contents out of Terraform state.
 
-Set `image_ready = true` and repeat plan/show/apply to close export access. Put the `source_disk_id` output into `coordinator.tfvars`; use `name_prefix = "guaranine-kairos"` for the new deployment.
+Set `image_ready = true` and repeat plan/show/apply to close export access. Copy the `source_disk_id` output to `coordinator.tfvars`; use `name_prefix = "guaranine-kairos"` for the new deployment.
 
 ```bash
 export TF_DATA_DIR="$GUARANINE_OPERATOR_DIR/terraform/coordinator-cache"
@@ -85,19 +85,19 @@ terraform -chdir=infra/azure/coordinator apply "$GUARANINE_OPERATOR_DIR/coordina
 terraform -chdir=infra/azure/coordinator plan -var-file="$GUARANINE_OPERATOR_DIR/coordinator.tfvars" -detailed-exitcode
 ```
 
-Require a no-change rerun. Keep the `handoff` output for the VM and disk IDs.
+Confirm the final plan shows no changes. Keep the `handoff` output with the VM and disk IDs.
 
 ## Bootstrap the controller
 
-After the VM registers with Tailscale, find its verified tailnet IPv4 address. Run:
+After the VM registers with Tailscale, verify its tailnet IPv4 address and run:
 
 ```bash
 ./guaranine bootstrap
 ```
 
-Compare the displayed SSH fingerprint with protected VM console output and enter `yes` if they match. For a new deployment, explicitly choose the NEW EMPTY retained data disk and type `INITIALIZE /dev/DISK` for the selected device. Existing filesystem signatures are refused. Recovery reuses the retained/restored `GUARANINE_DATA` volume without formatting it; follow the [restore procedure](docs/operations.md#restore-on-another-cloud-vm) for an existing cluster.
+Compare the displayed SSH fingerprint with the protected VM console and enter `yes` if they match. For a new deployment, choose the NEW EMPTY retained data disk and type `INITIALIZE /dev/DISK` using its device path. Disks with filesystem signatures are refused. For an existing cluster, follow the [restore procedure](docs/operations.md#restore-on-another-cloud-vm) to reuse the retained/restored `GUARANINE_DATA` volume without formatting it.
 
-Bootstrap waits for the node to become Ready, saves a private kubeconfig and pinned server host key, and records the Tailscale endpoint in `operator.yaml`.
+Bootstrap waits for Ready, saves the kubeconfig and pinned server host key, and records the Tailscale endpoint in `operator.yaml`.
 
 ```bash
 export KUBECONFIG="$GUARANINE_OPERATOR_DIR/kubeconfig"
@@ -106,38 +106,38 @@ kubectl get nodes -o wide
 
 ## Shared laptop ISO
 
-Connect the operator to exactly one active NetworkManager Wi-Fi connection on the network the laptops should use, then run:
+Connect the operator to the laptops' Wi-Fi network, with exactly one active NetworkManager Wi-Fi connection. Run:
 
 ```bash
 ./guaranine iso
 ```
 
-Capture supports open, WPA personal or WPA3 personal authentication. Enterprise credentials and ambiguous/missing networks fail before media creation. Only the SSID/authentication is copied; each laptop uses DHCP, without the operator's MAC, interface name, IP address or access-point binding.
+Open, WPA personal and WPA3 personal networks are supported. Enterprise, missing or ambiguous networks fail before media creation. Only the SSID/authentication is copied. Each laptop uses DHCP, without the operator's MAC, interface name, IP address or access-point binding.
 
-The CLI prints the ISO path and registration expiry in local time. Complete enrollment before that deadline; read the [enrollment limits](docs/security.md#private-material-and-enrollment) when handling the media. Changing a network or reusing a batch follows the [image retry procedure](docs/operations.md#image-batches-and-retries).
+The CLI prints the ISO path and enrollment deadline in local time. Enroll before that deadline and follow the [media handling limits](docs/security.md#private-material-and-enrollment). To change networks or reuse a batch, follow [image batches and retries](docs/operations.md#image-batches-and-retries).
 
-Interactive terminals offer a numbered USB menu. Enter skips it. Choose by path/model/size/serial/label and type `ERASE` to confirm that drive. The CLI rechecks the drive, unmounts it, writes the image with progress and flushes it. System mounts, active encrypted/LVM volumes and the ISO's own disk are excluded. Redirected runs never prompt for flashing.
+Choose a USB by number, checking its path, model, size, serial and label. Press Enter to skip. Type `ERASE` to confirm. The CLI rechecks and unmounts the drive, writes with progress, then flushes it. Do not remove the USB until `Flashed` appears. System mounts, active encrypted/LVM volumes and the ISO's own disk are excluded. Redirected runs do not offer flashing.
 
 ## Install a worker
 
-Boot the shared USB. Wi-Fi connects automatically and the laptop stays live until explicitly installed. Run on the operator:
+Boot the USB. Wi-Fi connects automatically; the laptop stays live until you install it. Run on the operator:
 
 ```bash
 ./guaranine worker
 ```
 
-The command finds the laptop automatically. If several are online, choose its number. Compare the displayed SSH fingerprint with the one on the laptop screen and enter `yes` if they match; no fingerprint transcription is required. Every remote command uses that pinned host key and the operator's SSH key.
+The command finds the laptop. If several are online, choose its number. Compare the displayed SSH fingerprint with the one on the laptop screen and enter `yes` if they match. Remote commands use that pinned host key and the operator's SSH key.
 
-Press Enter to accept the suggested laptop name, or type your own. Choose its installation disk by number, checking the displayed model, size and serial. The disk must be unmounted, writable and at least 16 GiB. There is no default disk. Type `ERASE` to authorize erasing the selected disk; cancellation before it sends no installation configuration.
+Press Enter to accept the suggested name, or type your own. Choose a disk by number, checking its model, size and serial. It must be unmounted, writable and at least 16 GiB; there is no default. Type `ERASE` to erase that disk and install. Cancelling before confirmation sends no installation configuration.
 
-The CLI rechecks the disk and batch expiry, then streams the approved configuration to native `kairos-agent --strict-validation manual-install`. Name, join credentials and captured Wi-Fi configuration are saved privately under `nodes/NAME/`.
+The CLI rechecks the disk and batch expiry, then sends the configuration to `kairos-agent --strict-validation manual-install`. The name, join credentials and Wi-Fi settings are saved privately under `nodes/NAME/`.
 
-When the laptop powers off, remove the USB and turn it on again. Leave the command running: it checks the controller and reports when the worker is Ready, including its persistent Tailscale address. No separate `kubectl` or SSH command is required for this check. A transport error during installation can occur after disk changes started; inspect the laptop before retrying.
+When the laptop powers off, remove the USB and turn it on. Leave the command running; it checks the controller and reports Ready with the laptop's persistent Tailscale address. If installation reports a connection error, disk changes may have started. Check the laptop before retrying.
 
-If the final check was interrupted or timed out, resume verification without reinstalling:
+If the Ready check stops or times out, resume without reinstalling:
 
 ```bash
 ./guaranine worker --wait YOUR_LAPTOP_NAME
 ```
 
-Continue with [operations](docs/operations.md) for maintenance, backups and recovery, or [development](docs/development.md) for validation.
+See [operations](docs/operations.md) for maintenance, backups and recovery, or [development](docs/development.md) for validation.

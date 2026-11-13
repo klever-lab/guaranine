@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build private Kairos media and install K3s workers over Tailscale."""
+"""Build Kairos images and install laptops over Tailscale."""
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -85,7 +85,7 @@ def private_command(arguments, directory, *, data=None, timeout=600):
     if result.returncode:
         path = Path(directory) / ('error-' + str(time.time_ns()) + '.log')
         private_write(path, result.stdout + result.stderr)
-        raise ValueError(f'Private operation failed; inspect protected diagnostic file {path}')
+        raise ValueError(f'Command failed. Check the private log: {path}')
     return result.stdout
 
 
@@ -159,7 +159,7 @@ def flash_iso(image):
     try:
         disks = usb_disks(image)
         if not disks:
-            print('No suitable USB drives found; the ISO is saved for later flashing.')
+            print('No suitable USB drives found.')
             return False
         print('\nFlash the ISO to a USB drive:')
         print('0. Skip flashing (default)')
@@ -175,11 +175,11 @@ def flash_iso(image):
         selected = disks[int(choice) - 1]
         path = selected['path']
         confirmation = 'ERASE'
-        print(f'ALL DATA on {path} will be erased and replaced with {image.name}.')
+        print(f'ALL DATA on {path} will be erased. Image: {image.name}')
         answer = input('Type ERASE to write this USB (Enter to cancel): ').strip().upper()
         if answer != confirmation:
             if answer:
-                print(f'Confirmation did not match. The required text is: {confirmation}')
+                print(f'Confirmation must be {confirmation}.')
             print(f'Flashing cancelled. Nothing was written to {path}.')
             return False
         if selected not in usb_disks(image):
@@ -192,15 +192,15 @@ def flash_iso(image):
                 or any(mount for member in [current, *current.get('children', [])]
                        for mount in member.get('mountpoints', []))):
             raise ValueError('The selected USB drive changed or is still mounted; nothing was flashed')
-        print(f'Writing {image.stat().st_size / 2**20:.1f} MiB to {path}; progress appears below.', flush=True)
-        print('Wait for the "Flashed" success message before removing the USB.', flush=True)
+        print(f'Writing {image.stat().st_size / 2**20:.1f} MiB to {path}…', flush=True)
+        print('Do not remove the USB.', flush=True)
         subprocess.run(['sudo', '--', 'dd', f'if={image}', f'of={path}', 'bs=4M', 'oflag=dsync',
                         'status=progress', 'conv=fsync,nocreat'],
                        check=True, timeout=900)
-        print(f'\nFlashed {image.name} to {path}. You can now remove the USB drive.')
+        print(f'\nFlashed {image.name} to {path}. You can remove the USB.')
         return True
     except (EOFError, KeyboardInterrupt):
-        print(f'\nFlashing cancelled; the ISO is saved at {image}.')
+        print(f'\nFlashing cancelled. ISO saved: {image}')
         return False
 
 
@@ -220,7 +220,7 @@ def initialize(directory):
         'tailscale_api_token': 'REPLACE_WITH_YOUR_TAILSCALE_API_TOKEN',
         'endpoint': None,
     }, sort_keys=False))
-    print(f'Created private Kairos operator files. Edit {directory / "operator.yaml"}.')
+    print(f'Created operator files. Edit {directory / "operator.yaml"}.')
 
 
 def operator_settings():
@@ -229,10 +229,10 @@ def operator_settings():
     if not isinstance(settings, dict) or not all(
             isinstance(settings.get(field), str) and settings[field].strip()
             and not settings[field].startswith('REPLACE_') for field in ('tailnet', 'tailscale_api_token')):
-        raise ValueError('Fill in tailnet and tailscale_api_token in the private operator.yaml first')
+        raise ValueError('Set tailnet and tailscale_api_token in operator.yaml first')
     token = settings['tailscale_api_token'].strip()
     if not token.isascii() or any(character.isspace() for character in token):
-        raise ValueError('Use a single ASCII Tailscale API token without embedded whitespace')
+        raise ValueError('Use one ASCII Tailscale API token without whitespace')
     protected(directory / 'ssh_key')
     return settings
 
@@ -355,7 +355,7 @@ def build_base(directory):
     command = ['sudo', '--', 'docker', 'build', '--platform', 'linux/amd64', '--tag', image]
     for key, value in args.items():
         command += ['--build-arg', f'{key}={value}']
-    with progress('Building the shared Kairos/Hadron base with K3s and Tailscale…'):
+    with progress('Building Kairos base…'):
         private_command([*command, str(ROOT / 'kairos')], directory, timeout=1800)
     return image
 
@@ -380,7 +380,7 @@ else
 fi
 '''
     container = 'guaranine-build-' + secrets.token_hex(8)
-    with (progress(f'Building private Kairos {image_format.upper()}…'),
+    with (progress(f'Building Kairos {image_format.upper()}…'),
           tempfile.TemporaryDirectory(prefix='build-', dir=directory, ignore_cleanup_errors=True) as scratch,
           log.open('xb') as errors):
         log.chmod(0o600)
@@ -396,7 +396,7 @@ fi
             subprocess.run(['sudo', '--', 'docker', 'rm', '--force', container],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
         if result.returncode:
-            raise ValueError(f'Kairos image build failed (exit {result.returncode}); inspect protected diagnostics in {log}')
+            raise ValueError(f'Kairos build failed (exit {result.returncode}). Private log: {log}')
         suffix = '.iso' if image_format == 'iso' else '.vhd'
         images = list((Path(scratch) / 'images').glob('*' + suffix))
         if len(images) != 1 or images[0].is_symlink() or not images[0].is_file() or images[0].stat().st_size <= 0:
@@ -443,8 +443,8 @@ def prepare_iso(_args):
             except (json.JSONDecodeError, UnicodeError):
                 pass
         if getattr(_args, 'rebuild', False) or saved_source != current_source:
-            print('Rebuilding the saved ISO from the current checkout.' if getattr(_args, 'rebuild', False)
-                  else 'Saved ISO source is outdated or unknown; rebuilding automatically.')
+            print('Rebuilding ISO…' if getattr(_args, 'rebuild', False)
+                  else 'ISO source changed or is unknown; rebuilding…')
             source = build_base(directory)
             config = yaml.safe_load(protected(config_path).read_text())
             auth_record(key, reusable=True)
@@ -454,9 +454,9 @@ def prepare_iso(_args):
             previous = installer / ('image-previous-' + str(time.time_ns()))
             image.parent.rename(previous)
             replacement.parent.rename(image.parent)
-            print(f'Previous ISO and build logs saved at {previous}')
+            print(f'Previous ISO and logs: {previous}')
         else:
-            print('Reusing the saved ISO; its commit and source files match the current checkout.')
+            print('Reusing saved ISO (source unchanged).')
     else:
         if installer.exists() and set(installer.iterdir()) != {key}:
             raise ValueError(f'{installer} contains an incomplete build; inspect its protected logs and revoke '
@@ -473,15 +473,15 @@ def prepare_iso(_args):
         image = build_image(config, 'iso', installer / 'image', source)
         record_iso_source(image, current_source)
         auth_record(key, reusable=True)
-    print(f'Private shared ISO ready: {image}')
-    print(f'ISO source: commit {current_source["commit"][:12]}, build inputs {current_source["sources_sha256"][:12]}.')
+    print(f'ISO ready: {image}')
+    print(f'ISO source: commit {current_source["commit"][:12]}, inputs {current_source["sources_sha256"][:12]}.')
     expires = datetime.fromisoformat(record['expires'].replace('Z', '+00:00')).astimezone()
-    print(f'New Tailscale registrations expire on {expires:%A, %B %-d, %Y at %-I:%M:%S %p %Z}.')
+    print(f'Enroll laptops before {expires:%Y-%m-%d %H:%M:%S %Z}.')
     if flash_iso(image):
         print('Boot the laptop from this USB. Wi-Fi connects automatically.')
-        print('Then run ./guaranine worker on this operator computer.')
+        print('On this computer, run: ./guaranine worker')
     else:
-        print('USB flashing was not completed. Run ./guaranine iso again to write the saved ISO.')
+        print('USB not flashed. Run ./guaranine iso to try again.')
 
 
 def prepare_controlplane(_args):
@@ -512,8 +512,8 @@ def prepare_controlplane(_args):
             config = yaml.safe_load(protected(config_path).read_text())
         image = build_image(config, 'vhd', node / 'image', source)
         auth_record(key)
-    print(f'Private control-plane VHD ready: {image}')
-    print('No Azure resources were changed. The K3s data volume must be prepared separately.')
+    print(f'Controller VHD ready: {image}')
+    print('Azure is unchanged. Prepare the K3s data volume separately.')
 
 
 def ssh_command(address, hosts):
@@ -541,7 +541,7 @@ def verified_connection(address, directory):
             except subprocess.TimeoutExpired:
                 pass
             if time.monotonic() >= deadline:
-                raise ValueError('SSH did not become available. Leave the laptop booted from the USB and try again.')
+                raise ValueError('SSH unavailable. Keep the laptop booted from the USB and try again.')
             time.sleep(2)
     if len(lines) != 1:
         raise ValueError('Expected exactly one SSH Ed25519 host key')
@@ -550,9 +550,9 @@ def verified_connection(address, directory):
         raise ValueError('Unexpected SSH keyscan response')
     fingerprint = private_command(['ssh-keygen', '-lf', '-', '-E', 'sha256'], directory,
                                   data=lines[0] + '\n', timeout=30).split()[1]
-    print(f'\nConnecting to {address}. Its SSH fingerprint is:')
+    print(f'\nSSH fingerprint for {address}:')
     print(f'\n  {fingerprint}\n')
-    print('Compare this with the SSH fingerprint on the laptop screen or protected VM console.')
+    print('Compare with the fingerprint on the laptop screen or protected VM console.')
     if input('Do they match? Type yes to continue (Enter to cancel): ').strip().lower() not in ('y', 'yes'):
         raise ValueError('SSH identity not confirmed; no remote command was sent')
     with tempfile.TemporaryDirectory(prefix='ssh-', dir=directory) as scratch:
@@ -611,8 +611,8 @@ def bootstrap(_args):
     name = role_config('controlplane')['hostname']
     check_name(name)
     if (directory / 'kubeconfig').exists() or (directory / 'controlplane-known-hosts').exists():
-        raise ValueError('Control-plane operator outputs already exist; inspect them before repeating bootstrap')
-    address = tailnet_ip(input('Control-plane Tailscale IPv4 address: ').strip())
+        raise ValueError('kubeconfig or controlplane-known-hosts already exists; inspect before rerunning bootstrap')
+    address = tailnet_ip(input('Controller Tailscale IPv4 address: ').strip())
     with verified_connection(address, directory) as (connection, hosts):
         initialize_data(connection, directory)
         private_command([*connection, 'systemctl start --no-block k3s.service'], directory)
@@ -629,16 +629,16 @@ def bootstrap(_args):
     temporary = directory / 'operator.yaml.new'
     private_write(temporary, yaml.safe_dump(settings, sort_keys=False))
     temporary.replace(protected(directory / 'operator.yaml'))
-    print(f'K3s is ready. Use: export KUBECONFIG={shlex.quote(str(directory / "kubeconfig"))}')
+    print(f'K3s ready. Run: export KUBECONFIG={shlex.quote(str(directory / "kubeconfig"))}')
 
 
 def choose_laptop(directory):
-    print('Boot the laptop from the Guaranine USB and leave it powered on.', flush=True)
-    print('Waiting for a laptop to connect over Wi-Fi and Tailscale (Ctrl+C to cancel)…', flush=True)
+    print('Boot the laptop from the Guaranine USB and keep it on.', flush=True)
+    print('Waiting for a laptop on Tailscale (Ctrl+C to cancel)…', flush=True)
     while True:
         status = json.loads(private_command(['tailscale', 'status', '--json'], directory, timeout=30))
         if status.get('BackendState') != 'Running':
-            raise ValueError('Connect this operator computer to Tailscale, then run ./guaranine worker again')
+            raise ValueError('Connect this computer to Tailscale, then rerun ./guaranine worker')
         laptops = []
         for peer in (status.get('Peer') or {}).values():
             name = peer.get('HostName') or ''
@@ -654,9 +654,9 @@ def choose_laptop(directory):
     laptops.sort()
     if len(laptops) == 1:
         name, address = laptops[0]
-        print(f'Found one laptop: {name} | {address}')
+        print(f'Found laptop: {name} | {address}')
         return address
-    print('\nLaptops booted from the Guaranine USB:')
+    print('\nAvailable laptops:')
     for number, (name, address) in enumerate(laptops, 1):
         print(f'{number}. {name} | {address}')
     choice = input('Laptop number to install (Enter to cancel): ').strip()
@@ -670,18 +670,18 @@ def wait_for_worker(name, server, node):
     wait = ('until k3s kubectl wait --for=condition=Ready node/' + name + ' --timeout=10s >/dev/null 2>&1; '
             'do sleep 2; done; k3s kubectl get node ' + name + ' -o json')
     try:
-        with progress(f'Waiting for {name} to become Ready. Keep the USB removed and the laptop powered on…'):
+        with progress(f'Waiting for {name} to become Ready…'):
             ready = json.loads(private_command([*server, 'timeout 600 sh -ec ' + shlex.quote(wait)], node, timeout=630))
     except (ValueError, subprocess.TimeoutExpired) as error:
-        raise ValueError(f'{name} has not been confirmed Ready. Check that the USB is removed and the laptop is powered on. '
-                         f'Resume this check with ./guaranine worker --wait {name}. Diagnostics: {error}') from error
+        raise ValueError(f'Could not confirm {name} is Ready. Check the laptop is on with the USB removed. '
+                         f'Resume: ./guaranine worker --wait {name}. Details: {error}') from error
     if not any(condition.get('type') == 'Ready' and condition.get('status') == 'True'
                for condition in ready['status']['conditions']):
         raise ValueError(f'{name} is not Ready yet; check the laptop screen')
     addresses = [item['address'] for item in ready['status']['addresses'] if item['type'] == 'InternalIP']
     if len(addresses) != 1:
         raise ValueError(f'{name} must have exactly one internal Tailscale IPv4 address')
-    print(f'\n{name} is Ready at {tailnet_ip(addresses[0])}. Connected to the controller.')
+    print(f'\n{name} is Ready at {tailnet_ip(addresses[0])}.')
 
 
 def install_worker(_args):
@@ -703,7 +703,7 @@ def install_worker(_args):
         live = private_command([*connection, 'test -f /run/cos/live_mode && '
             'test -d /run/rootfsbase && printf live'], directory)
         if live != 'live':
-            raise ValueError('The laptop must be booted from the shared Kairos ISO')
+            raise ValueError('Boot the laptop from the Guaranine USB')
         model = private_command([*connection, 'cat /sys/class/dmi/id/product_name'], directory).strip()
         print(f'\nLaptop model: {model!r}')
         existing = json.loads(private_command([*server, 'k3s kubectl get nodes -o json'], directory))
@@ -722,14 +722,14 @@ def install_worker(_args):
             try:
                 check_name(name)
                 if name in used_names:
-                    raise ValueError('That name is already used. Choose another name.')
+                    raise ValueError('Name already in use. Choose another.')
                 break
             except ValueError as error:
                 print(error)
         node = directory / 'nodes' / name
         disks = read_disks(connection, directory)
         if not disks:
-            raise ValueError('No unmounted, writable installation disks of at least 16 GiB were detected')
+            raise ValueError('No unmounted, writable disk of at least 16 GiB found')
         for number, disk in enumerate(disks, 1):
             print(f'{number}. {disk["path"]} | {disk["size"] / 2**30:.1f} GiB | '
                   f'{disk["model"] or "Unknown model"} | {disk["serial"] or "No serial"} | {disk["tran"] or "Unknown transport"}')
@@ -764,32 +764,31 @@ def install_worker(_args):
             with progress(f'Installing {name} on {disk}…'):
                 private_command([*connection, command], node, data=cloud_yaml(config), timeout=1800)
         except (ValueError, subprocess.TimeoutExpired) as error:
-            print(f'Installation could not be confirmed: {error}')
-            print('Check the laptop screen. An installation that completed may close SSH while powering off.')
-    print('\nWhen the laptop powers off: remove the USB, then turn the laptop on again.', flush=True)
-    print('This command will confirm when the laptop joins the controller.', flush=True)
+            print(f'Could not confirm installation: {error}')
+            print('Check the laptop screen. SSH may close when installation finishes and the laptop powers off.')
+    print('\nAfter the laptop powers off, remove the USB and turn it on again.', flush=True)
     wait_for_worker(name, server, node)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='guaranine', description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('init', help='Create private Kairos operator files once').set_defaults(
+    commands.add_parser('init', help='Create operator files (once)').set_defaults(
         action=lambda _args: initialize(operator_directory()))
-    iso = commands.add_parser('iso', help='Build/update a private Wi-Fi-capable ISO and offer USB flashing')
-    iso.add_argument('--rebuild', action='store_true', help='Force a rebuild even when the saved ISO source matches')
+    iso = commands.add_parser('iso', help='Build or update the laptop ISO; optionally flash a USB')
+    iso.add_argument('--rebuild', action='store_true', help='Rebuild even if the source is unchanged')
     iso.set_defaults(action=prepare_iso)
-    commands.add_parser('controlplane', help='Build/reuse the private Azure VHD').set_defaults(action=prepare_controlplane)
-    commands.add_parser('bootstrap', help='Connect to the prepared cloud server and save its kubeconfig').set_defaults(action=bootstrap)
+    commands.add_parser('controlplane', help='Build or reuse the Azure VHD').set_defaults(action=prepare_controlplane)
+    commands.add_parser('bootstrap', help='Start the cloud controller and save its kubeconfig').set_defaults(action=bootstrap)
     worker = commands.add_parser('worker', help='Install a laptop and wait for it to become Ready')
-    worker.add_argument('--wait', metavar='NAME', help='Resume only the Ready check for an already prepared worker')
+    worker.add_argument('--wait', metavar='NAME', help='Wait for Ready without reinstalling')
     worker.set_defaults(action=install_worker)
     os.umask(0o077)
     try:
         args = parser.parse_args(argv)
         args.action(args)
     except yaml.YAMLError:
-        parser.exit(1, 'Invalid private YAML; check the operator/configuration file locally.\n')
+        parser.exit(1, 'Invalid YAML; check the local operator/configuration file.\n')
     except (EOFError, KeyboardInterrupt):
         parser.exit(1, 'Cancelled. If installation was already sent, check the laptop before retrying.\n')
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
