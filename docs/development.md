@@ -49,6 +49,8 @@ The default runs all eight guests. Use `--suite live`, `--suite controller`, `--
 
 Measure feedback time from the workflow's `created_at` through the latest job's `completed_at`, including queue time; do not sum parallel job durations. The successful [baseline run](https://github.com/klever-lab/guaranine/actions/runs/43333532181) took 33m32s including its 4s queue (33m28s job runtime). The [combined implementation run](https://github.com/klever-lab/guaranine/actions/runs/43349091458) passed all four suites and eight guests in 12m42s including queue time: 20m50s faster, a 62.1% reduction. Job runtimes were 12m29s live, 4m52s controller, 9m26s BIOS worker and 10m05s UEFI worker. All guests used TCG; the legacy guest retained `Opteron_G1`. This measurement includes the concurrent image simplifications and does not isolate the matrix's contribution. No artifacts were published.
 
+The [boot-selection hardening run](https://github.com/klever-lab/guaranine/actions/runs/43359077952) passed the same four suites and eight guests in 12m43s, including its 20s queue: one second longer than the previous run. Stronger firmware and installation-success checks added no jobs or guest boots. Job runtimes were 12m23s live, 5m34s controller, 9m46s BIOS worker and 8m23s UEFI worker.
+
 ## Dependency pins
 
 [kairos/versions.json](../kairos/versions.json) owns Kairos, AuroraBoot and K3s versions/checksums. [kairos/Dockerfile](../kairos/Dockerfile) pins the base, upstream Tailscale layer, firmware images and network-tool packages, including the Broadcom firmware extraction input. Keep those facts in their source files rather than copying version tables into prose.
