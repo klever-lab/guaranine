@@ -219,7 +219,7 @@ class InstallationTests(unittest.TestCase):
     def worker_setup(self):
         cli.private_write(self.root / 'controlplane-known-hosts', 'DISPOSABLE')
         settings = {'tailnet': 'fixture.invalid', 'tailscale_api_token': 'DISPOSABLE',
-                    'endpoint': 'https://100.64.0.1:6443', 'laptop_models': []}
+                    'endpoint': 'https://100.64.0.1:6443'}
         cli.private_write(self.root / 'operator.yaml', yaml.safe_dump(settings))
         installer = cli.output_directory(self.root / 'installer')
         now = datetime.now(timezone.utc)
@@ -271,14 +271,17 @@ class InstallationTests(unittest.TestCase):
             self.assertFalse((self.root / 'nodes/worker-one').exists())
             self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
 
-    def test_unverified_laptop_media_stops_before_wifi_keys_or_docker(self):
-        self.worker_setup()
-        (self.root / 'installer/boot.yaml').unlink()
-        with patch.object(cli, 'operator_wifi') as wifi, patch.object(cli, 'mint') as mint, patch.object(cli, 'build_base') as build:
-            with self.assertRaisesRegex(ValueError, 'Laptop models'): cli.prepare_iso(None)
-        wifi.assert_not_called()
+    def test_missing_wifi_firmware_stops_before_registration_key_or_media(self):
+        cli.private_write(self.root / 'operator.yaml', yaml.safe_dump({
+            'tailnet': 'fixture.invalid', 'tailscale_api_token': 'DISPOSABLE', 'endpoint': None}))
+        with (patch.object(cli, 'operator_wifi', return_value='DISPOSABLE'),
+              patch.object(cli, 'private_command', return_value='linux'),
+              patch.object(cli, 'mint') as mint, patch.object(cli, 'build_image') as image,
+              patch.object(cli, 'build_base', side_effect=ValueError('Missing Wi-Fi firmware'))):
+            with self.assertRaisesRegex(ValueError, 'Missing Wi-Fi firmware'): cli.prepare_iso(None)
         mint.assert_not_called()
-        build.assert_not_called()
+        image.assert_not_called()
+        self.assertFalse((self.root / 'installer').exists())
 
     def test_ssh_hostkey_requires_physical_fingerprint_and_is_pinned(self):
         blob = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\x11' * 32

@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
@@ -14,13 +15,88 @@ import guaranine as cli
 
 PUBLIC_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER'
 
+WIFI_CHECK = '''#!/bin/sh
+set -eu
+mkdir -p /run/fixture-tools
+mount -t 9p -o trans=virtio,version=9p2000.L,ro fixture-tools /run/fixture-tools
+tool() {
+  tool_program=$1; shift
+  /run/fixture-tools/ld-musl-x86_64.so.1 --library-path /run/fixture-tools "/run/fixture-tools/$tool_program" "$@"
+}
+ap() {
+  ap_program=$1; shift
+  tool ip netns exec fixture-wifi /run/fixture-tools/ld-musl-x86_64.so.1 \
+    --library-path /run/fixture-tools "/run/fixture-tools/$ap_program" "$@"
+}
+connected() {
+  attempts=0
+  until tool iw dev wlan0 link | grep -q 'Connected to' && tool ip -4 -o address show wlan0 | grep -q '192.0.2.'; do
+    attempts=$((attempts + 1)); test "$attempts" -lt 60 || return 1
+    sleep 1
+  done
+}
+trap 'result=$?; if test "$result" -ne 0; then journalctl -b -u wpa_supplicant@wlan0.service --no-pager -n 60; tool iw dev; tool ip address; fi; exit "$result"' EXIT
+tool ip netns add fixture-wifi
+modprobe mac80211_hwsim radios=2
+udevadm settle
+systemctl stop wpa_supplicant@wlan1.service
+tool iw phy phy1 set netns name fixture-wifi
+ap ip link set lo up
+ap ip address add 192.0.2.1/24 dev wlan1
+ap hostapd -B -P /run/fixture-hostapd.pid /run/fixture-hostapd.conf
+ap dnsmasq --interface=wlan1 --bind-interfaces --port=0 --no-hosts --no-resolv \
+  --user=root --group=root --pid-file=/run/fixture-dnsmasq.pid \
+  --dhcp-range=192.0.2.10,192.0.2.30,255.255.255.0,5m --dhcp-option=3 --dhcp-option=6
+connected
+systemctl is-active --quiet wpa_supplicant@wlan0.service
+/usr/lib/guaranine-network/ld-musl-x86_64.so.1 --library-path /usr/lib/guaranine-network \
+  /usr/lib/guaranine-network/nft get element inet guaranine lan4 '{ 192.0.2.0/24 }'
+kill "$(cat /run/fixture-hostapd.pid)"
+attempts=0
+while tool iw dev wlan0 link | grep -q 'Connected to'; do
+  attempts=$((attempts + 1)); test "$attempts" -lt 20
+  sleep 1
+done
+ap hostapd -B -P /run/fixture-hostapd.pid /run/fixture-hostapd.conf
+connected
+touch /run/fixture-wifi-ok
+echo GUARANINE_WIFI_OK > /dev/ttyS0
+'''
+
+
+def wifi_tools(directory):
+    """Test-only AP tools stay outside the production image and installed filesystem."""
+    alpine = re.search(r'^FROM (alpine@sha256:[a-f0-9]{64}) AS wifi$',
+                       (cli.ROOT / 'kairos/Dockerfile').read_text(), re.M).group(1)
+    script = '''set -eu
+apk add --no-cache hostapd=2.11-r4 iw=6.17-r0 dnsmasq=2.91-r1 iproute2-minimal=6.17.0-r0 >/dev/null
+mkdir /out
+for program in hostapd iw dnsmasq ip; do
+  executable=$(command -v "$program")
+  cp "$executable" /out/
+  ldd "$executable" | awk '$2 == "=>" && $3 ~ /^\\// {print $3} $1 ~ /^\\// {print $1}' |
+    sort -u | while read -r library; do cp -L "$library" /out/; done
+done
+tar -C /out -cf - .
+'''
+    archive = directory / 'wifi-tools.tar'
+    with archive.open('xb') as output, (directory / 'wifi-tools.log').open('xb') as errors:
+        subprocess.run(['sudo', '--', 'docker', 'run', '--rm', '--log-driver', 'none', '--platform', 'linux/amd64',
+                        '--entrypoint', '/bin/sh', alpine, '-ec', script],
+                       stdout=output, stderr=errors, check=True, timeout=300)
+    target = directory / 'wifi-tools'
+    target.mkdir()
+    with tarfile.open(archive) as package:
+        package.extractall(target, filter='data')
+    archive.unlink()
+
 
 def fixture(role=None):
     args = {} if role is None else dict(name='fixture-' + role, role=role,
         cluster_endpoint='https://100.64.0.1:6443',
         token='DISPOSABLE-SERVER' if role == 'controlplane' else 'DISPOSABLE-AGENT', agent_token='DISPOSABLE-AGENT')
     config = cli.machine_config('tskey-auth-DISPOSABLE-NO-TAILNET-ACCESS', PUBLIC_KEY,
-        wifi=None if role == 'controlplane' else 'update_config=0\np2p_disabled=1\nnetwork={\nssid=74657374\nkey_mgmt=NONE\n}\n', **args)
+        wifi=None if role == 'controlplane' else 'update_config=0\np2p_disabled=1\nnetwork={\nssid=74657374\nkey_mgmt=WPA-PSK\npsk="guaranine-disposable-wifi"\n}\n', **args)
     checks = [
         'test -f /etc/guaranine/tailscale-key',
         f'grep -Fq "{PUBLIC_KEY}" /root/.ssh/authorized_keys',
@@ -29,6 +105,19 @@ def fixture(role=None):
         'timeout 60 sh -ec \'until /usr/lib/guaranine-network/ld-musl-x86_64.so.1 '
         '--library-path /usr/lib/guaranine-network /usr/lib/guaranine-network/nft '
         'get element inet guaranine lan4 "{ 10.0.2.0/24 }"; do sleep 1; done\'',
+        'k3s --version',
+        'for driver in ath9k ath10k_pci iwlwifi iwldvm iwlmvm rtl8192ce rtl8192se rtl8187 b43 rtw88_8821ce; '
+        'do modprobe "$driver" && modinfo "$driver" >/dev/null || exit 1; done',
+        'for firmware in ucode5 ucode15 ucode16_mimo b0g0initvals5 lp0initvals15 n0initvals16; '
+        'do test -s "/usr/lib/firmware/b43/$firmware.fw" || exit 1; done',
+        'for firmware in iwlwifi-3160-17.ucode iwlwifi-7265-17.ucode iwlwifi-7265D-29.ucode '
+        'iwlwifi-9000-pu-b0-jf-b0-46.ucode iwlwifi-Qu-b0-jf-b0-77.ucode '
+        'iwlwifi-Qu-c0-jf-b0-77.ucode iwlwifi-QuZ-a0-jf-b0-77.ucode '
+        'rtlwifi/rtl8192cfw.bin rtlwifi/rtl8192sefw.bin rtw88/rtw8821c_fw.bin '
+        'ath10k/QCA9377/hw1.0/firmware-6.bin ath10k/QCA9377/hw1.0/board-2.bin '
+        'ath10k/QCA6174/hw2.1/firmware-5.bin ath10k/QCA6174/hw3.0/firmware-6.bin '
+        'ath10k/QCA6174/hw3.0/board-2.bin; '
+        'do test -s "/usr/lib/firmware/$firmware.zst" || exit 1; done',
     ]
     if role == 'controlplane':
         checks += ['! mountpoint -q /var/lib/rancher/k3s', '! systemctl is-active --quiet k3s']
@@ -44,25 +133,37 @@ def fixture(role=None):
     else:
         checks += ['test -f /run/cos/live_mode', 'test -f /etc/guaranine/wifi.conf',
                    '! test -f /etc/rancher/k3s/token', '! systemctl is-active --quiet k3s']
+    if role != 'controlplane':
+        checks += ['test -f /run/fixture-wifi-ok']
+        config['stages']['boot'].append({'name': 'Verify WPA2 Wi-Fi, DHCP and AP recovery', 'files': [
+            cli.config_file('/run/fixture-wifi-check', WIFI_CHECK, 0o700),
+            cli.config_file('/run/fixture-hostapd.conf', 'interface=wlan1\ndriver=nl80211\nssid=test\n'
+                'hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n'
+                'wpa_passphrase=guaranine-disposable-wifi\n')],
+            'commands': ['sh /run/fixture-wifi-check > /dev/ttyS0 2>&1']})
     config['stages']['boot'].append({'name': 'Disposable boot assertions', 'commands': [
         ' && '.join(checks) + ' && { ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub; '
         'echo GUARANINE_BOOT_OK; } > /dev/ttyS0']})
     return config
 
 
-def boot(image, directory, number, *, cloud=False, install=False):
+def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=False):
     disk = directory / f'data-{number}.raw'
     with disk.open('xb') as stream:
         stream.truncate(16 * 1024**3)
         stream.write(b'DISPOSABLE DATA MUST SURVIVE UNAUTHORIZED BOOT\n')
     before = None if install else cli.digest(disk)
     acceleration = ['-accel', 'kvm', '-cpu', 'host'] if os.access('/dev/kvm', os.R_OK | os.W_OK) else ['-accel', 'tcg', '-cpu', 'max']
+    if legacy_cpu:
+        acceleration = ['-accel', 'tcg', '-cpu', 'Opteron_G1']
     command = ['qemu-system-x86_64', *acceleration, '-m', '2048', '-smp', '2', '-display', 'none',
                '-serial', 'stdio', '-monitor', 'none', '-uuid', f'00000000-0000-4000-8000-{number:012}',
                '-netdev', 'user,id=n0,restrict=on', '-device', 'virtio-net-pci,netdev=n0']
+    command += ['-fsdev', f'local,id=wifi,path={directory / "wifi-tools"},security_model=none,readonly=on',
+                '-device', 'virtio-9p-pci,fsdev=wifi,mount_tag=fixture-tools']
     if not install:
         command.append('-no-reboot')
-    if cloud:
+    if uefi:
         pairs = [code for root in ('/usr/share/OVMF', '/usr/share/edk2/x64') for code in Path(root).glob('*CODE*.fd')
                  if 'secboot' not in code.resolve().name and Path(str(code).replace('CODE', 'VARS')).exists()]
         if not pairs:
@@ -71,9 +172,13 @@ def boot(image, directory, number, *, cloud=False, install=False):
         variables = directory / f'uefi-{number}.fd'
         shutil.copyfile(Path(str(code).replace('CODE', 'VARS')), variables)
         command += ['-drive', f'if=pflash,format=raw,readonly=on,file={code}',
-                    '-drive', f'if=pflash,format=raw,file={variables}', '-drive', f'file={image},format=vpc,if=virtio']
+                    '-drive', f'if=pflash,format=raw,file={variables}']
+    if image.suffix == '.vhd':
+        command += ['-drive', f'file={image},format=vpc,if=virtio']
     elif image.suffix == '.iso':
-        command += ['-boot', 'd', '-cdrom', str(image)]
+        command += ['-device', 'ich9-usb-ehci1,id=usb',
+                    '-drive', f'if=none,id=installer,file={image},format=raw,readonly=on',
+                    '-device', 'usb-storage,bus=usb.0,drive=installer,bootindex=1']
     else:
         command += ['-drive', f'file={image},format=raw,if=virtio']
     command += ['-drive', f'file={disk},format=raw,if=virtio']
@@ -82,17 +187,19 @@ def boot(image, directory, number, *, cloud=False, install=False):
         with log.open('xb') as output:
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
             try:
-                deadline = time.monotonic() + (600 if install else 240)
+                deadline = time.monotonic() + (600 if install or legacy_cpu else 240)
                 while time.monotonic() < deadline:
                     status = process.poll()
                     if status is not None:
                         if install and status == 0:
+                            print(f'Fixture {number}: guest powered off after installation', flush=True)
                             return disk
                         break
                     text = log.read_text(errors='replace')
                     if not install and ('GUARANINE_BOOT_OK\r\n' in text or 'GUARANINE_BOOT_OK\n' in text):
                         fingerprints = re.findall(r'256 (SHA256:[A-Za-z0-9+/]+)', text)
                         if fingerprints:
+                            print(f'Fixture {number}: boot assertions passed', flush=True)
                             return fingerprints[-1]
                     time.sleep(1)
                 raise ValueError(f'Kairos boot assertions failed; protected diagnostics: {log}')
@@ -113,33 +220,41 @@ def main():
         directory = Path(temporary)
         try:
             source = cli.build_base(directory)
+            wifi_tools(directory)
             iso = cli.build_image(fixture(), 'iso', directory / 'iso', source)
-            keys = {boot(iso, directory, 1), boot(iso, directory, 2)}
-            if len(keys) != 2:
+            keys = {boot(iso, directory, 1), boot(iso, directory, 2, legacy_cpu=True),
+                    boot(iso, directory, 3, uefi=True)}
+            if len(keys) != 3:
                 raise ValueError('The same shared ISO reused an SSH host identity')
             iso.unlink()
             vhd = cli.build_image(fixture('controlplane'), 'vhd', directory / 'vhd', source)
-            boot(vhd, directory, 3, cloud=True)
+            boot(vhd, directory, 4, uefi=True)
             vhd.unlink()
 
             # Only this disposable fixture authorizes installation onto its QEMU disk.
             installer = fixture()
             installer['stages']['boot'].append({'name': 'Install the disposable worker',
                 'files': [cli.config_file('/run/fixture-worker.yaml', cli.cloud_yaml(fixture('worker')))],
-                'commands': ['kairos-agent --strict-validation manual-install --device /dev/vda /dev/stdin < /run/fixture-worker.yaml']})
+                'commands': ['test -f /run/fixture-wifi-ok && kairos-agent --strict-validation manual-install '
+                             '--device /dev/vda /dev/stdin < /run/fixture-worker.yaml']})
             install_iso = cli.build_image(installer, 'iso', directory / 'install', source)
-            worker = boot(install_iso, directory, 4, install=True)
+            worker = boot(install_iso, directory, 5, install=True)
+            boot(worker, directory, 6)
+            worker = boot(install_iso, directory, 7, install=True, uefi=True)
             install_iso.unlink()
-            boot(worker, directory, 5)
+            boot(worker, directory, 8, uefi=True)
         except Exception:
             # This harness creates disposable credentials only. Keep failed CI diagnosable.
             logs = [*directory.glob('error-*.log'), *directory.glob('boot-*.log'),
-                    directory / 'iso/build.log', directory / 'vhd/build.log', directory / 'install/build.log']
+                    directory / 'iso/build.log', directory / 'vhd/build.log', directory / 'install/build.log',
+                    directory / 'wifi-tools.log']
             for log in logs:
                 if log.exists():
                     print(f'Fixture diagnostics ({log.name}):\n{log.read_text(errors="replace")[-8000:]}', file=sys.stderr)
             raise
-    print('Shared ISO identities differ; VHD blocks missing data; worker installed, powered off and rebooted with its configuration; other guest disks unchanged')
+    print('BIOS, UEFI and legacy CPU ISO boots passed; Wi-Fi authenticated, obtained DHCP and reconnected; '
+          'VHD blocked missing data; BIOS and UEFI workers installed and rebooted with their configuration; '
+          'other guest disks unchanged')
 
 
 if __name__ == '__main__':

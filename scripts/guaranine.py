@@ -194,7 +194,6 @@ def initialize(directory):
         'tailnet': 'REPLACE_WITH_YOUR_TAILNET',
         'tailscale_api_token': 'REPLACE_WITH_YOUR_TAILSCALE_API_TOKEN',
         'endpoint': None,
-        'laptop_models': [],
     }, sort_keys=False))
     print(f'Created private Kairos operator files. Edit {directory / "operator.yaml"}.')
 
@@ -369,7 +368,7 @@ tar --sparse --hole-detection=raw -cf - "$1"
     with (tempfile.TemporaryDirectory(prefix='build-', dir=directory, ignore_cleanup_errors=True) as scratch,
           archive.open('xb') as output, log.open('xb') as errors):
         try:
-            result = subprocess.run(['sudo', '--', 'docker', 'run', '--rm', '--privileged', '--name', container,
+            result = subprocess.run(['sudo', '--', 'docker', 'run', '--rm', '--privileged', '--log-driver', 'none', '--name', container,
                 '--platform', 'linux/amd64', '-i', '--mount', f'type=bind,source={scratch},target=/work', '--mount',
                 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock',
                 '--mount', f'type=bind,source={ROOT / "kairos/auroraboot.yaml"},target=/auroraboot.yaml,readonly',
@@ -382,7 +381,7 @@ tar --sparse --hole-detection=raw -cf - "$1"
     archive.chmod(0o600)
     log.chmod(0o600)
     if result.returncode:
-        raise ValueError(f'Kairos image build failed; inspect protected diagnostics in {log}')
+        raise ValueError(f'Kairos image build failed (exit {result.returncode}); inspect protected diagnostics in {log}')
     suffix = '.iso' if image_format == 'iso' else '.vhd'
     image = directory / ('guaranine-kairos' + suffix)
     with tarfile.open(archive) as package:
@@ -410,8 +409,6 @@ def prepare_iso(_args):
         if installer.exists() and set(installer.iterdir()) != {key}:
             raise ValueError(f'{installer} contains an incomplete build; inspect its protected logs and revoke '
                              'the batch key before archiving it and starting a new batch')
-        if not settings.get('laptop_models'):
-            raise ValueError('Laptop models are pending; verify driver/firmware coverage before building laptop media')
         wifi = operator_wifi(directory)
         private_command(['sudo', '--', 'docker', 'info', '--format', '{{.OSType}}'], directory)
         source = build_base(directory)

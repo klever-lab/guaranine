@@ -22,10 +22,30 @@ Initialization creates an SSH key pair, separate K3s server/agent tokens and `op
 tailnet: YOUR_TAILNET
 tailscale_api_token: YOUR_PRIVATE_TAILSCALE_API_TOKEN
 endpoint: null
-laptop_models: []
 ```
 
-The API token stays on the operator. Set laptop models after checking their driver/firmware coverage; the physical ISO command refuses an empty list. Model variants still need a boot test. The image carries upstream firmware for common Intel, Atheros/Qualcomm, Realtek, MediaTek and Broadcom families; adding firmware cannot supply a missing kernel driver.
+The API token stays on the operator. The laptop inventory below owns model names; image build and boot checks own their software qualification. No second model list or manual qualification flag is required in operator configuration.
+
+## Laptop models
+
+These model names are confirmed by the operator. Coverage targets their factory Wi-Fi options, including variants that cannot be identified while the laptops are powered off.
+
+| Model | Wi-Fi options and image recipe coverage |
+| --- | --- |
+| Toshiba Satellite C650 | [Toshiba's guide](https://www.manualslib.com/manual/624333/Toshiba-Satellite-C650-Series.html) lists Atheros AR9285/AR9002WB-1NG and Realtek RTL8188CE options; its [earlier C640/C650 guide](https://device.report/m/27dd712a4520ab4e618483fed0e7fcbed1276d4b1a3762a8e78c56d4da21267b.pdf) also lists RTL8191SE/RTL8187B. `ath9k`, `rtl8192ce`, `rtl8192se`, `rtl8187` and the required Realtek firmware are present. |
+| Dell Inspiron 5558 | Dell documents [Intel 3160/7265](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=wrrmc) and [DW1707](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=0wd27) options. `iwlwifi`, `ath9k` and the Intel firmware are present. |
+| Dell Inspiron 1440 | Dell documents [DW1397/BCM4312 and DW1510/BCM4322](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=k4h75), [Atheros DW1515](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=phydt) and [Intel 5100/5300](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=1t47j). `b43` and its full G/LP/N firmware, `ath9k`, `iwlwifi`/`iwldvm` and Intel 5000 firmware are included. |
+| Lenovo IdeaPad L340-15API | Lenovo's [1x1 AC specification](https://psref.lenovo.com/syspool/Sys/PDF/IdeaPad/ideapad_L340_15API/ideapad_L340_15API_Spec.PDF) and [OEM driver package](https://pcsupport.lenovo.com/us/en/products/laptops-and-netbooks/ideapad-l-series-laptops/l340-15api/81lw/downloads/ds506548) identify RTL8821CE and QCA9377 as the matching Realtek/Qualcomm candidates. Their `rtw88_8821ce`/`ath10k_pci` drivers, firmware and Atheros board data are included. |
+| HP Pavilion tx1000 | [HP's service guide](https://www.manualowl.com/m/Hewlett-Packard/Pavilion-tx1000/Manual/104969?page=24) lists 407159/407160 G/AG modules. The Broadcom BCM4311-class PCI IDs in [HP's tx1000 WLAN manifest](https://ftp.hp.com/pub/softpaq/sp37501-38000/sp37746.cva) have `ssb`/`b43` support and the full extracted Broadcom G/LP/N firmware. |
+| Dell Inspiron 5493 | [Dell's specifications](https://www.dell.com/support/manuals/en-us/inspiron-14-5493-laptop/inspiron-14-5493-setup-and-specifications/communications?guid=guid-25120817-dddf-4aed-baf6-cd32f9074c86&lang=en-us) list Qualcomm QCA9565/QCA9377/QCA61x4A and Intel 9462/9560. Their `ath9k`, `ath10k_pci` and `iwlwifi` drivers and firmware families are included. |
+
+The earlier Toshiba series guide also contains an RTL8192E regulatory entry. That does not identify the card in this C650. The pinned kernel has no RTL8192E driver, so an RTL8192E-equipped unit is outside this image's coverage; the C650 model name cannot support an unconditional compatibility claim.
+
+The [image recipe](kairos/Dockerfile) rejects missing kernel modules, chipset PCI aliases or required firmware paths before a registration key is issued. It places Intel firmware at the names requested by the pinned kernel and extracts checksum-pinned Broadcom `b43` firmware with upstream `b43-fwcutter`. Atheros PCI `ath9k` radios need no external Wi-Fi firmware.
+
+The [boot checks](scripts/test-private-images.py) exercise BIOS/UEFI USB boot, an older CPU baseline, installation and reboot, plus WPA2 association, DHCP and AP outage recovery with `mac80211_hwsim`. The full suite passed on 2026-11-12, including Wi-Fi after BIOS and UEFI worker installation. AP tools are test-only and never enter the production image. The installed cards and their RF behavior have not been physically measured.
+
+Use a 2.4-GHz WPA2-Personal network with 802.11g clients enabled for this mixed fleet; its older single-band cards cannot join a 5-GHz-only SSID. Disable Secure Boot for this image.
 
 ## Migrating the existing controller
 
@@ -162,4 +182,4 @@ Use native `kairos-agent upgrade` with the tested image produced from this recip
 
 Run the checks in [README.md](README.md#development). They validate all native Kairos profiles, private-file handling, role credentials, disk confirmations, workflow/shell syntax and credential-free Terraform lifecycle plans. The private-image workflow boots isolated ISO/VHD guests and installs, powers off and reboots a disposable worker to check its persistent configuration. No real enrollment credentials or images are published.
 
-Laptop model coverage, physical Wi-Fi, lid/suspend behavior and real WAN recovery need hardware tests. The shared image remains copyable and bootable after the registration window. A local expiry check cannot revoke copied join credentials or already authorized nodes, and the ISO is not hardware-bound. Keep operational claims limited to checks actually completed.
+The VM checks do not measure physical RF, lid/suspend behavior or live WAN recovery. The shared image remains copyable and bootable after the registration window. A local expiry check cannot revoke copied join credentials or already authorized nodes, and the ISO is not hardware-bound. Keep operational claims limited to checks actually completed.

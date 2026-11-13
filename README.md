@@ -7,7 +7,7 @@ Use upstream components and ordinary Kubernetes manifests. Keep the repository s
 ## Setup
 
 1. Follow [SETUP.md](SETUP.md) to initialize private operator files and prepare the cloud controller.
-2. Provide the laptop models so their built-in Wi-Fi driver/firmware coverage can be checked.
+2. Check the supported laptop inventory and image qualification in [SETUP.md](SETUP.md#laptop-models).
 3. Run `./guaranine iso` on the operator computer while connected to the desired Wi-Fi. It captures that network, builds private media and offers USB flashing.
 4. Boot a laptop, then run `./guaranine worker` to verify its identity, choose its name and explicitly confirm its installation disk.
 
@@ -25,7 +25,7 @@ env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bas
 
 Packet checks also need `iproute2`, `nftables`, `iputils-ping` and user namespaces: `uv run --no-project --with-requirements requirements.txt python scripts/test-firewall.py`.
 
-The private-image workflow builds and boots disposable fixtures without publishing images or using real credentials. Laptop hardware and live WAN operation require separate verification.
+The private-image workflow builds and boots disposable fixtures without publishing images or using real credentials. It checks USB boot, installation, firmware paths and simulated Wi-Fi; physical radios and live WAN conditions are not emulated.
 
 ## Original design question
 
