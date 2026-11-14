@@ -1,0 +1,171 @@
+# OpenEBS Local PV Hostpath only; apply explicitly after cluster bootstrap.
+# The upstream helper pods are privileged host infrastructure, confined here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openebs
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: openebs-localpv, namespace: openebs}
+---
+# Helpers use a separate, tokenless account without any RoleBindings.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: openebs-localpv-helper, namespace: openebs}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: openebs-localpv}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: openebs-localpv}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: openebs-localpv}
+subjects:
+  - {kind: ServiceAccount, name: openebs-localpv, namespace: openebs}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: openebs-localpv-helpers, namespace: openebs}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: openebs-localpv-helpers, namespace: openebs}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: openebs-localpv-helpers}
+subjects:
+  - {kind: ServiceAccount, name: openebs-localpv, namespace: openebs}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: openebs}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Only the controller needs network access. Helpers do filesystem work only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-controller-api, namespace: openebs}
+spec:
+  podSelector:
+    matchLabels: {app: openebs-localpv}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 10.43.0.1/32}
+      ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        - ipBlock: {cidr: 100.64.0.0/10}
+      ports:
+        - {protocol: TCP, port: 6443}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: openebs-hostpath
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+    openebs.io/cas-type: local
+    cas.openebs.io/config: |
+      - name: StorageType
+        value: hostpath
+      - name: BasePath
+        value: /usr/local/openebs/local
+      - name: FilePermissions
+        data:
+          mode: "0770"
+provisioner: openebs.io/local
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: openebs-localpv, namespace: openebs}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: openebs-localpv}
+  template:
+    metadata:
+      labels: {app: openebs-localpv}
+    spec:
+      serviceAccountName: openebs-localpv
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        supplementalGroupsPolicy: Strict
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: provisioner
+          image: openebs/provisioner-localpv:4.6.0@sha256:99f5116f5cb83fb9d046ef5ff5b8ea98da90e7da5250d7b101bd650662238a0a
+          args: [--logtostderr=true]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - name: OPENEBS_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: OPENEBS_SERVICE_ACCOUNT
+              value: openebs-localpv-helper
+            - name: OPENEBS_IO_BASE_PATH
+              value: /usr/local/openebs/local
+            - name: OPENEBS_IO_HELPER_IMAGE
+              value: openebs/linux-utils:4.6.0@sha256:a3043d266b1c06fb42377ced0c3fc190c66e1e83ae1efda7670ed73feb4ede14
+            - name: OPENEBS_IO_HELPER_POD_HOST_NETWORK
+              value: "false"
+            - name: OPENEBS_IO_ENABLE_ANALYTICS
+              value: "false"
+            - name: LEADER_ELECTION_ENABLED
+              value: "false"
+          ports:
+            - {name: health, containerPort: 8081}
+          startupProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}

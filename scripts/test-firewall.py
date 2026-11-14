@@ -34,7 +34,8 @@ def serve():
                     listener.sendto(data, address)
     # Bind synchronously so a failed fixture cannot silently look like isolation.
     for port, kind in ((18080, socket.SOCK_STREAM), (53, socket.SOCK_STREAM),
-                       (53, socket.SOCK_DGRAM), (22, socket.SOCK_STREAM)):
+                       (53, socket.SOCK_DGRAM), (22, socket.SOCK_STREAM),
+                       (6443, socket.SOCK_STREAM), (10250, socket.SOCK_STREAM)):
         listener = socket.socket(socket.AF_INET6, kind)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
@@ -120,6 +121,9 @@ def exercise():
             for address in ('198.51.100.1', '2001:db8:2::1'):
                 check(prefix, address, True)
         check(lan, '203.0.113.2', True, port=22)
+        for port in (6443, 10250):
+            check(pod, '10.42.0.1', True, port=port)
+            check(lan, '203.0.113.2', True, port=port)
         check(lan, '10.42.0.2', True)
         check(lan, '2001:db8:1::2', True, port=22)
         check(lan, 'fd42::2', True)
@@ -144,6 +148,11 @@ def exercise():
             for address in ('198.51.100.1', '2001:db8:2::1'):
                 check(prefix, address, True)
         check(lan, '203.0.113.2', False, port=22)
+        for port in (6443, 10250):
+            check(pod, '10.42.0.1', True, port=port)
+            check(lan, '203.0.113.2', False, port=port)
+            check(tailnet, '100.64.0.1', True, port=port)
+        check(pod, '10.42.0.1', False, port=22)
         check(lan, '10.42.0.2', False)
         check(lan, '2001:db8:1::2', False, port=22)
         check(lan, 'fd42::2', False)

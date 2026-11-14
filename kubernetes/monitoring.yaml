@@ -1,0 +1,686 @@
+# Apply explicitly with kubectl; this is not part of node bootstrap.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: monitoring-grafana
+spec:
+  capacity: {storage: 2Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef: {namespace: monitoring, name: grafana}
+  local: {path: /usr/local/guaranine-monitoring/grafana}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - {key: kubernetes.io/hostname, operator: In, values: [demure]}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: monitoring-prometheus
+spec:
+  capacity: {storage: 10Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef: {namespace: monitoring, name: prometheus}
+  local: {path: /usr/local/guaranine-monitoring/prometheus}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - {key: kubernetes.io/hostname, operator: In, values: [demure]}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: grafana, namespace: monitoring}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ""
+  volumeName: monitoring-grafana
+  resources: {requests: {storage: 2Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: prometheus, namespace: monitoring}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ""
+  volumeName: monitoring-prometheus
+  resources: {requests: {storage: 10Gi}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: prometheus, namespace: monitoring}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: kube-state-metrics, namespace: monitoring}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: monitoring-proxy, namespace: monitoring}
+---
+# Tailscale owns the data; applying this declaration must preserve its identity.
+apiVersion: v1
+kind: Secret
+metadata: {name: monitoring-tailscale, namespace: monitoring}
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: monitoring-proxy, namespace: monitoring}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [monitoring-tailscale]
+    verbs: [get, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: monitoring-proxy, namespace: monitoring}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: monitoring-proxy}
+subjects:
+  - {kind: ServiceAccount, name: monitoring-proxy, namespace: monitoring}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: monitoring-prometheus}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [nodes/metrics]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: monitoring-prometheus}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: monitoring-prometheus}
+subjects:
+  - {kind: ServiceAccount, name: prometheus, namespace: monitoring}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: monitoring-kube-state-metrics}
+rules:
+  - apiGroups: [""]
+    resources: [nodes, namespaces, pods, persistentvolumeclaims, persistentvolumes]
+    verbs: [list, watch]
+  - apiGroups: [apps]
+    resources: [daemonsets, deployments, replicasets, statefulsets]
+    verbs: [list, watch]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: monitoring-kube-state-metrics}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: monitoring-kube-state-metrics}
+subjects:
+  - {kind: ServiceAccount, name: kube-state-metrics, namespace: monitoring}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: monitoring}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-dns, namespace: monitoring}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: grafana, namespace: monitoring}
+spec:
+  podSelector:
+    matchLabels: {app: grafana}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: monitoring-proxy}
+      ports:
+        - {protocol: TCP, port: 3000}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app: prometheus}
+      ports:
+        - {protocol: TCP, port: 9090}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: prometheus, namespace: monitoring}
+spec:
+  podSelector:
+    matchLabels: {app: prometheus}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: grafana}
+      ports:
+        - {protocol: TCP, port: 9090}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app: kube-state-metrics}
+      ports:
+        - {protocol: TCP, port: 8080}
+    - to:
+        - ipBlock: {cidr: 100.64.0.0/10}
+      ports:
+        - {protocol: TCP, port: 10250}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: metrics-api, namespace: monitoring}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app, operator: In, values: [prometheus, kube-state-metrics]}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 100.64.0.0/10}
+      ports:
+        - {protocol: TCP, port: 6443}
+    - to:
+        - ipBlock: {cidr: 10.43.0.1/32}
+      ports:
+        - {protocol: TCP, port: 443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: kube-state-metrics, namespace: monitoring}
+spec:
+  podSelector:
+    matchLabels: {app: kube-state-metrics}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: prometheus}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: monitoring-proxy, namespace: monitoring}
+spec:
+  podSelector:
+    matchLabels: {app: monitoring-proxy}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app: grafana}
+      ports:
+        - {protocol: TCP, port: 3000}
+    - to:
+        - ipBlock: {cidr: 10.43.0.1/32}
+      ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        - ipBlock: {cidr: 100.64.0.0/10}
+      ports:
+        - {protocol: TCP, port: 6443}
+    # Public HTTPS for control/DERP/ACME; UDP ports vary with peer NAT mappings.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4]
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: UDP}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: monitoring-proxy, namespace: monitoring}
+data:
+  serve.json: |
+    {
+      "TCP": {"443": {"HTTPS": true}},
+      "Web": {
+        "${TS_CERT_DOMAIN}:443": {
+          "Handlers": {"/": {"Proxy": "http://grafana.monitoring.svc.cluster.local:3000"}}
+        }
+      },
+      "AllowFunnel": {"${TS_CERT_DOMAIN}:443": false}
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: prometheus, namespace: monitoring}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+      scrape_timeout: 10s
+    scrape_configs:
+      - job_name: prometheus
+        static_configs:
+          - targets: [localhost:9090]
+      - job_name: kube-state-metrics
+        static_configs:
+          - targets: [kube-state-metrics:8080]
+      - job_name: kubelet-cadvisor
+        scheme: https
+        metrics_path: /metrics/cadvisor
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__address__]
+            regex: 100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+:10250
+            action: keep
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: instance
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: grafana, namespace: monitoring}
+data:
+  grafana.ini: |
+    [server]
+    domain = monitoring.tail3a78b9.ts.net
+    root_url = https://monitoring.tail3a78b9.ts.net/
+    enforce_domain = true
+    [security]
+    admin_user = admin
+    admin_password = $__file{/etc/grafana/secrets/admin-password}
+    secret_key = $__file{/etc/grafana/secrets/secret-key}
+    cookie_samesite = strict
+    cookie_secure = true
+    content_security_policy = true
+    disable_gravatar = true
+    [users]
+    allow_sign_up = false
+    allow_org_create = false
+    auto_assign_org_role = Viewer
+    [auth.anonymous]
+    enabled = false
+    hide_version = true
+    [analytics]
+    reporting_enabled = false
+    check_for_updates = false
+    check_for_plugin_updates = false
+    [news]
+    news_feed_enabled = false
+    [plugins]
+    preinstall_disabled = true
+    plugin_admin_enabled = false
+    public_key_retrieval_disabled = true
+    [metrics]
+    enabled = false
+    [dashboards]
+    default_home_dashboard_path = /etc/grafana/dashboards/overview.json
+    [log]
+    mode = console
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: 30s
+          httpMethod: POST
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: Guaranine
+        type: file
+        disableDeletion: true
+        options:
+          path: /etc/grafana/dashboards
+  overview.json: |
+    {
+      "uid": "guaranine", "title": "Guaranine", "schemaVersion": 39,
+      "tags": ["kubernetes"], "timezone": "browser", "refresh": "30s",
+      "time": {"from": "now-1h", "to": "now"},
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Ready nodes",
+          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "instant": true}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 2, "type": "stat", "title": "Running pods",
+          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(kube_pod_status_phase{phase=\"Running\"})", "instant": true}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 3, "type": "stat", "title": "Unready pods",
+          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(kube_pod_status_ready{condition=\"false\"} * on(namespace,pod,uid) group_left() (kube_pod_status_phase{phase=\"Running\"} == 1)) or vector(0)", "instant": true}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 4, "type": "stat", "title": "Container restarts (1h)",
+          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(increase(kube_pod_container_status_restarts_total[1h])) or vector(0)", "instant": true}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Node CPU usage (cores)",
+          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by(node) (rate(container_cpu_usage_seconds_total{id=\"/\"}[5m]))", "legendFormat": "{{node}}"}],
+          "fieldConfig": {"defaults": {"unit": "cores", "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 6, "type": "timeseries", "title": "Node memory working set",
+          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by(node) (container_memory_working_set_bytes{id=\"/\"})", "legendFormat": "{{node}}"}],
+          "fieldConfig": {"defaults": {"unit": "bytes", "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 7, "type": "timeseries", "title": "Pod CPU usage (cores)",
+          "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by(namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",pod!=\"\"}[5m]))", "legendFormat": "{{namespace}} / {{pod}}"}],
+          "fieldConfig": {"defaults": {"unit": "cores", "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 8, "type": "timeseries", "title": "Pod memory working set",
+          "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by(namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",pod!=\"\"})", "legendFormat": "{{namespace}} / {{pod}}"}],
+          "fieldConfig": {"defaults": {"unit": "bytes", "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        }
+      ]
+    }
+---
+apiVersion: v1
+kind: Service
+metadata: {name: grafana, namespace: monitoring}
+spec:
+  selector: {app: grafana}
+  ports:
+    - {name: http, port: 3000, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: prometheus, namespace: monitoring}
+spec:
+  selector: {app: prometheus}
+  ports:
+    - {name: http, port: 9090, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: kube-state-metrics, namespace: monitoring}
+spec:
+  selector: {app: kube-state-metrics}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: monitoring-proxy, namespace: monitoring}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: monitoring-proxy}
+  template:
+    metadata:
+      labels: {app: monitoring-proxy}
+    spec:
+      serviceAccountName: monitoring-proxy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        supplementalGroupsPolicy: Strict
+        fsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:v1.104.7@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4
+          env:
+            - {name: TS_HOSTNAME, value: monitoring}
+            - {name: TS_USERSPACE, value: "true"}
+            - {name: TS_AUTH_ONCE, value: "true"}
+            - {name: TS_ACCEPT_DNS, value: "false"}
+            - {name: TS_EXTRA_ARGS, value: "--accept-routes=false --ssh=false"}
+            - {name: TS_KUBE_SECRET, value: monitoring-tailscale}
+            - {name: TS_STATE_DIR, value: /var/lib/tailscale}
+            - {name: TS_SOCKET, value: /var/run/tailscale/tailscaled.sock}
+            - {name: TS_SERVE_CONFIG, value: /etc/tailscale/serve.json}
+            - {name: TS_ENABLE_HEALTH_CHECK, value: "true"}
+            - {name: TS_LOCAL_ADDR_PORT, value: "0.0.0.0:9002"}
+          ports:
+            - {name: health, containerPort: 9002}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi}
+          startupProbe:
+            tcpSocket: {port: health}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /healthz, port: health}
+          livenessProbe:
+            tcpSocket: {port: health}
+          volumeMounts:
+            - {name: config, mountPath: /etc/tailscale, readOnly: true}
+            - {name: state-cache, mountPath: /var/lib/tailscale}
+            - {name: socket, mountPath: /var/run/tailscale}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: monitoring-proxy}
+        - name: state-cache
+          emptyDir: {sizeLimit: 64Mi}
+        - name: socket
+          emptyDir: {sizeLimit: 1Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 16Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: grafana, namespace: monitoring}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: grafana}
+  template:
+    metadata:
+      labels: {app: grafana}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        supplementalGroupsPolicy: Strict
+        fsGroup: 472
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: grafana
+          image: grafana/grafana:13.3.1@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf
+          ports:
+            - {name: http, containerPort: 3000}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          startupProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /api/health, port: http}
+          livenessProbe:
+            httpGet: {path: /api/health, port: http}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/grafana}
+            - {name: tmp, mountPath: /tmp}
+            - {name: config, mountPath: /etc/grafana/grafana.ini, subPath: grafana.ini, readOnly: true}
+            - {name: config, mountPath: /etc/grafana/provisioning/datasources/datasource.yaml, subPath: datasource.yaml, readOnly: true}
+            - {name: config, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml, subPath: dashboards.yaml, readOnly: true}
+            - {name: config, mountPath: /etc/grafana/dashboards/overview.json, subPath: overview.json, readOnly: true}
+            - {name: secrets, mountPath: /etc/grafana/secrets, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: grafana}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: config
+          configMap: {name: grafana}
+        - name: secrets
+          secret: {secretName: grafana, defaultMode: 0440}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: prometheus, namespace: monitoring}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: prometheus}
+  template:
+    metadata:
+      labels: {app: prometheus}
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        supplementalGroupsPolicy: Strict
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.13.5@sha256:aafa9d694e6a883c02db516d9f6e5b84e14195f49a2a6456a4cca815edda72b9
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=7d
+            - --storage.tsdb.retention.size=8GB
+          ports:
+            - {name: http, containerPort: 9090}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          startupProbe:
+            httpGet: {path: /-/ready, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /-/ready, port: http}
+          livenessProbe:
+            httpGet: {path: /-/healthy, port: http}
+          volumeMounts:
+            - {name: data, mountPath: /prometheus}
+            - {name: config, mountPath: /etc/prometheus, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: prometheus}
+        - name: config
+          configMap: {name: prometheus}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kube-state-metrics, namespace: monitoring}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: kube-state-metrics}
+  template:
+    metadata:
+      labels: {app: kube-state-metrics}
+    spec:
+      serviceAccountName: kube-state-metrics
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+        supplementalGroupsPolicy: Strict
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0@sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b
+          args:
+            - --resources=nodes,namespaces,pods,persistentvolumeclaims,persistentvolumes,daemonsets,deployments,replicasets,statefulsets,cronjobs,jobs
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: telemetry, containerPort: 8081}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe:
+            httpGet: {path: /readyz, port: telemetry}
+          livenessProbe:
+            httpGet: {path: /livez, port: http}
+            initialDelaySeconds: 10
