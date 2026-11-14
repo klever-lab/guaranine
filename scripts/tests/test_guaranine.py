@@ -1331,6 +1331,8 @@ class USBFlashingTests(unittest.TestCase):
         stack.enter_context(contextlib.redirect_stdout(self.output))
         stack.enter_context(patch.object(cli.sys.stdin, 'isatty', return_value=True))
         stack.enter_context(patch.object(self.output, 'isatty', return_value=True))
+        self.capture_diagnostics = cli.flash_diagnostics
+        self.diagnostics = stack.enter_context(patch.object(cli, 'flash_diagnostics'))
 
     def test_inventory_excludes_internal_readonly_small_system_and_source_disks(self):
         candidates = [self.disk, {**self.disk, 'tran': 'nvme'}, {**self.disk, 'ro': True},
@@ -1380,6 +1382,7 @@ class USBFlashingTests(unittest.TestCase):
         prompt.assert_not_called()
         select.assert_not_called()
         run.assert_not_called()
+        self.diagnostics.assert_not_called()
 
     def test_wrong_confirmation_explains_required_word_without_writing(self):
         with (patch.object(cli, 'usb_disks', return_value=[self.disk]),
@@ -1476,7 +1479,10 @@ class USBFlashingTests(unittest.TestCase):
                 self.output.truncate()
                 previous_logs = set(self.image.parent.glob('flash-*.log'))
                 def write(arguments, **kwargs):
-                    self.assertIn('dd', arguments)
+                    if 'dd' not in arguments:
+                        self.assertEqual(kwargs['timeout'], 10)
+                        kwargs['stdout'].write('DISPOSABLE device/kernel diagnostics\n')
+                        return subprocess.CompletedProcess(arguments, 0)
                     script = ('import os,sys; os.write(1,b"DISPOSABLE stdout\\n"); '
                               'os.write(2,b"\\r12582912 bytes copied\\n"); '
                               'sys.exit(' + ('1' if outcome == 'write-error' else '0') + ')')
@@ -1487,6 +1493,7 @@ class USBFlashingTests(unittest.TestCase):
                 with (patch.object(cli, 'usb_disks', return_value=[unmounted]),
                       patch.object(cli.questionary, 'select') as select, patch('builtins.input', return_value='ERASE'),
                       patch.object(cli.subprocess, 'run', side_effect=write),
+                      patch.object(cli, 'flash_diagnostics', self.capture_diagnostics),
                       contextlib.redirect_stderr(terminal)):
                     select.return_value.unsafe_ask.return_value = unmounted
                     if outcome == 'success':
@@ -1503,9 +1510,68 @@ class USBFlashingTests(unittest.TestCase):
                     self.assertIn(message, visible)
                     self.assertIn(message, log.read_text())
                 self.assertIn(b'\r12582912', log.read_bytes())
+                self.assertIn('Before writing:', log.read_text())
+                self.assertIn('After writing:', log.read_text())
+                self.assertIn('Write elapsed:', log.read_text())
+                self.assertIn('DISPOSABLE-USB-A', log.read_text())
+                self.assertIn('DISPOSABLE device/kernel diagnostics', log.read_text())
+                self.assertNotIn('DISPOSABLE device/kernel diagnostics', visible)
                 if outcome != 'success':
                     self.assertIn(str(log), str(error.exception))
                     self.assertIn('CalledProcessError' if outcome == 'write-error' else 'TimeoutExpired',
                                   log.read_text())
                 self.assertEqual('Flashed ' in self.output.getvalue(), outcome == 'success')
                 self.assertEqual(self.image.read_text(), 'DISPOSABLE-ISO')
+
+    def test_diagnostics_capture_power_state_and_kernel_window_without_another_sudo_prompt(self):
+        log = self.image.parent / 'diagnostics.log'
+        cli.private_write(log, '')
+        def diagnostic(arguments, **kwargs):
+            self.assertEqual(kwargs['timeout'], 10)
+            self.assertIs(kwargs['stderr'], subprocess.STDOUT)
+            if arguments[0] == 'udevadm':
+                kwargs['stdout'].write('ATTRS{power/control}=="auto"\nATTRS{power/runtime_status}=="suspended"\n')
+            elif 'journalctl' in arguments:
+                self.assertEqual(arguments[:3], ['sudo', '-n', '--'])
+                self.assertIn('--since=@1740.000000', arguments)
+                self.assertIn('--until=@2000.000000', arguments)
+                kwargs['stdout'].write('DISPOSABLE kernel: USB reset after write timeout\n')
+            return subprocess.CompletedProcess(arguments, 0)
+        with (patch.object(cli.subprocess, 'run', side_effect=diagnostic) as run,
+              patch.object(cli.time, 'time', return_value=2000),
+              contextlib.redirect_stderr(io.StringIO()) as terminal):
+            self.capture_diagnostics(log, '/dev/sdy', since=1800, elapsed=34.2)
+        self.assertEqual(run.call_count, 3)
+        self.assertIn('power/runtime_status', log.read_text())
+        self.assertIn('USB reset after write timeout', log.read_text())
+        self.assertIn('Write elapsed: 34.200s', log.read_text())
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(terminal.getvalue(), '')
+
+    def test_missing_timed_out_or_denied_diagnostics_are_logged_and_do_not_abort_collection(self):
+        log = self.image.parent / 'diagnostics.log'
+        cli.private_write(log, '')
+        def diagnostic(arguments, **kwargs):
+            if arguments[0] == 'udevadm':
+                raise FileNotFoundError('DISPOSABLE missing udevadm')
+            if arguments[0] == 'lsblk':
+                raise subprocess.TimeoutExpired(arguments, 10)
+            kwargs['stdout'].write('DISPOSABLE journal access denied\n')
+            return subprocess.CompletedProcess(arguments, 1)
+        with (patch.object(cli.subprocess, 'run', side_effect=diagnostic) as run,
+              contextlib.redirect_stderr(io.StringIO()) as terminal):
+            self.capture_diagnostics(log, '/dev/sdy', since=1800)
+        self.assertEqual(run.call_count, 3)
+        self.assertIn('FileNotFoundError', log.read_text())
+        self.assertIn('TimeoutExpired', log.read_text())
+        self.assertIn('journal access denied', log.read_text())
+        self.assertIn('Diagnostic exit status: 1', log.read_text())
+        self.assertEqual(terminal.getvalue(), '')
+
+    def test_diagnostic_log_errors_do_not_replace_the_write_result(self):
+        log = self.image.parent / 'missing-directory/flash.log'
+        with (contextlib.redirect_stderr(io.StringIO()) as terminal,
+              patch.object(cli.subprocess, 'run') as run):
+            self.capture_diagnostics(log, '/dev/sdy', since=1800)
+        run.assert_not_called()
+        self.assertIn('Could not append USB diagnostics', terminal.getvalue())

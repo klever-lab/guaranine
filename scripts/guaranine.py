@@ -165,6 +165,35 @@ def usb_disks(image):
     return sorted(disks, key=lambda disk: disk['path'])
 
 
+def flash_diagnostics(log, path, *, since=None, elapsed=None):
+    """Read device state and a bounded kernel-log window without changing USB settings."""
+    try:
+        with log.open('a') as saved:
+            phase = 'After writing' if since is not None else 'Before writing'
+            saved.write(f'\n{phase}: {datetime.now(timezone.utc).isoformat()}\n')
+            if elapsed is not None:
+                saved.write(f'Write elapsed: {elapsed:.3f}s\n')
+            commands = [
+                ['udevadm', 'info', '--attribute-walk', '--name', path],
+                ['lsblk', '--json', '--bytes', '--paths', '--output',
+                 'PATH,TYPE,TRAN,RO,SIZE,MODEL,SERIAL,LABEL,MOUNTPOINTS,MAJ:MIN', '--', path],
+            ]
+            if since is not None:
+                commands.append(['sudo', '-n', '--', 'journalctl', '--kernel', '--no-pager',
+                                 '--output=short-iso-precise', '--utc', f'--since=@{since - 60:.6f}',
+                                 f'--until=@{time.time():.6f}'])
+            for command in commands:
+                saved.write('\n$ ' + shlex.join(command) + '\n')
+                saved.flush()
+                try:
+                    result = subprocess.run(command, stdout=saved, stderr=subprocess.STDOUT, timeout=10)
+                    saved.write(f'\nDiagnostic exit status: {result.returncode}\n')
+                except (OSError, subprocess.SubprocessError) as error:
+                    saved.write(f'\nDiagnostic unavailable: {type(error).__name__}: {error}\n')
+    except OSError as error:
+        print(f'Could not append USB diagnostics to {log}: {error}', file=sys.stderr)
+
+
 def flash_iso(image):
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return False
@@ -198,6 +227,15 @@ def flash_iso(image):
         for member in [*selected.get('children', []), selected]:
             if any(member.get('mountpoints', [])):
                 subprocess.run(['sudo', '--', 'umount', '--all-targets', '--', member['path']], check=True, timeout=30)
+        started = time.time()
+        log = image.parent / ('flash-' + str(time.time_ns()) + '.log')
+        command = ['sudo', '--', 'dd', f'if={image}', f'of={path}', 'bs=4M', 'oflag=dsync',
+                   'status=progress', 'conv=fsync,nocreat']
+        private_write(log, f'Image: {image}\nImage bytes: {image.stat().st_size}\nUSB: {path}\n'
+                      f'Selected device: {json.dumps(selected, sort_keys=True)}\nKernel: {os.uname().release}\n'
+                      f'Command: {shlex.join(command)}\n')
+        print(f'Flash log: {log}', flush=True)
+        flash_diagnostics(log, path)
         current = next((disk for disk in usb_disks(image) if disk['path'] == path), {})
         if (any(current.get(field) != selected.get(field) for field in ('path', 'maj:min', 'size', 'model', 'serial'))
                 or any(mount for member in [current, *current.get('children', [])]
@@ -205,15 +243,12 @@ def flash_iso(image):
             raise ValueError('The selected USB drive changed or is still mounted; nothing was flashed')
         print(f'Writing {image.stat().st_size / 2**20:.1f} MiB to {path}…', flush=True)
         print('Do not remove the USB.', flush=True)
-        log = image.parent / ('flash-' + str(time.time_ns()) + '.log')
-        private_write(log, f'Image: {image}\nUSB: {path}\n')
-        print(f'Flash log: {log}', flush=True)
+        write_started = time.monotonic()
         try:
             with subprocess.Popen(['tee', '--append', '--', str(log)], stdin=subprocess.PIPE,
                                   stdout=sys.stderr) as logger:
                 with logger.stdin:
-                    subprocess.run(['sudo', '--', 'dd', f'if={image}', f'of={path}', 'bs=4M', 'oflag=dsync',
-                                    'status=progress', 'conv=fsync,nocreat'],
+                    subprocess.run(command,
                                    stdout=logger.stdin, stderr=subprocess.STDOUT, check=True, timeout=900)
             if logger.returncode:
                 raise subprocess.CalledProcessError(logger.returncode, ['tee'])
@@ -222,6 +257,8 @@ def flash_iso(image):
                 saved.write(f'\n{type(error).__name__}: {error}\n')
             raise ValueError(f'USB write failed; the USB may be incomplete. ISO saved: {image}. '
                              f'Private log: {log}') from error
+        finally:
+            flash_diagnostics(log, path, since=started, elapsed=time.monotonic() - write_started)
         print(f'\nFlashed {image.name} to {path}. You can remove the USB.')
         return True
     except (EOFError, KeyboardInterrupt):
