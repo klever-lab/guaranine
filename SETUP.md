@@ -144,6 +144,18 @@ If the Ready check stops or times out, resume without reinstalling:
 
 See [operations](docs/operations.md) for maintenance, backups and recovery, or [development](docs/development.md) for validation.
 
+## Node management
+
+Install the pinned upstream Kairos Operator and repository configuration:
+
+```bash
+kubectl apply --server-side -k kubernetes/kairos-operator
+kubectl -n kairos-operator rollout status deployment/operator-kairos-operator
+kubectl wait --for=jsonpath='{.metadata.labels.kairos\.io/managed}'=true node --all --timeout=120s
+```
+
+See [configuration rollouts](docs/operations.md#configuration-rollouts) for updates from the operator computer.
+
 ## Application storage
 
 After a worker is Ready, install the repository's storage provisioner:

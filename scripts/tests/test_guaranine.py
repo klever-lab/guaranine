@@ -27,6 +27,29 @@ import guaranine as cli
 
 
 class ImageHarnessTests(unittest.TestCase):
+    def test_worker_fixture_rollout_shell_parses_before_building_an_image(self):
+        spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        config = harness.fixture('worker')
+        assertions = next(step for step in config['stages']['boot'] if step['name'] == 'Disposable boot assertions')
+        self.assertIn('unshare --pid --fork --mount-proc', assertions['commands'][0])
+        subprocess.run(['sh', '-n'], input=assertions['commands'][0], text=True, check=True)
+        activation = next(file['content'] for file in assertions['files'] if file['path'] == '/run/fixture-config-rollout')
+        subprocess.run(['sh', '-n'], input=activation, text=True, check=True)
+
+    def test_base_image_tag_changes_when_the_lid_profile_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'kairos').mkdir()
+            for name in ('Dockerfile', 'config.yaml', 'lid.yaml'):
+                (root / 'kairos' / name).write_text('fixture source')
+            with (patch.object(cli, 'ROOT', root), patch.object(cli, 'private_command'),
+                  contextlib.redirect_stdout(io.StringIO())):
+                before = cli.build_base(root)
+                (root / 'kairos/lid.yaml').write_text('changed policy')
+                self.assertNotEqual(cli.build_base(root), before)
+
     def test_wifi_tools_use_the_pinned_build_stage_image(self):
         spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')
         harness = importlib.util.module_from_spec(spec)

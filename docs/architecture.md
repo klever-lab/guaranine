@@ -14,7 +14,7 @@ Guaranine runs one K3s server in a cloud VM and K3s agents on laptops. All nodes
 | [kairos/auroraboot.yaml](../kairos/auroraboot.yaml) | Native VHD build recipe. |
 | [infra/azure/image/main.tf](../infra/azure/image/main.tf) | Artifact-specific upload group and private source disk. |
 | [infra/azure/coordinator/main.tf](../infra/azure/coordinator/main.tf) | Cloud VM, network, boot disk and protected data disk. |
-| [kubernetes/](../kubernetes/) | Application network policy, [storage provisioner](storage.md) and [monitoring stack](monitoring.md). |
+| [kubernetes/](../kubernetes/) | Application network policy, [storage provisioner](storage.md), [monitoring stack](monitoring.md) and [Kairos Operator](operations.md#configuration-rollouts). |
 
 Terraform owns infrastructure, Kairos owns the OS and K3s configuration, and Kubernetes manifests own workloads. There is no custom management API, enrollment service or additional Terraform root. See [networking and security](security.md) for transport and trust boundaries.
 

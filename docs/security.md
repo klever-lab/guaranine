@@ -31,7 +31,7 @@ Exceptions allow network-service DHCP, system-resolver DNS, required IPv6 link c
 
 ## Workload restrictions
 
-The server enables K3s secrets encryption and the standard restricted Pod Security policy: no privileged pods or host namespaces, no privilege escalation and dropped capabilities. `kube-system` is exempt and reserved for trusted system components. The dedicated `openebs` namespace also permits trusted storage helpers; the [storage guide](storage.md#permissions-and-network-access) owns this exception and its permissions.
+The server enables K3s secrets encryption and the standard restricted Pod Security policy: no privileged pods or host namespaces, no privilege escalation and dropped capabilities. `kube-system` is exempt and reserved for trusted system components. Dedicated namespaces permit [OpenEBS storage helpers](storage.md#permissions-and-network-access) and [Kairos host maintenance](operations.md#operator-permissions-and-traffic); those guides own their permissions and traffic.
 
 [kubernetes/network-policy.yaml](../kubernetes/network-policy.yaml) denies application ingress and egress in the default namespace, with a cluster-DNS exception. The controller installs this manifest through K3s's native server manifest directory. Add explicit ingress/egress rules alongside applications. New application namespaces need their own policies.
 

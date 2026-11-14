@@ -1,0 +1,23 @@
+#cloud-config
+name: Guaranine lid policy
+stages:
+  initramfs:
+    - name: Keep laptop awake when its lid closes
+      files:
+        - path: /etc/systemd/logind.conf.d/10-guaranine.conf
+          permissions: 0644
+          content: |
+            [Login]
+            HandleLidSwitch=ignore
+            HandleLidSwitchExternalPower=ignore
+            HandleLidSwitchDocked=ignore
+  boot:
+    - name: Activate and verify the lid policy when logind is running
+      if: systemctl is-active --quiet systemd-logind.service
+      commands:
+        - systemctl reload systemd-logind.service
+        - >-
+          for setting in HandleLidSwitch HandleLidSwitchExternalPower HandleLidSwitchDocked; do
+          busctl get-property org.freedesktop.login1 /org/freedesktop/login1
+          org.freedesktop.login1.Manager "$setting" | grep -qx 's "ignore"' || exit 1;
+          done

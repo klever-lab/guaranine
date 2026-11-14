@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Kairos images and install laptops over Tailscale."""
+"""Build Kairos images, install laptops and roll out host configuration over Tailscale."""
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -368,7 +368,8 @@ def build_base(directory):
     """Only public inputs enter the Docker build context and its cache."""
     identity = hashlib.sha256(json.dumps(PINS, sort_keys=True).encode()
                              + (ROOT / 'kairos/Dockerfile').read_bytes()
-                             + (ROOT / 'kairos/config.yaml').read_bytes()).hexdigest()[:16]
+                             + (ROOT / 'kairos/config.yaml').read_bytes()
+                             + (ROOT / 'kairos/lid.yaml').read_bytes()).hexdigest()[:16]
     image = 'guaranine-kairos:' + identity
     args = {'K3S_VERSION': PINS['k3s'], 'K3S_SHA256': PINS['k3s_sha256']}
     command = ['sudo', '--', 'docker', 'build', '--platform', 'linux/amd64', '--tag', image]
@@ -894,6 +895,106 @@ def install_worker(_args):
     wait_for_worker(name, server, node)
 
 
+def rollout_script(contents, destination, host_root='/host'):
+    """Use unique activation stages: Kairos v4.4.0 re-adds default paths even with --override."""
+    prefix = 'guaranine-rollout-' + hashlib.sha256(contents.encode()).hexdigest()[:16] + '-'
+    stages = yaml.safe_load(contents)['stages']
+    activation = cloud_yaml({'stages': {prefix + stage: stages[stage]
+                                       for stage in ('initramfs', 'boot') if stage in stages}})
+    commands = '\n'.join('chroot "$rollout_host" kairos-agent run-stage --strict --override-cloud-init-paths '
+                         '"${activation#"$rollout_host"}" ' + prefix + stage
+                         for stage in ('initramfs', 'boot') if stage in stages)
+    return f'''set -eu
+# Use system D-Bus: the private systemd socket cannot resolve a peer in a child PID namespace.
+export SYSTEMCTL_FORCE_BUS=1
+rollout_host={shlex.quote(host_root)}
+test ! -e "$rollout_host/run/cos/live_mode"
+test -d "$rollout_host/oem"
+candidate=$(mktemp "$rollout_host/oem/.guaranine-rollout-XXXXXX")
+activation=$(mktemp "$rollout_host/run/guaranine-activation-XXXXXX")
+trap 'rm -f "$candidate" "$activation"' EXIT
+cat > "$candidate" <<'GUARANINE_CONFIG'
+{contents.rstrip()}
+GUARANINE_CONFIG
+cat > "$activation" <<'GUARANINE_ACTIVATION'
+{activation.rstrip()}
+GUARANINE_ACTIVATION
+chmod 0600 "$candidate" "$activation"
+chroot "$rollout_host" kairos-agent --strict-validation validate "${{candidate#"$rollout_host"}}"
+chroot "$rollout_host" kairos-agent --strict-validation validate "${{activation#"$rollout_host"}}"
+mv -f "$candidate" "$rollout_host{destination}"
+sync
+{commands}
+printf 'Applied configuration successfully\\n'
+'''
+
+
+def rollout_config(args):
+    """Submit one native Kairos configuration through the upstream NodeOp controller."""
+    path = Path(args.config).resolve()
+    if path.parent != ROOT / 'kairos' or not re.fullmatch(r'[a-z][a-z0-9-]{0,39}\.yaml', path.name):
+        raise ValueError('Use a public rollout profile under kairos/ in this checkout')
+    contents = path.read_text()
+    profile = yaml.safe_load(contents)
+    if (not isinstance(profile, dict) or set(profile) - {'name', 'stages'}
+            or not isinstance(profile.get('stages'), dict) or not profile['stages']
+            or set(profile['stages']) - {'initramfs', 'boot'}):
+        raise ValueError('Rollout profiles may contain only name and initramfs/boot stages')
+    selector = 'kairos.io/managed=true,!node-role.kubernetes.io/control-plane,!node-role.kubernetes.io/master'
+    if args.node:
+        check_name(args.node)
+        selector += ',kubernetes.io/hostname=' + args.node
+    def kubectl(*arguments, data=None):
+        result = subprocess.run(['kubectl', '--request-timeout=30s', *arguments], input=data,
+                                text=True, capture_output=True, timeout=45)
+        if result.returncode:
+            raise ValueError('kubectl failed: ' + result.stderr.strip())
+        return result.stdout
+    nodes = json.loads(kubectl('get', 'nodes', '-l', selector, '-o', 'json'))['items']
+    if not nodes:
+        raise ValueError('No managed workers match; install the Kairos Operator and check node labels')
+    names = sorted(node['metadata']['name'] for node in nodes)
+    if any(not any(condition['type'] == 'Ready' and condition['status'] == 'True'
+                   for condition in node.get('status', {}).get('conditions', [])) for node in nodes):
+        raise ValueError('All selected workers must be Ready; use --node NAME to target a ready worker')
+    active = json.loads(kubectl('-n', 'kairos-operator', 'get', 'nodeops', '-o', 'json'))['items']
+    if any(item.get('status', {}).get('phase') not in ('Completed', 'Failed') for item in active):
+        raise ValueError('A NodeOp is already active; inspect kubectl -n kairos-operator get nodeops before retrying')
+    destination = '/oem/91_guaranine-' + path.name
+    operation = {
+        'apiVersion': 'operator.kairos.io/v1alpha1', 'kind': 'NodeOp',
+        'metadata': {'generateName': 'config-' + path.stem + '-', 'namespace': 'kairos-operator'},
+        'spec': {'nodeSelector': {'matchExpressions': [
+            {'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': names}]},
+            'command': ['sh', '-ec', rollout_script(contents, destination)], 'concurrency': 1, 'stopOnFailure': True,
+            'backoffLimit': 0, 'cordon': False, 'rebootOnSuccess': False,
+            'drainOptions': {'enabled': False},
+            'resources': {'requests': {'cpu': '10m', 'memory': '64Mi'},
+                          'limits': {'cpu': '500m', 'memory': '256Mi'}}}}
+    print(f'Rolling out {path.name} to {", ".join(names)}', flush=True)
+    created = json.loads(kubectl('create', '-f', '-', '-o', 'json', data=yaml.safe_dump(operation)))
+    name = created['metadata']['name']
+    print(f'NodeOp: {name}\nStatus: kubectl -n kairos-operator get nodeop {name} -o yaml', flush=True)
+    deadline = time.monotonic() + 600
+    previous = None
+    while time.monotonic() < deadline:
+        status = json.loads(kubectl('-n', 'kairos-operator', 'get', 'nodeop', name, '-o', 'json')).get('status', {})
+        summary = ', '.join(f'{node}: {state.get("phase", "Pending")}'
+                            for node, state in sorted(status.get('nodeStatuses', {}).items())) or 'Pending'
+        if summary != previous:
+            print(summary, flush=True)
+            previous = summary
+        if status.get('phase') == 'Failed':
+            raise ValueError(f'Rollout {name} failed; inspect its status and Job logs before retrying')
+        if (status.get('phase') == 'Completed'
+                and set(status.get('nodeStatuses', {})) == set(names)
+                and all(state.get('phase') == 'Completed' for state in status['nodeStatuses'].values())):
+            print(f'Rollout {name} completed on all selected workers.')
+            return
+        time.sleep(2)
+    raise ValueError(f'Timed out waiting for {name}; it continues in the cluster. Inspect status before retrying')
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(prog='guaranine', description=__doc__)
@@ -908,6 +1009,10 @@ def main(argv=None):
     worker = commands.add_parser('worker', help='Add or forget a worker')
     worker.add_argument('--wait', metavar='NAME', help='Wait for Ready without reinstalling')
     worker.set_defaults(action=manage_workers)
+    rollout = commands.add_parser('rollout', help='Apply a public Kairos configuration to managed workers')
+    rollout.add_argument('config', metavar='CONFIG', help='Public profile under kairos/ (for example kairos/lid.yaml)')
+    rollout.add_argument('--node', metavar='NAME', help='Target one worker instead of all workers')
+    rollout.set_defaults(action=rollout_config)
     os.umask(0o077)
     try:
         args = parser.parse_args(argv or ['--help'])
@@ -915,6 +1020,8 @@ def main(argv=None):
     except yaml.YAMLError:
         parser.exit(1, 'Invalid YAML; check the local operator/configuration file.\n')
     except (EOFError, KeyboardInterrupt):
+        if argv and argv[0] == 'rollout':
+            parser.exit(1, 'Cancelled. A submitted NodeOp continues in the cluster; inspect its status before retrying.\n')
         parser.exit(1, 'Cancelled. If installation was already sent, check the laptop before retrying.\n')
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'{type(error).__name__}: {error}\n')
