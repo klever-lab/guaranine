@@ -35,6 +35,8 @@ The server enables K3s secrets encryption and the standard restricted Pod Securi
 
 [kubernetes/network-policy.yaml](../kubernetes/network-policy.yaml) denies application ingress and egress in the default namespace, with a cluster-DNS exception. The controller installs this manifest through K3s's native server manifest directory. Add explicit ingress/egress rules alongside applications. New application namespaces need their own policies.
 
+The current K3s network-policy controller installs Pod rules asynchronously: a newly started Pod can send traffic before those rules arrive. Verify connectivity after policy convergence; NetworkPolicy is not a startup isolation barrier. The host's LAN filtering still applies during this window.
+
 Allowed destinations remain reachable by compromised applications. Firewall rules and removal of utilities cannot guarantee protection after host-root or kernel compromise.
 
 ## Private material and enrollment
