@@ -35,6 +35,10 @@ class PrivateCommandError(ValueError):
         self.returncode = returncode
 
 
+class ExpiredAuthKey(ValueError):
+    pass
+
+
 def digest(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -104,12 +108,14 @@ def auth_record(path, now=None, *, reusable=False):
     capability = record['capabilities']['devices']['create']
     # Tolerate small API/operator clock differences without extending expiry.
     if not (created.tzinfo and expires.tzinfo and 0 < (expires-created).total_seconds() <= 86400
-            and created <= now + timedelta(seconds=5) and now < expires and capability['reusable'] is reusable
+            and created <= now + timedelta(seconds=5) and capability['reusable'] is reusable
             and capability['ephemeral'] is False and capability['preauthorized'] is True
             and capability.get('tags') == ['tag:guaranine-' + ('worker' if reusable else 'controlplane')]
             and isinstance(record['key'], str) and record['key'].startswith('tskey-auth-')):
         use = 'reusable' if reusable else 'single-use'
         raise ValueError(f'Require an unexpired, preauthorized, non-ephemeral, {use} Tailscale key with at most 24 hours lifetime')
+    if now >= expires:
+        raise ExpiredAuthKey('Tailscale enrollment key expired')
     return record
 
 
@@ -452,9 +458,20 @@ def prepare_iso(_args):
     key, config_path = installer / 'tailscale-key.json', installer / 'boot.yaml'
     image = installer / 'image/guaranine-kairos.iso'
     current_source = iso_source()
+    renew = False
     if image.exists():
-        record = auth_record(key, reusable=True)
         protected(image)
+        try:
+            record = auth_record(key, reusable=True)
+        except ExpiredAuthKey:
+            config = yaml.safe_load(protected(config_path).read_text())
+            wifi = next((file['content'] for step in config['stages']['initramfs']
+                         for file in step.get('files', []) if file['path'] == '/etc/guaranine/wifi.conf'), None)
+            if not wifi:
+                raise ValueError('Saved ISO Wi-Fi settings are missing; inspect installer/boot.yaml before renewing')
+            renew = True
+            print('ISO enrollment key expired; creating a new batch with the saved Wi-Fi settings…')
+    if image.exists() and not renew:
         saved_source = None
         metadata = image.parent / 'source.json'
         if metadata.exists():
@@ -478,12 +495,17 @@ def prepare_iso(_args):
         else:
             print('Reusing saved ISO (source unchanged).')
     else:
-        if installer.exists() and set(installer.iterdir()) != {key}:
+        if not renew and installer.exists() and set(installer.iterdir()) != {key}:
             raise ValueError(f'{installer} contains an incomplete build; inspect its protected logs and revoke '
                              'the batch key before archiving it and starting a new batch')
-        wifi = operator_wifi(directory)
+        if not renew:
+            wifi = operator_wifi(directory)
         private_command(['sudo', '--', 'docker', 'info', '--format', '{{.OSType}}'], directory)
         source = build_base(directory)
+        if renew:
+            previous = directory / ('installer-expired-' + str(time.time_ns()))
+            installer.rename(previous)
+            print(f'Expired ISO batch and logs: {previous}')
         if not installer.exists():
             output_directory(installer)
             mint(settings['tailscale_api_token'].strip(), settings['tailnet'], 'worker', key, reusable=True)
