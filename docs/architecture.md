@@ -28,7 +28,7 @@ The installed system carries its Wi-Fi profile forward and keeps its own persist
 
 K3s starts after the firewall and Tailscale registration service. The server additionally binds its service to the ext4 volume labeled `GUARANINE_DATA` at `/var/lib/rancher/k3s`; an absent mount prevents the server from starting. Worker and server settings live in native role profiles, rather than generated copies of shared machine policy.
 
-AuroraBoot creates the controller's OS persistent partition on first boot. Its native profile refreshes block-device events and waits for udev before Kairos grows or mounts that filesystem, so fast boots do not race filesystem-label discovery. The retained K3s data disk is separate.
+AuroraBoot creates the controller's OS persistent partition on first boot. Its native profile refreshes block-device events and explicitly waits for the `COS_PERSISTENT` device label before Kairos grows or mounts that filesystem, so an empty udev queue is not mistaken for a ready device. The retained K3s data disk is separate.
 
 ## Controller resources
 
