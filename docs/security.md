@@ -8,10 +8,14 @@
 | --- | --- | --- | --- |
 | Worker | Controller | TCP 6443 | Kubernetes API |
 | Controller | Worker | TCP 10250 | Kubelet |
+| Worker | Both node roles | TCP 10250 | Authenticated kubelet metrics |
 | Both node roles | Both node roles | UDP 8472 | Flannel VXLAN |
 | Operator | Nodes | TCP 22 | Ordinary key-based SSH |
+| Operator | Monitoring proxy | TCP 443 | Private Grafana HTTPS |
 
 Nodes cannot administer peers. The policy retains the operator's broader personal access; the table describes cluster traffic, not a replacement for the complete policy.
+
+The monitoring proxy has its own admin-owned tag, with no grants to reach other tailnet devices. Cluster node tags and unrelated users cannot connect to it. Its Serve configuration disables Funnel. The [monitoring guide](monitoring.md) owns its Kubernetes permissions and traffic.
 
 Before applying it, back up the live policy outside the checkout. Use the standard [Access controls editor](https://console.tailscale.com/admin/acls); for API updates, validate first, use the live ETag with `If-Match` and read back the result. CI checks JSON syntax without credentials and never applies the live policy.
 
@@ -23,11 +27,11 @@ The Azure NSG denies physical inbound access and direct VNet egress. Its public 
 
 Wi-Fi client isolation is useful but never assumed. The host nftables rules in [kairos/config.yaml](../kairos/config.yaml) block direct LAN traffic from hosts and pods, including attached subnets using public addresses. Systemd-networkd updates those subnet sets as addresses change. Ordinary physical egress stays blocked until the network service registers the interface.
 
-Exceptions allow network-service DHCP, system-resolver DNS, required IPv6 link control and encrypted Tailscale transport. Unsolicited physical traffic cannot reach host services or pods; internet replies remain allowed. SSH and networking start after the firewall. [Packet tests](development.md#firewall-packet-checks) exercise the actual rules without relying on access-point isolation.
+Exceptions allow network-service DHCP, system-resolver DNS, required IPv6 link control and encrypted Tailscale transport. Cluster pod interfaces permit TCP 6443 and 10250 to the host for the authenticated API and kubelet; application network policies and Kubernetes authorization still apply. Unsolicited physical traffic cannot reach host services or pods; internet replies remain allowed. SSH and networking start after the firewall. [Packet tests](development.md#firewall-packet-checks) exercise the actual rules without relying on access-point isolation.
 
 ## Workload restrictions
 
-The server enables K3s secrets encryption and the standard restricted Pod Security policy: no privileged pods or host namespaces, no privilege escalation and dropped capabilities. `kube-system` is exempt and reserved for trusted system components.
+The server enables K3s secrets encryption and the standard restricted Pod Security policy: no privileged pods or host namespaces, no privilege escalation and dropped capabilities. `kube-system` is exempt and reserved for trusted system components. The dedicated `openebs` namespace also permits trusted storage helpers; the [storage guide](storage.md#permissions-and-network-access) owns this exception and its permissions.
 
 [kubernetes/network-policy.yaml](../kubernetes/network-policy.yaml) denies application ingress and egress in the default namespace, with a cluster-DNS exception. The controller installs this manifest through K3s's native server manifest directory. Add explicit ingress/egress rules alongside applications. New application namespaces need their own policies.
 

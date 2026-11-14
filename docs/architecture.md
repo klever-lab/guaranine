@@ -14,7 +14,7 @@ Guaranine runs one K3s server in a cloud VM and K3s agents on laptops. All nodes
 | [kairos/auroraboot.yaml](../kairos/auroraboot.yaml) | Native VHD build recipe. |
 | [infra/azure/image/main.tf](../infra/azure/image/main.tf) | Artifact-specific upload group and private source disk. |
 | [infra/azure/coordinator/main.tf](../infra/azure/coordinator/main.tf) | Cloud VM, network, boot disk and protected data disk. |
-| [kubernetes/](../kubernetes/) | Workload manifests; currently the application network policy. |
+| [kubernetes/](../kubernetes/) | Application network policy, [storage provisioner](storage.md) and [monitoring stack](monitoring.md). |
 
 Terraform owns infrastructure, Kairos owns the OS and K3s configuration, and Kubernetes manifests own workloads. There is no custom management API, enrollment service or additional Terraform root. See [networking and security](security.md) for transport and trust boundaries.
 
@@ -42,6 +42,6 @@ Azure is temporary hosting. The deployment does not depend on another Azure serv
 
 ## Workloads and availability
 
-The server has a `NoSchedule` control-plane taint. Traefik, ServiceLB, local-path storage, metrics-server and Gateway API CRDs are disabled. Add required applications and supporting components through repository Kubernetes manifests; there is no preinstalled ingress, monitoring or application bundle.
+The server has a `NoSchedule` control-plane taint. Bundled Traefik, ServiceLB, local-path storage, metrics-server and Gateway API CRDs are disabled. [Application storage](storage.md) and [monitoring](monitoring.md) are explicitly deployed through repository Kubernetes manifests; there is no preinstalled application or ingress bundle.
 
 One server is an availability tradeoff: losing it interrupts control-plane operations. Disconnected workers can keep running existing workloads. Stateful failover still needs fencing, spare capacity and suitable storage; a lost connection does not prove a machine has stopped. Local disks do not follow rescheduled workloads. See [node retirement](operations.md#retire-a-worker) before removing a machine.

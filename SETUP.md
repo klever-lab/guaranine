@@ -143,3 +143,50 @@ If the Ready check stops or times out, resume without reinstalling:
 ```
 
 See [operations](docs/operations.md) for maintenance, backups and recovery, or [development](docs/development.md) for validation.
+
+## Application storage
+
+After a worker is Ready, install the repository's storage provisioner:
+
+```bash
+kubectl apply -f kubernetes/storage.yaml
+kubectl -n openebs rollout status deployment/openebs-localpv
+kubectl get storageclass
+```
+
+See [application storage](docs/storage.md) for the PVC workflow, permissions, local disk limits and existing-volume handling.
+
+## Optional monitoring
+
+For private Grafana and cluster metrics, prepare the worker directories described in [monitoring storage](docs/monitoring.md#storage-and-reapplication). Apply the current [tailnet policy](docs/security.md#tailnet-policy) and host firewall from this repository before collecting kubelet metrics; updating files in the checkout does not update an installed OS.
+
+Enable MagicDNS and HTTPS certificates in the tailnet's DNS settings. Create a single-use, preauthorized, non-ephemeral auth key for `tag:guaranine-monitoring`, expiring within 24 hours. This key enrolls only the monitoring proxy; the operator API token stays outside the cluster.
+
+Generate private credentials once and deploy a new installation:
+
+```bash
+umask 077
+monitoring_dir="${GUARANINE_OPERATOR_DIR:-$HOME/.local/state/guaranine-kairos}/monitoring"
+mkdir -p "$monitoring_dir"
+test -f "$monitoring_dir/admin-password" || openssl rand -base64 36 > "$monitoring_dir/admin-password"
+test -f "$monitoring_dir/secret-key" || openssl rand -base64 48 > "$monitoring_dir/secret-key"
+read -rsp 'Tailscale monitoring auth key: ' monitoring_auth_key
+printf '\n'
+printf '%s' "$monitoring_auth_key" > "$monitoring_dir/tailscale-auth-key"
+unset monitoring_auth_key
+kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n monitoring create secret generic grafana \
+  --from-file="admin-password=$monitoring_dir/admin-password" \
+  --from-file="secret-key=$monitoring_dir/secret-key" \
+  --dry-run=client -o yaml | kubectl apply --server-side -f -
+kubectl -n monitoring create secret generic monitoring-tailscale \
+  --from-file="authkey=$monitoring_dir/tailscale-auth-key"
+rm -- "$monitoring_dir/tailscale-auth-key"
+kubectl apply -f kubernetes/monitoring.yaml
+kubectl -n monitoring rollout status deployment/monitoring-proxy
+kubectl -n monitoring rollout status deployment/grafana
+kubectl -n monitoring rollout status deployment/prometheus
+kubectl -n monitoring rollout status deployment/kube-state-metrics
+```
+
+See [Open Grafana](docs/monitoring.md#open-grafana) for private access and the generated password.

@@ -5,6 +5,8 @@ Start with [SETUP.md](../SETUP.md) for first-time deployment. These guides own t
 - [Architecture](architecture.md) — component ownership, image flow, controller resources and availability limits.
 - [Laptop hardware](hardware.md) — model inventory, Wi-Fi coverage, boot requirements and qualification evidence.
 - [Networking and security](security.md) — tailnet policy, LAN isolation, workload restrictions and private material.
+- [Application storage](storage.md) — automatic PVC provisioning, local disk limits, retention and recovery.
+- [Monitoring](monitoring.md) — private Grafana access, cluster metrics and monitoring storage.
 - [Operations](operations.md) — image batches, node retirement, backups, recovery, migration and OS updates.
 - [Development](development.md) — local checks, CI, disposable image tests and dependency pins.
 - [Superseded approaches](history.md) — earlier platforms and removed workflows, with their Git references.
