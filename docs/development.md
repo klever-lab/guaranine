@@ -51,7 +51,9 @@ Measure feedback time from the workflow's `created_at` through the latest job's 
 
 The [boot-selection hardening run](https://github.com/klever-lab/guaranine/actions/runs/43359077952) passed the same four suites and eight guests in 12m43s, including its 20s queue: one second longer than the previous run. Stronger firmware and installation-success checks added no jobs or guest boots. Job runtimes were 12m23s live, 5m34s controller, 9m46s BIOS worker and 8m23s UEFI worker.
 
-The [flash-logging run](https://github.com/klever-lab/guaranine/actions/runs/43520383289) took 11m25s including its 3s queue, with all eight guests using TCG. The slowest suite, UEFI worker, spent 601s of its 660s harness runtime in guest installation and boot. Base build, test tools and ISO creation took 59s. This is the baseline before granting runner KVM access; a hosted measurement of that change is still pending.
+The [flash-logging run](https://github.com/klever-lab/guaranine/actions/runs/43520383289) took 11m25s including its 3s queue, with all eight guests using TCG. The slowest suite, UEFI worker, spent 601s of its 660s harness runtime in guest installation and boot. Base build, test tools and ISO creation took 59s. This is the baseline before granting runner KVM access.
+
+With KVM access enabled and [controller startup ordering](architecture.md#images-and-node-roles) corrected, the [accelerated run](https://github.com/klever-lab/guaranine/actions/runs/43530386247) passed all four suites and eight guests on its first attempt in 7m38s including its 3s queue: 3m47s less elapsed time, a 33.1% reduction. Job runtimes were 7m35s live, 4m32s controller, 3m30s BIOS worker and 3m41s UEFI worker. Seven guests used KVM; the legacy CPU guest retained TCG and `Opteron_G1`. Earlier accelerated trials exposed the controller's first-boot label race and are not successful benchmark runs. This compares single runs on hosted runners, whose performance varies; coverage is unchanged. Repository validation passed separately in 49s.
 
 ## Dependency pins
 
