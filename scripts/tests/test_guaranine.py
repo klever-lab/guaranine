@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -26,6 +27,28 @@ import guaranine as cli
 
 
 class ImageHarnessTests(unittest.TestCase):
+    def test_wifi_tools_use_the_pinned_build_stage_image(self):
+        spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        image = next(line.split()[1] for line in (ROOT / 'kairos/Dockerfile').read_text().splitlines()
+                     if line.endswith(' AS wifi'))
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            def container(arguments, **kwargs):
+                self.assertIn(image, arguments)
+                with tarfile.open(fileobj=kwargs['stdout'], mode='w') as archive:
+                    for name in ('hostapd', 'iw', 'dnsmasq', 'ip'):
+                        contents = ('fixture-' + name).encode()
+                        member = tarfile.TarInfo(name)
+                        member.size = len(contents)
+                        archive.addfile(member, io.BytesIO(contents))
+            with patch.object(harness.subprocess, 'run', side_effect=container) as run:
+                harness.wifi_tools(directory)
+            run.assert_called_once()
+            for name in ('hostapd', 'iw', 'dnsmasq', 'ip'):
+                self.assertEqual((directory / 'wifi-tools' / name).read_text(), 'fixture-' + name)
+
     def test_poweroff_requires_a_completed_install_marker_not_logged_command_text(self):
         spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')
         harness = importlib.util.module_from_spec(spec)
