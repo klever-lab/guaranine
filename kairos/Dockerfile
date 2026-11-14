@@ -1,5 +1,5 @@
 # Only public inputs enter this image and its build cache.
-FROM alpine@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2 AS wifi
+FROM public.ecr.aws/docker/library/alpine@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2 AS wifi
 RUN apk add --no-cache wpa_supplicant=2.11-r3 nftables=1.1.5-r2 b43-fwcutter=019-r3 efibootmgr=18-r2 && \
     mkdir -p /out/usr/lib/guaranine-network /out/usr/bin && \
     for program in wpa_supplicant nft efibootmgr; do \
