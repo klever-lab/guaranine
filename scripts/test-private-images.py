@@ -161,7 +161,7 @@ def fixture(role=None):
         'test -f /etc/guaranine/tailscale-key',
         f'grep -Fq "{PUBLIC_KEY}" /root/.ssh/authorized_keys',
         'timeout 120 sh -ec \'until systemctl is-active --quiet sshd guaranine-firewall tailscaled '
-        'systemd-networkd systemd-resolved; do sleep 1; done\'',
+        'systemd-networkd systemd-resolved systemd-logind; do sleep 1; done\'',
         'timeout 60 sh -ec \'until /usr/lib/guaranine-network/ld-musl-x86_64.so.1 '
         '--library-path /usr/lib/guaranine-network /usr/lib/guaranine-network/nft '
         'get element inet guaranine lan4 "{ 10.0.2.0/24 }"; do sleep 1; done\'',
@@ -178,6 +178,11 @@ def fixture(role=None):
         'ath10k/QCA6174/hw2.1/firmware-5.bin ath10k/QCA6174/hw3.0/firmware-6.bin '
         'ath10k/QCA6174/hw3.0/board-2.bin; '
         'do test -s "/usr/lib/firmware/$firmware.zst" || exit 1; done',
+    ]
+    checks += [
+        'busctl get-property org.freedesktop.login1 /org/freedesktop/login1 '
+        f'org.freedesktop.login1.Manager {setting} | grep -qx \'s "ignore"\''
+        for setting in ('HandleLidSwitch', 'HandleLidSwitchExternalPower', 'HandleLidSwitchDocked')
     ]
     if role == 'controlplane':
         config['stages']['mount-failure'] = [{
