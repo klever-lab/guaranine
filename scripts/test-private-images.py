@@ -126,7 +126,7 @@ echo GUARANINE_WIFI_OK > /dev/ttyS0
 
 def wifi_tools(directory):
     """Test-only AP tools stay outside the production image and installed filesystem."""
-    alpine = re.search(r'^FROM (alpine@sha256:[a-f0-9]{64}) AS wifi$',
+    alpine = re.search(r'^FROM (\S+@sha256:[a-f0-9]{64}) AS wifi$',
                        (cli.ROOT / 'kairos/Dockerfile').read_text(), re.M).group(1)
     script = '''set -eu
 apk add --no-cache hostapd=2.11-r4 iw=6.17-r0 dnsmasq=2.91-r1 iproute2-minimal=6.17.0-r0 >/dev/null
