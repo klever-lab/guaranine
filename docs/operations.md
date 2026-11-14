@@ -66,8 +66,47 @@ Replacing an earlier OS/cluster deployment is a fresh-cluster migration. Create 
 
 Fence the previous controller before restoring its cluster elsewhere. Keep its recovery copy until the replacement and backups are verified. Retained-disk cleanup requires deliberate scope and verified backups; never bypass retention by deleting Terraform state or targeting resources. [History](history.md) identifies superseded implementations so their commands are not mistaken for current procedures.
 
+## Configuration rollouts
+
+The [Kairos Operator](https://kairos.io/operator-docs/) runs node operations through Kubernetes. Install it once using [Node management](../SETUP.md#node-management). The repository's [Kustomize overlay](../kubernetes/kairos-operator/kustomization.yaml) pins the upstream release and container digests; it does not build a custom controller.
+
+After editing and validating a public, native Kairos rollout profile, run from the operator computer:
+
+```bash
+./guaranine rollout kairos/lid.yaml --node demure
+```
+
+Omit `--node` to update all managed workers. The command requires every selected worker to be Ready, excludes control-plane/master nodes, snapshots the selected names, and refuses to submit while another NodeOp in `kairos-operator` is active. Use one operator at a time. It creates a fresh NodeOp for each run, processes one node at a time, stops on failure and never reboots, cordons or drains nodes. Git pushes do not trigger deployment.
+
+Rollout profiles live under `kairos/` and contain only `name` and `initramfs`/`boot` stages. Their files and commands run as host root; review them as infrastructure code. Keep credentials and role/installation profiles outside this workflow. The CLI embeds the public profile in the NodeOp, validates a temporary candidate with the host's native Kairos agent, then atomically replaces `/oem/91_guaranine-NAME.yaml` and syncs it. It activates the profile's `initramfs` and `boot` steps sequentially under temporary, content-derived stage names. Kairos v4.4.0 re-adds default configuration paths despite `--override-cloud-init-paths`; these dedicated names prevent unrelated boot stages from running. Unrelated private OEM files remain in place. Failed activation is reported; it does not automatically roll the configuration back.
+
+The CLI prints the operation name and waits up to ten minutes for all selected nodes. Closing the terminal, Ctrl+C or a timeout leaves a submitted operation running in the cluster. Inspect it before creating another:
+
+```bash
+kubectl -n kairos-operator get nodeops
+kubectl -n kairos-operator get nodeop OPERATION_NAME -o yaml
+kubectl -n kairos-operator get jobs -l kairos.io/nodeop=OPERATION_NAME
+kubectl -n kairos-operator logs job/JOB_NAME
+```
+
+Completed and failed operations retain status and Job logs. After reviewing a finished operation, delete its NodeOp to remove its owned Jobs. Correct a failed profile and submit a new operation; applying changes to an existing NodeOp does not start another run.
+
+### Operator permissions and traffic
+
+The operator runs on the cloud controller as a non-root container with a read-only root filesystem, dropped capabilities and the runtime seccomp profile. Upstream node metadata helpers run on each Kairos node with read-only host `/etc` access and permission to patch node metadata. Initial discovery also creates one completed Job per node. These helpers explain the extra node-management pods.
+
+Only the `kairos-operator` namespace permits privileged maintenance Pods. A NodeOp mounts host `/` read-write and has host-administrator access; access to creating NodeOps and to this namespace is therefore administrator access. The controller also manages nodes, Pods, Jobs, DaemonSets, service accounts and RBAC for upstream discovery/reboot helpers. Its RBAC omits upstream build-only Secret, PVC and ConfigMap permissions, so in-cluster OSArtifact builds are unsupported. Application namespaces keep their restricted security policy.
+
+Namespace network policies deny ingress and allow only Kubernetes API egress over the cluster/tailnet. The default service account has no mounted token or role binding; ordinary configuration Jobs do not need API credentials. The operator and metadata helpers use their dedicated service accounts. Container pulls use the node's normal registry access. Host activation uses system D-Bus (`SYSTEMCTL_FORCE_BUS=1`), because systemd's private socket cannot resolve clients in a Pod PID namespace. No new host firewall ports or public endpoints are needed. These controls do not sandbox a privileged host operation after compromise.
+
 ## OS updates
 
-Use native `kairos-agent upgrade` with a tested image produced from this recipe and a pinned digest or private local image. Keep secrets in OEM configuration, outside the public base. Verify active/passive rollback and persistent data after upgrades. Terraform seed-image changes do not upgrade an installed OS; see [controller disk ownership](architecture.md#controller-resources).
+The installed operator also provides [NodeOpUpgrade](https://kairos.io/operator-docs/nodeop-upgrade/), which wraps native Kairos image upgrades and tracks node reboot completion. Use a tested **Guaranine public OS base**, built from this repository, with a pinned registry digest. The current image workflow builds private installation media and does not publish an upgrade image; never upload a private ISO, VHD or node configuration to a registry.
+
+Schedule downtime, back up persistent data and use `kubectl drain NAME --ignore-daemonsets` before an OS upgrade. The pinned operator's built-in drain deletes Pods directly without the Eviction API, so keep `drainOptions.enabled: false` in the NodeOpUpgrade and perform the Kubernetes drain yourself. A single worker's local volumes cannot move to the controller; its applications will be unavailable during reboot. Resolve disruption-budget and capacity blockers before proceeding.
+
+Create a fresh NodeOpUpgrade in `kairos-operator` with an explicit hostname selector, `concurrency: 1`, `stopOnFailure: true`, `cordon: true`, `rebootOnSuccess: true`, and the tested image. For a rebuilt custom image with unchanged Kairos/K3s version metadata, set `force: true`: upstream's preflight compares versions, not image digests. The node pulls the OS image; the upgrade Job then uses its local root filesystem (`dir:/`), so the namespace needs no registry egress exception. Upgrade publishing and a production OS upgrade are not yet qualified by this setup.
+
+Keep secrets in OEM configuration, outside the public base. Verify active/passive rollback, node Ready, network isolation and persistent data after upgrades; then uncordon a node you manually cordoned. Terraform seed-image changes do not upgrade an installed OS; see [controller disk ownership](architecture.md#controller-resources).
 
 Check the [hardware qualification](hardware.md#qualification-and-limits) whenever the base image, kernel, firmware or network configuration changes.

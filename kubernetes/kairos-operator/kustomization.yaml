@@ -1,0 +1,84 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kairos-operator
+resources:
+  # Upstream release asset SHA-256: 9eff2d162f3cc1ac8f5a13d54dc1530d503637b8b9f11c63377521c1e3453ad4
+  - https://github.com/kairos-io/kairos-operator/releases/download/v0.3.0/install.yaml
+  - network-policy.yaml
+patches:
+  - target:
+      kind: Namespace
+      name: operator-system
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: operator-system
+        labels:
+          pod-security.kubernetes.io/enforce: privileged
+          pod-security.kubernetes.io/audit: restricted
+          pod-security.kubernetes.io/warn: restricted
+  - target:
+      kind: Deployment
+      name: operator-kairos-operator
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: operator-kairos-operator
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              node-role.kubernetes.io/control-plane: "true"
+            containers:
+              - name: manager
+                args:
+                  - --metrics-bind-address=0
+                  - --leader-elect
+                  - --health-probe-bind-address=:8081
+                image: quay.io/kairos/operator:v0.3.0@sha256:bc0462a0bd5e240ee17af9e3743d228173905ec642e894e30cbfc650ef43fed7
+                env:
+                  - name: OPERATOR_IMAGE
+                    value: quay.io/kairos/operator:v0.3.0@sha256:bc0462a0bd5e240ee17af9e3743d228173905ec642e894e30cbfc650ef43fed7
+                  - name: NODE_LABELER_IMAGE
+                    value: quay.io/kairos/operator-node-labeler:v0.3.0@sha256:ec5df061bdde751b90ac0d5b43d9596ba09be8f344eb86fd39bab95ef096fa14
+                  - name: SENTINEL_IMAGE
+                    value: public.ecr.aws/docker/library/busybox:1.37.0-musl@sha256:f6a95d611e0a8780fabdb2aec43e31275b2720dfefa3e41b16835bfc42454478
+                  - name: NODEOP_DEFAULT_IMAGE
+                    value: public.ecr.aws/docker/library/busybox:1.37.0-musl@sha256:f6a95d611e0a8780fabdb2aec43e31275b2720dfefa3e41b16835bfc42454478
+                securityContext:
+                  readOnlyRootFilesystem: true
+  # Node management only; build-only Secret, PVC and ConfigMap permissions are omitted.
+  # The operator still needs cluster watches and trusted host-administration permissions.
+  - target:
+      kind: ClusterRole
+      name: operator-manager-role
+    patch: |-
+      - op: replace
+        path: /rules
+        value:
+          - apiGroups: [""]
+            resources: [namespaces]
+            verbs: [get, list, watch]
+          - apiGroups: [""]
+            resources: [nodes]
+            verbs: [get, list, watch, update, patch]
+          - apiGroups: [""]
+            resources: [pods, serviceaccounts]
+            verbs: [get, list, watch, create, update, patch, delete]
+          - apiGroups: [apps]
+            resources: [daemonsets]
+            verbs: [get, list, watch, create, update, patch, delete]
+          - apiGroups: [batch]
+            resources: [jobs, jobs/status]
+            verbs: [get, list, watch, create, update, patch, delete]
+          - apiGroups: [operator.kairos.io]
+            resources: [nodeops, nodeopupgrades, nodeops/status, nodeopupgrades/status, nodeops/finalizers, nodeopupgrades/finalizers]
+            verbs: [get, list, watch, create, update, patch, delete]
+          - apiGroups: [build.kairos.io]
+            resources: [osartifacts]
+            verbs: [get, list, watch]
+          - apiGroups: [rbac.authorization.k8s.io]
+            resources: [roles, rolebindings, clusterroles, clusterrolebindings]
+            verbs: [get, list, watch, create, update, patch, delete]

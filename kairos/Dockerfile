@@ -48,6 +48,7 @@ RUN cp -a /usr/local/lib/firmware/. /usr/lib/firmware/ && \
     touch /etc/machine-id && passwd --lock root
 
 COPY config.yaml /system/oem/90_guaranine.yaml
+COPY lid.yaml /system/oem/91_guaranine-lid.yaml
 
 # Require the documented laptop radios and the paths requested by their kernel drivers.
 RUN set -eu; \

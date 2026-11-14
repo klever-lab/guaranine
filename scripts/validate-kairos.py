@@ -39,7 +39,7 @@ def main():
         version = cli.PINS['kairos']
         agent = binary(f'https://github.com/kairos-io/kairos/releases/download/{version}/kairos-{version}-linux-amd64.tar.gz',
                        cli.PINS['agent_sha256'], 'kairos', directory)
-        profiles = [ROOT / 'kairos' / name for name in ('config.yaml', 'worker.yaml', 'controlplane.yaml')]
+        profiles = [ROOT / 'kairos' / name for name in ('config.yaml', 'worker.yaml', 'controlplane.yaml', 'lid.yaml')]
         for path in profiles:
             subprocess.run([str(agent), 'agent', '--strict-validation', 'validate', str(path)], check=True)
         for role in (None, 'worker', 'controlplane'):

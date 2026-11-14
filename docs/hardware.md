@@ -10,34 +10,17 @@ On UEFI workers, a native `after-install` hook registers **Kairos** for the inst
 
 ## Keep laptops awake
 
-The shared [Kairos configuration](../kairos/config.yaml) writes `/etc/systemd/logind.conf.d/10-guaranine.conf` during initramfs, before normal services start. Its three settings tell systemd-logind to ignore lid closure on battery, on external power and while docked. New images include this policy; committing or pulling the repository does not update an installed worker.
+The native [lid profile](../kairos/lid.yaml) writes `/etc/systemd/logind.conf.d/10-guaranine.conf` during initramfs, before normal services start. Its three settings tell systemd-logind to ignore lid closure on battery, on external power and while docked. New images include the same profile; committing or pulling the repository does not update an installed worker.
 
-For an existing worker, apply the same setting through a persistent Kairos OEM override. Run the following **on that worker as root**, reached through pinned Tailscale SSH. Keep its lid open until the active settings are verified. This file contains only the lid policy; preserve the other OEM files.
+For an existing worker, use the [configuration rollout](operations.md#configuration-rollouts) from the operator computer. Keep its lid open until the operation completes:
 
 ```bash
-cat > /oem/95_guaranine-lid.yaml <<'EOF'
-#cloud-config
-name: Guaranine lid policy
-stages:
-  initramfs:
-    - name: Keep laptop awake when its lid closes
-      files:
-        - path: /etc/systemd/logind.conf.d/10-guaranine.conf
-          permissions: 0644
-          content: |
-            [Login]
-            HandleLidSwitch=ignore
-            HandleLidSwitchExternalPower=ignore
-            HandleLidSwitchDocked=ignore
-EOF
-kairos-agent --strict-validation validate /oem/95_guaranine-lid.yaml
-kairos-agent run-stage --strict --override-cloud-init-paths /oem/95_guaranine-lid.yaml initramfs
-systemctl reload systemd-logind.service
+./guaranine rollout kairos/lid.yaml --node demure
 ```
 
-`/oem` is persistent on installed Kairos nodes, so this stage also restores the file at boot. The explicit override path applies only this file now. Reloading logind makes it read its application configuration; `systemctl daemon-reload` alone only reloads systemd unit definitions. No worker reboot is needed to activate the policy.
+The profile's boot stage reloads an active logind and checks all three D-Bus settings before reporting success. No worker reboot is needed. `/oem` is persistent on installed Kairos nodes, so the profile also restores the file at boot. Reloading logind makes it read its application configuration; `systemctl daemon-reload` alone only reloads systemd unit definitions.
 
-Check the daemon's active policy rather than just the file contents:
+For an independent check on the worker, inspect the daemon's active policy:
 
 ```bash
 for setting in HandleLidSwitch HandleLidSwitchExternalPower HandleLidSwitchDocked; do

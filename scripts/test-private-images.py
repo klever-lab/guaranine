@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -157,6 +158,7 @@ def fixture(role=None):
         token='DISPOSABLE-SERVER' if role == 'controlplane' else 'DISPOSABLE-AGENT', agent_token='DISPOSABLE-AGENT')
     config = cli.machine_config('tskey-auth-DISPOSABLE-NO-TAILNET-ACCESS', PUBLIC_KEY,
         wifi=None if role == 'controlplane' else 'update_config=0\np2p_disabled=1\nnetwork={\nssid=74657374\nkey_mgmt=WPA-PSK\npsk="guaranine-disposable-wifi"\n}\n', **args)
+    assertion_files = []
     checks = [
         'test -f /etc/guaranine/tailscale-key',
         f'grep -Fq "{PUBLIC_KEY}" /root/.ssh/authorized_keys',
@@ -212,6 +214,25 @@ def fixture(role=None):
             'files': [cli.config_file('/run/fixture-efi-check', EFI_CHECK, 0o700)],
             'commands': ['sh /run/fixture-efi-check boot && touch /run/fixture-efi-ok']})
         checks += ['test -f /run/fixture-efi-ok']
+        # Exercise the same activation script as NodeOp, including the v4.4.0 path-override bug.
+        # The tripwire must remain untouched: ordinary boot stages must never run during a rollout.
+        assertion_files.append(cli.config_file('/run/fixture-config-rollout',
+            cli.rollout_script((cli.ROOT / 'kairos/lid.yaml').read_text(), '/oem/91_guaranine-lid.yaml',
+                               host_root='/run/fixture-host'), 0o700))
+        tripwire = cli.cloud_yaml({'stages': {stage: [{'name': 'Unrelated stage tripwire',
+            'commands': ['touch /run/fixture-unrelated-stage-ran']}] for stage in ('initramfs', 'boot')}})
+        checks += [
+            "printf '%s' " + shlex.quote(tripwire) + ' > /oem/00_rollout-tripwire.yaml',
+            "sed -i 's/=ignore/=suspend/g' /etc/systemd/logind.conf.d/10-guaranine.conf",
+            'systemctl reload systemd-logind.service',
+            'busctl get-property org.freedesktop.login1 /org/freedesktop/login1 '
+            'org.freedesktop.login1.Manager HandleLidSwitch | grep -qx \'s "suspend"\'',
+            'mount --make-rprivate /', 'mkdir /run/fixture-host', 'mount --rbind / /run/fixture-host',
+            "sh -ec 'trap \"umount -R /run/fixture-host\" EXIT; "
+            "unshare --pid --fork --mount-proc sh /run/fixture-config-rollout'",
+            'test ! -e /run/fixture-unrelated-stage-ran',
+            'rm /oem/00_rollout-tripwire.yaml',
+        ]
     else:
         checks += ['test -f /run/cos/live_mode', 'test -f /etc/guaranine/wifi.conf',
                    'grep -qx \'FLAGS="--state=mem:"\' /run/guaranine-tailscale-live.env',
@@ -228,7 +249,7 @@ def fixture(role=None):
                 'hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n'
                 'wpa_passphrase=guaranine-disposable-wifi\n')],
             'commands': ['sh /run/fixture-wifi-check > /dev/ttyS0 2>&1']})
-    config['stages']['boot'].append({'name': 'Disposable boot assertions', 'commands': [
+    config['stages']['boot'].append({'name': 'Disposable boot assertions', 'files': assertion_files, 'commands': [
         ' && '.join(checks) + ' && { ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub; '
         'echo GUARANINE_BOOT_OK; } > /dev/ttyS0']})
     return config
