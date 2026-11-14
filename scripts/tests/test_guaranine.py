@@ -914,6 +914,125 @@ efibootmgr() {
         self.assertEqual((archive / 'config.yaml').read_text(), 'DISPOSABLE')
         self.assertFalse(any('manual-install' in call.args[0][-1] for call in command.call_args_list))
 
+    def expired_iso_setup(self):
+        self.worker_setup()
+        installer = self.root / 'installer'
+        key = installer / 'tailscale-key.json'
+        record = json.loads(key.read_text())
+        now = datetime.now(timezone.utc)
+        record.update(created=(now - timedelta(hours=25)).isoformat(),
+                      expires=(now - timedelta(hours=1)).isoformat())
+        key.write_text(json.dumps(record))
+        image = cli.output_directory(installer / 'image') / 'guaranine-kairos.iso'
+        cli.private_write(image, 'EXPIRED-DISPOSABLE-ISO')
+        return image
+
+    def test_expired_iso_renews_key_and_preserves_wifi_and_old_batch(self):
+        image = self.expired_iso_setup()
+        installer = image.parent.parent
+        saved = {name: (installer / name).read_bytes() for name in ('tailscale-key.json', 'boot.yaml')}
+        source = {'commit': 'a' * 40, 'sources_sha256': 'b' * 64}
+        cli.private_write(image.parent / 'source.json', json.dumps(source))
+        def mint(token, tailnet, role, output, *, reusable):
+            self.assertEqual((token, tailnet, role, reusable),
+                             ('DISPOSABLE', 'fixture.invalid', 'worker', True))
+            record = json.loads(saved['tailscale-key.json'])
+            now = datetime.now(timezone.utc)
+            record.update(key='tskey-auth-FRESH-DISPOSABLE', created=now.isoformat(),
+                          expires=(now + timedelta(hours=24)).isoformat())
+            cli.private_write(output, json.dumps(record))
+        def build(config, kind, directory, base):
+            self.assertEqual((kind, base), ('iso', 'PUBLIC-BASE'))
+            files = {file['path']: file['content'] for step in config['stages']['initramfs']
+                     for file in step.get('files', [])}
+            old_files = {file['path']: file['content'] for step in yaml.safe_load(saved['boot.yaml'])['stages']['initramfs']
+                         for file in step.get('files', [])}
+            self.assertEqual(files['/etc/guaranine/wifi.conf'], old_files['/etc/guaranine/wifi.conf'])
+            self.assertEqual(files['/etc/guaranine/tailscale-key'], 'tskey-auth-FRESH-DISPOSABLE\n')
+            cli.output_directory(directory)
+            cli.private_write(directory / image.name, 'FRESH-DISPOSABLE-ISO')
+            return directory / image.name
+        output = io.StringIO()
+        with (patch.object(cli, 'iso_source', return_value=source),
+              patch.object(cli, 'private_command', return_value='linux'),
+              patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
+              patch.object(cli, 'mint', side_effect=mint) as mint_key,
+              patch.object(cli, 'build_image', side_effect=build) as builder,
+              patch.object(cli, 'operator_wifi') as wifi, patch.object(cli, 'flash_iso', return_value=False) as flash,
+              contextlib.redirect_stdout(output)):
+            cli.prepare_iso(None)
+        mint_key.assert_called_once()
+        builder.assert_called_once()
+        wifi.assert_not_called()
+        flash.assert_called_once_with(image)
+        self.assertEqual(image.read_text(), 'FRESH-DISPOSABLE-ISO')
+        self.assertEqual(cli.auth_record(installer / 'tailscale-key.json', reusable=True)['key'],
+                         'tskey-auth-FRESH-DISPOSABLE')
+        self.assertEqual(json.loads((image.parent / 'source.json').read_text()), source)
+        archive, = self.root.glob('installer-expired-*')
+        self.assertEqual((archive / 'image' / image.name).read_text(), 'EXPIRED-DISPOSABLE-ISO')
+        for name, contents in saved.items():
+            self.assertEqual((archive / name).read_bytes(), contents)
+        self.assertNotIn('tskey-auth-', output.getvalue())
+
+    def test_expired_iso_keeps_old_batch_if_base_check_fails(self):
+        image = self.expired_iso_setup()
+        with (patch.object(cli, 'private_command', return_value='linux'),
+              patch.object(cli, 'build_base', side_effect=ValueError('DISPOSABLE base failure')),
+              patch.object(cli, 'mint') as mint, patch.object(cli, 'build_image') as build,
+              patch.object(cli, 'flash_iso') as flash, contextlib.redirect_stdout(io.StringIO()),
+              self.assertRaisesRegex(ValueError, 'base failure')):
+            cli.prepare_iso(None)
+        mint.assert_not_called()
+        build.assert_not_called()
+        flash.assert_not_called()
+        self.assertEqual(image.read_text(), 'EXPIRED-DISPOSABLE-ISO')
+        self.assertFalse(list(self.root.glob('installer-expired-*')))
+
+    def test_failed_expired_iso_build_keeps_archive_and_never_repeats_key_creation(self):
+        image = self.expired_iso_setup()
+        old_key = json.loads((image.parent.parent / 'tailscale-key.json').read_text())
+        def mint(_token, _tailnet, _role, output, *, reusable):
+            now = datetime.now(timezone.utc)
+            record = {**old_key, 'key': 'tskey-auth-FRESH-DISPOSABLE', 'created': now.isoformat(),
+                      'expires': (now + timedelta(hours=24)).isoformat()}
+            cli.private_write(output, json.dumps(record))
+        def build(_config, _kind, directory, _base):
+            cli.output_directory(directory)
+            cli.private_write(directory / 'build.log', 'DISPOSABLE failure diagnostics')
+            raise ValueError('DISPOSABLE media failure')
+        with (patch.object(cli, 'private_command', return_value='linux'),
+              patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
+              patch.object(cli, 'mint', side_effect=mint) as mint_key,
+              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'flash_iso') as flash,
+              contextlib.redirect_stdout(io.StringIO())):
+            with self.assertRaisesRegex(ValueError, 'media failure'):
+                cli.prepare_iso(None)
+            with self.assertRaisesRegex(ValueError, 'incomplete build'):
+                cli.prepare_iso(None)
+        mint_key.assert_called_once()
+        flash.assert_not_called()
+        archive, = self.root.glob('installer-expired-*')
+        self.assertEqual((archive / 'image' / image.name).read_text(), 'EXPIRED-DISPOSABLE-ISO')
+        self.assertEqual((image.parent / 'build.log').read_text(), 'DISPOSABLE failure diagnostics')
+        self.assertEqual(cli.auth_record(image.parent.parent / 'tailscale-key.json', reusable=True)['key'],
+                         'tskey-auth-FRESH-DISPOSABLE')
+
+    def test_expired_iso_with_invalid_capabilities_does_not_mint_or_archive(self):
+        image = self.expired_iso_setup()
+        key = image.parent.parent / 'tailscale-key.json'
+        record = json.loads(key.read_text())
+        record['capabilities']['devices']['create']['tags'] = ['tag:guaranine-controlplane']
+        key.write_text(json.dumps(record))
+        with (patch.object(cli, 'build_base') as base, patch.object(cli, 'mint') as mint,
+              patch.object(cli, 'flash_iso') as flash, self.assertRaises(ValueError)):
+            cli.prepare_iso(None)
+        base.assert_not_called()
+        mint.assert_not_called()
+        flash.assert_not_called()
+        self.assertEqual(image.read_text(), 'EXPIRED-DISPOSABLE-ISO')
+        self.assertFalse(list(self.root.glob('installer-expired-*')))
+
     def test_iso_rebuild_keeps_network_and_key_and_preserves_previous_image(self):
         self.worker_setup()
         image = cli.output_directory(self.root / 'installer/image') / 'guaranine-kairos.iso'
