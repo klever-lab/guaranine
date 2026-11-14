@@ -197,7 +197,8 @@ def fixture(role=None):
             'name': 'Report disposable controller mount failure',
             'commands': ['printf "%s\\n%s\\n" "$IMMUCORE_MOUNT_FAILURE_STEP" "$IMMUCORE_MOUNT_FAILURE" '
                          '> /dev/ttyS0; journalctl -b -u immucore --no-pager > /dev/ttyS0; '
-                         'lsblk -o NAME,SIZE,TYPE,LABEL,PARTLABEL > /dev/ttyS0; blkid > /dev/ttyS0'],
+                         'lsblk -o NAME,SIZE,TYPE,LABEL,PARTLABEL > /dev/ttyS0; blkid > /dev/ttyS0; '
+                         'cat /oem/01_layout.yaml > /dev/ttyS0'],
         }]
         checks += ['! mountpoint -q /var/lib/rancher/k3s', '! systemctl is-active --quiet k3s']
     elif role == 'worker':
@@ -235,8 +236,10 @@ def fixture(role=None):
             'busctl get-property org.freedesktop.login1 /org/freedesktop/login1 '
             'org.freedesktop.login1.Manager HandleLidSwitch | grep -qx \'s "suspend"\'',
             'mount --make-rprivate /', 'mkdir /run/fixture-host', 'mount --rbind / /run/fixture-host',
-            "sh -ec 'trap \"umount -R /run/fixture-host\" EXIT; "
+            # A concurrent Wi-Fi check can unlink its netns bind target; detach the entire private tree.
+            "sh -ec 'trap \"umount -l /run/fixture-host\" EXIT; "
             "unshare --pid --fork --mount-proc sh /run/fixture-config-rollout > /dev/ttyS0 2>&1'",
+            '! mountpoint -q /run/fixture-host',
             'test ! -e /run/fixture-unrelated-stage-ran',
             'rm /oem/00_rollout-tripwire.yaml',
         ]
@@ -397,7 +400,8 @@ def main():
                     directory / 'wifi-tools.log']
             for log in logs:
                 if log.exists():
-                    print(f'Fixture diagnostics ({log.name}):\n{log.read_text(errors="replace")[-8000:]}', file=sys.stderr)
+                    limit = 48000 if log.name.startswith('boot-') else 8000
+                    print(f'Fixture diagnostics ({log.name}):\n{log.read_text(errors="replace")[-limit:]}', file=sys.stderr)
             raise
     print(f'Image suite {suite} passed; all selected Wi-Fi, configuration and disk-safety assertions passed.')
 
