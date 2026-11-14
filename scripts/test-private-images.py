@@ -181,11 +181,12 @@ def fixture(role=None):
         'ath10k/QCA6174/hw3.0/board-2.bin; '
         'do test -s "/usr/lib/firmware/$firmware.zst" || exit 1; done',
     ]
-    checks += [
+    lid_checks = [
         'busctl get-property org.freedesktop.login1 /org/freedesktop/login1 '
         f'org.freedesktop.login1.Manager {setting} | grep -qx \'s "ignore"\''
         for setting in ('HandleLidSwitch', 'HandleLidSwitchExternalPower', 'HandleLidSwitchDocked')
     ]
+    checks += lid_checks
     if role == 'controlplane':
         config['stages']['mount-failure'] = [{
             'name': 'Report disposable controller mount failure',
@@ -233,6 +234,7 @@ def fixture(role=None):
             'test ! -e /run/fixture-unrelated-stage-ran',
             'rm /oem/00_rollout-tripwire.yaml',
         ]
+        checks += lid_checks
     else:
         checks += ['test -f /run/cos/live_mode', 'test -f /etc/guaranine/wifi.conf',
                    'grep -qx \'FLAGS="--state=mem:"\' /run/guaranine-tailscale-live.env',
