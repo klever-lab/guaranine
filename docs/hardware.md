@@ -8,6 +8,49 @@ New laptop ISOs and installed workers enable `efi=debug` by default so EFI start
 
 On UEFI workers, a native `after-install` hook registers **Kairos** for the installed disk's `\EFI\boot\bootx64.efi`, places it first in the firmware boot order and clears an overriding one-time boot choice. Existing entries are preserved. The hook verifies the partition GUID and loader path before allowing poweroff; `strict: true` makes hook errors fatal. BIOS workers keep the native BIOS bootloader path.
 
+## Keep laptops awake
+
+The shared [Kairos configuration](../kairos/config.yaml) writes `/etc/systemd/logind.conf.d/10-guaranine.conf` during initramfs, before normal services start. Its three settings tell systemd-logind to ignore lid closure on battery, on external power and while docked. New images include this policy; committing or pulling the repository does not update an installed worker.
+
+For an existing worker, apply the same setting through a persistent Kairos OEM override. Run the following **on that worker as root**, reached through pinned Tailscale SSH. Keep its lid open until the active settings are verified. This file contains only the lid policy; preserve the other OEM files.
+
+```bash
+cat > /oem/95_guaranine-lid.yaml <<'EOF'
+#cloud-config
+name: Guaranine lid policy
+stages:
+  initramfs:
+    - name: Keep laptop awake when its lid closes
+      files:
+        - path: /etc/systemd/logind.conf.d/10-guaranine.conf
+          permissions: 0644
+          content: |
+            [Login]
+            HandleLidSwitch=ignore
+            HandleLidSwitchExternalPower=ignore
+            HandleLidSwitchDocked=ignore
+EOF
+kairos-agent --strict-validation validate /oem/95_guaranine-lid.yaml
+kairos-agent run-stage --strict --override-cloud-init-paths /oem/95_guaranine-lid.yaml initramfs
+systemctl reload systemd-logind.service
+```
+
+`/oem` is persistent on installed Kairos nodes, so this stage also restores the file at boot. The explicit override path applies only this file now. Reloading logind makes it read its application configuration; `systemctl daemon-reload` alone only reloads systemd unit definitions. No worker reboot is needed to activate the policy.
+
+Check the daemon's active policy rather than just the file contents:
+
+```bash
+for setting in HandleLidSwitch HandleLidSwitchExternalPower HandleLidSwitchDocked; do
+  printf '%s: ' "$setting"
+  busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
+    org.freedesktop.login1.Manager "$setting"
+done
+```
+
+Every line should report `s "ignore"`. Then watch `kubectl get nodes -w` from the operator while physically closing the lid; verify SSH or Grafana remains reachable and check `journalctl -b -u systemd-logind.service` after reopening it. Exercise both external power and battery, then verify the policy after a deliberately scheduled reboot before claiming reboot persistence on that worker.
+
+The image harness checks all three active D-Bus properties on live media and installed BIOS/UEFI worker boots. Those checks verify policy loading, while the physical lid test verifies the actual laptop. The settings follow [systemd's logind configuration](https://www.freedesktop.org/software/systemd/man/latest/logind.conf.html).
+
 ## Laptop models
 
 These model names are confirmed by the operator. Coverage targets their factory Wi-Fi options, including variants that cannot be identified while the laptops are powered off.

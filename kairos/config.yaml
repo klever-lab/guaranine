@@ -236,6 +236,13 @@ stages:
           content: |
             net.ipv4.ip_forward=1
             net.bridge.bridge-nf-call-iptables=1
+        - path: /etc/systemd/logind.conf.d/10-guaranine.conf
+          permissions: 0644
+          content: |
+            [Login]
+            HandleLidSwitch=ignore
+            HandleLidSwitchExternalPower=ignore
+            HandleLidSwitchDocked=ignore
         - path: /etc/kairos/agent.yaml
           permissions: 0600
           content: |
