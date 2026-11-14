@@ -923,7 +923,7 @@ chmod 0600 "$candidate" "$activation"
 chroot "$rollout_host" kairos-agent --strict-validation validate "${{candidate#"$rollout_host"}}"
 chroot "$rollout_host" kairos-agent --strict-validation validate "${{activation#"$rollout_host"}}"
 mv -f "$candidate" "$rollout_host{destination}"
-sync
+sync -f "$rollout_host/oem"
 {commands}
 printf 'Applied configuration successfully\\n'
 '''

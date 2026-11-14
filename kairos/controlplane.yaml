@@ -5,7 +5,7 @@ stages:
   rootfs:
     - name: Publish filesystem labels after first-boot partition creation
       commands:
-        - udevadm trigger --action=change --subsystem-match=block && udevadm settle --timeout=30
+        - udevadm trigger --action=change --subsystem-match=block && udevadm wait --timeout=30 --settle /dev/disk/by-label/COS_PERSISTENT
   initramfs:
     - name: Configure the K3s server and retained data volume
       files:

@@ -59,7 +59,7 @@ With KVM access enabled and [controller startup ordering](architecture.md#images
 
 [kairos/versions.json](../kairos/versions.json) owns Kairos, AuroraBoot and K3s versions/checksums. [kairos/Dockerfile](../kairos/Dockerfile) pins the base, upstream Tailscale layer, firmware images and network-tool packages, including the Broadcom firmware extraction input. Keep those facts in their source files rather than copying version tables into prose.
 
-The Alpine build stage uses [Docker's official image on ECR Public](https://gallery.ecr.aws/docker/library/alpine), pinned by content digest, to avoid Docker Hub's unauthenticated pull limit on shared CI runners. The disposable Wi-Fi tools use that same image reference from the Dockerfile.
+The Alpine build stage uses [Docker's official image on ECR Public](https://gallery.ecr.aws/docker/library/alpine), pinned by content digest, to avoid Docker Hub's unauthenticated pull limit on shared CI runners. The disposable Wi-Fi tools reuse the cached production `wifi` build stage and run it with `--pull=never`, avoiding another registry pull after the OS build.
 
 [.terraform-version](../.terraform-version) and [terraform-checksums.json](../scripts/terraform-checksums.json) must agree. [terraform_tool.py](../scripts/terraform_tool.py) uses an exact installed CLI or downloads a checksum-verified temporary copy. Each root owns its AzureRM requirement and provider lock file. [requirements.txt](../requirements.txt) and [requirements-dev.txt](../requirements-dev.txt) own runtime and validation dependencies.
 

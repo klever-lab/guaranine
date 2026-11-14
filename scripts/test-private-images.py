@@ -127,23 +127,26 @@ echo GUARANINE_WIFI_OK > /dev/ttyS0
 
 def wifi_tools(directory):
     """Test-only AP tools stay outside the production image and installed filesystem."""
-    alpine = re.search(r'^FROM (\S+@sha256:[a-f0-9]{64}) AS wifi$',
-                       (cli.ROOT / 'kairos/Dockerfile').read_text(), re.M).group(1)
+    image = 'guaranine-fixture-wifi'
     script = '''set -eu
 apk add --no-cache hostapd=2.11-r4 iw=6.17-r0 dnsmasq=2.91-r1 iproute2-minimal=6.17.0-r0 >/dev/null
-mkdir /out
+mkdir /fixture-tools
 for program in hostapd iw dnsmasq ip; do
   executable=$(command -v "$program")
-  cp "$executable" /out/
+  cp "$executable" /fixture-tools/
   ldd "$executable" | awk '$2 == "=>" && $3 ~ /^\\// {print $3} $1 ~ /^\\// {print $1}' |
-    sort -u | while read -r library; do cp -L "$library" /out/; done
+    sort -u | while read -r library; do cp -L "$library" /fixture-tools/; done
 done
-tar -C /out -cf - .
+tar -C /fixture-tools -cf - .
 '''
     archive = directory / 'wifi-tools.tar'
     with archive.open('xb') as output, (directory / 'wifi-tools.log').open('xb') as errors:
-        subprocess.run(['sudo', '--', 'docker', 'run', '--rm', '--log-driver', 'none', '--platform', 'linux/amd64',
-                        '--entrypoint', '/bin/sh', alpine, '-ec', script],
+        # Reuse the production stage already cached by build_base; don't pull its base a second time.
+        subprocess.run(['sudo', '--', 'docker', 'build', '--platform', 'linux/amd64', '--target', 'wifi',
+                        '--tag', image, str(cli.ROOT / 'kairos')],
+                       stdout=errors, stderr=subprocess.STDOUT, check=True, timeout=300)
+        subprocess.run(['sudo', '--', 'docker', 'run', '--pull=never', '--rm', '--log-driver', 'none', '--platform', 'linux/amd64',
+                        '--entrypoint', '/bin/sh', image, '-ec', script],
                        stdout=output, stderr=errors, check=True, timeout=300)
     target = directory / 'wifi-tools'
     target.mkdir()
@@ -158,6 +161,8 @@ def fixture(role=None):
         token='DISPOSABLE-SERVER' if role == 'controlplane' else 'DISPOSABLE-AGENT', agent_token='DISPOSABLE-AGENT')
     config = cli.machine_config('tskey-auth-DISPOSABLE-NO-TAILNET-ACCESS', PUBLIC_KEY,
         wifi=None if role == 'controlplane' else 'update_config=0\np2p_disabled=1\nnetwork={\nssid=74657374\nkey_mgmt=WPA-PSK\npsk="guaranine-disposable-wifi"\n}\n', **args)
+    config['stages']['initramfs'].append({'name': 'Reserve the disposable serial port for test diagnostics',
+        'systemctl': {'mask': ['serial-getty@ttyS0.service']}})
     assertion_files = []
     checks = [
         'test -f /etc/guaranine/tailscale-key',
@@ -191,7 +196,8 @@ def fixture(role=None):
         config['stages']['mount-failure'] = [{
             'name': 'Report disposable controller mount failure',
             'commands': ['printf "%s\\n%s\\n" "$IMMUCORE_MOUNT_FAILURE_STEP" "$IMMUCORE_MOUNT_FAILURE" '
-                         '> /dev/ttyS0; journalctl -b -u immucore --no-pager > /dev/ttyS0'],
+                         '> /dev/ttyS0; journalctl -b -u immucore --no-pager > /dev/ttyS0; '
+                         'lsblk -o NAME,SIZE,TYPE,LABEL,PARTLABEL > /dev/ttyS0; blkid > /dev/ttyS0'],
         }]
         checks += ['! mountpoint -q /var/lib/rancher/k3s', '! systemctl is-active --quiet k3s']
     elif role == 'worker':
@@ -218,7 +224,7 @@ def fixture(role=None):
         # Exercise the same activation script as NodeOp, including the v4.4.0 path-override bug.
         # The tripwire must remain untouched: ordinary boot stages must never run during a rollout.
         assertion_files.append(cli.config_file('/run/fixture-config-rollout',
-            cli.rollout_script((cli.ROOT / 'kairos/lid.yaml').read_text(), '/oem/91_guaranine-lid.yaml',
+            'set -x\n' + cli.rollout_script((cli.ROOT / 'kairos/lid.yaml').read_text(), '/oem/91_guaranine-lid.yaml',
                                host_root='/run/fixture-host'), 0o700))
         tripwire = cli.cloud_yaml({'stages': {stage: [{'name': 'Unrelated stage tripwire',
             'commands': ['touch /run/fixture-unrelated-stage-ran']}] for stage in ('initramfs', 'boot')}})
@@ -230,7 +236,7 @@ def fixture(role=None):
             'org.freedesktop.login1.Manager HandleLidSwitch | grep -qx \'s "suspend"\'',
             'mount --make-rprivate /', 'mkdir /run/fixture-host', 'mount --rbind / /run/fixture-host',
             "sh -ec 'trap \"umount -R /run/fixture-host\" EXIT; "
-            "unshare --pid --fork --mount-proc sh /run/fixture-config-rollout'",
+            "unshare --pid --fork --mount-proc sh /run/fixture-config-rollout > /dev/ttyS0 2>&1'",
             'test ! -e /run/fixture-unrelated-stage-ran',
             'rm /oem/00_rollout-tripwire.yaml',
         ]
@@ -252,8 +258,8 @@ def fixture(role=None):
                 'wpa_passphrase=guaranine-disposable-wifi\n')],
             'commands': ['sh /run/fixture-wifi-check > /dev/ttyS0 2>&1']})
     config['stages']['boot'].append({'name': 'Disposable boot assertions', 'files': assertion_files, 'commands': [
-        ' && '.join(checks) + ' && { ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub; '
-        'echo GUARANINE_BOOT_OK; } > /dev/ttyS0']})
+        '{ set -x; ' + ' && '.join(checks) + ' && { ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub; '
+        'echo GUARANINE_BOOT_OK; }; } > /dev/ttyS0 2>&1']})
     return config
 
 
@@ -313,7 +319,7 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
                             return disk
                         break
                     text = log.read_text(errors='replace')
-                    if not install and ('GUARANINE_BOOT_OK\r\n' in text or 'GUARANINE_BOOT_OK\n' in text):
+                    if not install and re.search(r'^GUARANINE_BOOT_OK\r?$', text, re.M):
                         fingerprints = re.findall(r'256 (SHA256:[A-Za-z0-9+/]+)', text)
                         if fingerprints:
                             print(f'Fixture {number}: boot assertions passed', flush=True)

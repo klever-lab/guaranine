@@ -50,16 +50,21 @@ class ImageHarnessTests(unittest.TestCase):
                 (root / 'kairos/lid.yaml').write_text('changed policy')
                 self.assertNotEqual(cli.build_base(root), before)
 
-    def test_wifi_tools_use_the_pinned_build_stage_image(self):
+    def test_wifi_tools_reuse_the_production_build_stage_without_pulling_a_second_base(self):
         spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')
         harness = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(harness)
-        image = next(line.split()[1] for line in (ROOT / 'kairos/Dockerfile').read_text().splitlines()
-                     if line.endswith(' AS wifi'))
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            built = []
             def container(arguments, **kwargs):
-                self.assertIn(image, arguments)
+                if 'build' in arguments:
+                    self.assertEqual(arguments[arguments.index('--target') + 1], 'wifi')
+                    self.assertEqual(arguments[-1], str(ROOT / 'kairos'))
+                    built.append(arguments[arguments.index('--tag') + 1])
+                    return
+                self.assertIn('--pull=never', arguments)
+                self.assertEqual(built, [arguments[arguments.index('--entrypoint') + 2]])
                 with tarfile.open(fileobj=kwargs['stdout'], mode='w') as archive:
                     for name in ('hostapd', 'iw', 'dnsmasq', 'ip'):
                         contents = ('fixture-' + name).encode()
@@ -68,7 +73,7 @@ class ImageHarnessTests(unittest.TestCase):
                         archive.addfile(member, io.BytesIO(contents))
             with patch.object(harness.subprocess, 'run', side_effect=container) as run:
                 harness.wifi_tools(directory)
-            run.assert_called_once()
+            self.assertEqual(run.call_count, 2)
             for name in ('hostapd', 'iw', 'dnsmasq', 'ip'):
                 self.assertEqual((directory / 'wifi-tools' / name).read_text(), 'fixture-' + name)
 
