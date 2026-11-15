@@ -138,8 +138,8 @@ def mint(token, tailnet, role, output, *, reusable=False):
 
 
 def check_name(name):
-    if not re.fullmatch(r'[a-z][a-z0-9-]{1,61}[a-z0-9]', name):
-        raise ValueError('Use a unique lowercase DNS label with 3–63 characters')
+    if not re.fullmatch(r'[a-z][a-z0-9-]{0,61}[a-z0-9]', name):
+        raise ValueError('Use a unique lowercase DNS label with 2–63 characters')
 
 
 def usb_disks(image):

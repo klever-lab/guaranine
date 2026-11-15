@@ -253,6 +253,15 @@ class PrivateConfigTests(unittest.TestCase):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 cli.machine_config('key', 'pub', **arguments)
 
+    def test_two_character_names_are_accepted(self):
+        cli.check_name('ab')
+        worker = cli.machine_config('tskey-auth-WORKER', 'ssh-ed25519 PUBLIC', name='ab',
+            role='worker', cluster_endpoint='https://100.64.0.1:6443', token='AGENT-ONLY')
+        self.assertEqual(worker['hostname'], 'ab')
+        for name in ('a', 'a-', 'AB', '1a', 'a' * 64):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                cli.check_name(name)
+
     def test_staged_controller_has_no_cluster_credentials_and_cannot_activate(self):
         config = cli.machine_config('tskey-auth-DISPOSABLE', 'ssh-ed25519 PUBLIC', role='controlplane')
         files = {file['path']: file for steps in config['stages'].values()
