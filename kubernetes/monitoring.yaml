@@ -439,16 +439,36 @@ data:
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
-          "id": 9, "type": "table", "title": "Running pods",
+          "id": 9, "type": "table", "title": "Running pods by service",
           "gridPos": {"x": 0, "y": 18, "w": 24, "h": 10},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "expr": "max by(namespace,pod,node) (kube_pod_info * on(namespace,pod,uid) group_left() (kube_pod_status_phase{phase=\"Running\"} == 1))", "instant": true, "range": false, "format": "table"}],
-          "transformations": [{"id": "organize", "options": {
-            "excludeByName": {"Time": true, "Value": true},
-            "indexByName": {"namespace": 0, "pod": 1, "node": 2},
-            "renameByName": {"namespace": "Namespace", "pod": "Pod", "node": "Node"}
-          }}],
-          "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Namespace", "desc": false}, {"displayName": "Pod", "desc": false}]}
+          "transformations": [
+            {"id": "organize", "options": {
+              "excludeByName": {"Time": true, "Value": true},
+              "indexByName": {"namespace": 0, "pod": 1, "node": 2},
+              "renameByName": {"namespace": "Service", "pod": "Pod", "node": "Node"}
+            }},
+            {"id": "groupToNestedTable", "options": {
+              "showSubframeHeaders": true,
+              "rules": [
+                {"matcher": {"id": "byName", "options": "Service"}, "operation": "groupby", "aggregations": []},
+                {"matcher": {"id": "byName", "options": "Pod"}, "operation": "aggregate", "aggregations": ["count"], "keepNestedField": true}
+              ]
+            }}
+          ],
+          "fieldConfig": {"defaults": {}, "overrides": [
+            {"matcher": {"id": "byName", "options": "Service"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {
+              "jellyfin": {"text": "Jellyfin"},
+              "argument-arena": {"text": "Argument Arena"},
+              "monitoring": {"text": "Monitoring"},
+              "kairos-operator": {"text": "Kairos"},
+              "kube-system": {"text": "DNS"},
+              "openebs": {"text": "Storage"}
+            }}]}]},
+            {"matcher": {"id": "byName", "options": "Pod (count)"}, "properties": [{"id": "displayName", "value": "Pods"}]}
+          ]},
+          "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Service", "desc": false}]}
         }
       ]
     }
