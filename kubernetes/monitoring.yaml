@@ -375,8 +375,9 @@ data:
   overview.json: |
     {
       "uid": "guaranine", "title": "Guaranine", "schemaVersion": 39,
-      "tags": ["kubernetes"], "timezone": "browser", "refresh": "30s",
+      "tags": ["guaranine", "kubernetes"], "timezone": "browser", "refresh": "30s",
       "time": {"from": "now-1h", "to": "now"},
+      "links": [{"title": "Dashboards", "type": "dashboards", "tags": ["guaranine"], "asDropdown": false, "keepTime": true}],
       "panels": [
         {
           "id": 5, "type": "timeseries", "title": "Node CPU usage (%)",
@@ -455,6 +456,202 @@ data:
             {"matcher": {"id": "byName", "options": "Memory", "scope": "nested"}, "properties": [{"id": "unit", "value": "bytes"}, {"id": "decimals", "value": 1}]}
           ]},
           "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Service", "desc": false}]}
+        }
+      ]
+    }
+  ovh.json: |
+    {
+      "uid": "guaranine-ovh", "title": "OVH Cloud", "schemaVersion": 39,
+      "tags": ["guaranine", "ovh"], "timezone": "browser", "refresh": "30s",
+      "time": {"from": "now-1h", "to": "now"},
+      "links": [{"title": "Dashboards", "type": "dashboards", "tags": ["guaranine"], "asDropdown": false, "keepTime": true}],
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Hourly Burn Rate (CAD)",
+          "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "0.02106166 * max(kube_node_status_condition{node=\"guaranine-controlplane\",condition=\"Ready\",status=\"true\"})"}],
+          "fieldConfig": {"defaults": {"unit": "currencyCAD", "decimals": 4, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}},
+          "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 2, "type": "stat", "title": "730h Month — Hourly Plan (CAD)",
+          "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "730 * 0.02106166 * max(kube_node_status_condition{node=\"guaranine-controlplane\",condition=\"Ready\",status=\"true\"})"}],
+          "fieldConfig": {"defaults": {"unit": "currencyCAD", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}}},
+          "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 3, "type": "stat", "title": "Monthly Plan Target (CAD)",
+          "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "12.3199 * max(kube_node_status_condition{node=\"guaranine-controlplane\",condition=\"Ready\",status=\"true\"})"}],
+          "fieldConfig": {"defaults": {"unit": "currencyCAD", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}},
+          "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 4, "type": "stat", "title": "Accrued Since Deploy (CAD)",
+          "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "vector(((time() - 1794722643) / 3600 * 0.02102) + ((time() - 1794720563) / 3600 * 0.00004166))"}],
+          "fieldConfig": {"defaults": {"unit": "currencyCAD", "decimals": 4, "thresholds": {"mode": "absolute", "steps": [{"color": "purple", "value": null}]}}},
+          "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 5, "type": "stat", "title": "OVH Controller Status",
+          "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "max(kube_node_status_condition{node=\"guaranine-controlplane\",condition=\"Ready\",status=\"true\"})"}],
+          "fieldConfig": {"defaults": {
+            "mappings": [{"type": "value", "options": {"0": {"text": "NotReady", "color": "red"}, "1": {"text": "Ready (BHS5)", "color": "green"}}}],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+          }},
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 6, "type": "stat", "title": "Controller Boot Uptime",
+          "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "time() - max(container_start_time_seconds{node=\"guaranine-controlplane\",id=\"/\"})"}],
+          "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}},
+          "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 7, "type": "gauge", "title": "d2-2 CPU Load (1 vCPU)",
+          "gridPos": {"x": 0, "y": 4, "w": 6, "h": 6},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "100 * sum(rate(container_cpu_usage_seconds_total{node=\"guaranine-controlplane\",id=\"/\"}[5m])) / max(kube_node_status_capacity{node=\"guaranine-controlplane\",resource=\"cpu\",unit=\"core\"})"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 85}]}}},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "showThresholdLabels": false, "showThresholdMarkers": true}
+        },
+        {
+          "id": 8, "type": "gauge", "title": "d2-2 RAM Working Set (2 GB)",
+          "gridPos": {"x": 6, "y": 4, "w": 6, "h": 6},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "100 * sum(container_memory_working_set_bytes{node=\"guaranine-controlplane\",id=\"/\"}) / max(kube_node_status_capacity{node=\"guaranine-controlplane\",resource=\"memory\",unit=\"byte\"})"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 85}]}}},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "showThresholdLabels": false, "showThresholdMarkers": true}
+        },
+        {
+          "id": 9, "type": "gauge", "title": "Persistent Disk /dev/vda5 (20 GB)",
+          "gridPos": {"x": 12, "y": 4, "w": 6, "h": 6},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "100 * max(container_fs_usage_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda5\"}) / max(container_fs_limit_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda5\"})"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 85}]}}},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "showThresholdLabels": false, "showThresholdMarkers": true}
+        },
+        {
+          "id": 10, "type": "gauge", "title": "Kairos State /dev/vda4 (3 GB)",
+          "gridPos": {"x": 18, "y": 4, "w": 6, "h": 6},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "100 * max(container_fs_usage_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda4\"}) / max(container_fs_limit_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda4\"})"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 75}, {"color": "red", "value": 90}]}}},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "showThresholdLabels": false, "showThresholdMarkers": true}
+        },
+        {
+          "id": 11, "type": "table", "title": "OVH Public Cloud Resource Inventory & Billing Breakdown (CAD, Pre-Tax)",
+          "gridPos": {"x": 0, "y": 10, "w": 24, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "refId": "A", "instant": true, "range": false, "format": "table",
+              "expr": "label_replace(label_replace(label_replace(vector(0.0167), \"resource\", \"1. Compute VM (d2-2)\", \"\", \"\"), \"identifier\", \"guaranine-controlplane (2081c0c7-a937-4139-bcd8-7d3b37425c72)\", \"\", \"\"), \"spec\", \"1 vCPU, 2 GB RAM, 25 GB local disk (BHS5)\", \"\", \"\") or label_replace(label_replace(label_replace(vector(0.00432), \"resource\", \"2. Public IPv4 Port (Ext-Net)\", \"\", \"\"), \"identifier\", \"guaranine-controller (15.235.45.200 / 2607:5300:205:300::283a)\", \"\", \"\"), \"spec\", \"Default secgroup (BHS5 custom SG quota 0/0)\", \"\", \"\") or label_replace(label_replace(label_replace(vector(2033451008 / 1073741824 * 0.000022), \"resource\", \"3. Glance Image (QCOW2)\", \"\", \"\"), \"identifier\", \"guaranine-controller-ec1dbf7a1820 (83bc4244-ee32-4391-9884-c27fa37ec781)\", \"\", \"\"), \"spec\", \"1.89 GiB private seed image (2,033,451,008 B)\", \"\", \"\") or label_replace(label_replace(label_replace(vector(0.001 * 0.0000132), \"resource\", \"4. Terraform S3 Bucket\", \"\", \"\"), \"identifier\", \"guaranine-terraform-f7db52a8405d (s3.bhs.io.cloud.ovh.net)\", \"\", \"\"), \"spec\", \"Versioned AES256 tfstate + native lock (< 1 MiB)\", \"\", \"\") or label_replace(label_replace(label_replace(vector(0.0167 + 0.00432 + (2033451008 / 1073741824 * 0.000022)), \"resource\", \"5. Total (BHS5 Beauharnois)\", \"\", \"\"), \"identifier\", \"All Guaranine OVH Public Cloud resources\", \"\", \"\"), \"spec\", \"Pre-tax CAD (Monthly VM plan saves ~20%)\", \"\", \"\")"
+            },
+            {
+              "refId": "B", "instant": true, "range": false, "format": "table",
+              "expr": "label_replace(vector(730 * 0.0167), \"resource\", \"1. Compute VM (d2-2)\", \"\", \"\") or label_replace(vector(730 * 0.00432), \"resource\", \"2. Public IPv4 Port (Ext-Net)\", \"\", \"\") or label_replace(vector(730 * (2033451008 / 1073741824 * 0.000022)), \"resource\", \"3. Glance Image (QCOW2)\", \"\", \"\") or label_replace(vector(730 * 0.001 * 0.0000132), \"resource\", \"4. Terraform S3 Bucket\", \"\", \"\") or label_replace(vector(730 * (0.0167 + 0.00432 + (2033451008 / 1073741824 * 0.000022))), \"resource\", \"5. Total (BHS5 Beauharnois)\", \"\", \"\")"
+            },
+            {
+              "refId": "C", "instant": true, "range": false, "format": "table",
+              "expr": "label_replace(vector(9.14), \"resource\", \"1. Compute VM (d2-2)\", \"\", \"\") or label_replace(vector(3.15), \"resource\", \"2. Public IPv4 Port (Ext-Net)\", \"\", \"\") or label_replace(vector(2033451008 / 1073741824 * 0.0158), \"resource\", \"3. Glance Image (QCOW2)\", \"\", \"\") or label_replace(vector(0.001 * 0.0095), \"resource\", \"4. Terraform S3 Bucket\", \"\", \"\") or label_replace(vector(9.14 + 3.15 + (2033451008 / 1073741824 * 0.0158)), \"resource\", \"5. Total (BHS5 Beauharnois)\", \"\", \"\")"
+            },
+            {
+              "refId": "D", "instant": true, "range": false, "format": "table",
+              "expr": "label_replace(vector((time() - 1794722643) / 3600 * 0.0167), \"resource\", \"1. Compute VM (d2-2)\", \"\", \"\") or label_replace(vector((time() - 1794722643) / 3600 * 0.00432), \"resource\", \"2. Public IPv4 Port (Ext-Net)\", \"\", \"\") or label_replace(vector((time() - 1794720563) / 3600 * (2033451008 / 1073741824 * 0.000022)), \"resource\", \"3. Glance Image (QCOW2)\", \"\", \"\") or label_replace(vector((time() - 1794720563) / 3600 * (0.001 * 0.0000132)), \"resource\", \"4. Terraform S3 Bucket\", \"\", \"\") or label_replace(vector(((time() - 1794722643) / 3600 * 0.02102) + ((time() - 1794720563) / 3600 * 0.00004166)), \"resource\", \"5. Total (BHS5 Beauharnois)\", \"\", \"\")"
+            }
+          ],
+          "transformations": [
+            {"id": "joinByField", "options": {"byField": "resource", "mode": "outerTabular"}},
+            {"id": "organize", "options": {
+              "excludeByName": {"Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true},
+              "indexByName": {"resource": 0, "identifier": 1, "spec": 2, "Value #A": 3, "Value #B": 4, "Value #C": 5, "Value #D": 6},
+              "renameByName": {
+                "resource": "Resource",
+                "identifier": "OVH Resource ID / Endpoint",
+                "spec": "Spec & Quota Notes",
+                "Value #A": "Hourly (CAD)",
+                "Value #B": "730h Month (CAD)",
+                "Value #C": "Monthly Plan (CAD)",
+                "Value #D": "Accrued (CAD)"
+              }
+            }}
+          ],
+          "fieldConfig": {"defaults": {}, "overrides": [
+            {"matcher": {"id": "byName", "options": "Hourly (CAD)"}, "properties": [{"id": "unit", "value": "currencyCAD"}, {"id": "decimals", "value": 5}]},
+            {"matcher": {"id": "byName", "options": "730h Month (CAD)"}, "properties": [{"id": "unit", "value": "currencyCAD"}, {"id": "decimals", "value": 2}]},
+            {"matcher": {"id": "byName", "options": "Monthly Plan (CAD)"}, "properties": [{"id": "unit", "value": "currencyCAD"}, {"id": "decimals", "value": 2}]},
+            {"matcher": {"id": "byName", "options": "Accrued (CAD)"}, "properties": [{"id": "unit", "value": "currencyCAD"}, {"id": "decimals", "value": 4}]}
+          ]},
+          "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Resource", "desc": false}]}
+        },
+        {
+          "id": 12, "type": "timeseries", "title": "d2-2 CPU Usage & PSI Contention (%)",
+          "gridPos": {"x": 0, "y": 17, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "expr": "100 * sum(rate(container_cpu_usage_seconds_total{node=\"guaranine-controlplane\",id=\"/\"}[5m]))", "legendFormat": "Total CPU usage"},
+            {"refId": "B", "expr": "100 * sum(rate(container_cpu_system_seconds_total{node=\"guaranine-controlplane\",id=\"/\"}[5m]))", "legendFormat": "Kernel / system CPU"},
+            {"refId": "C", "expr": "100 * sum(rate(container_pressure_cpu_waiting_seconds_total{node=\"guaranine-controlplane\",id=\"/\"}[5m]))", "legendFormat": "PSI CPU stall pressure"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 13, "type": "timeseries", "title": "d2-2 Memory Breakdown (2 GB RAM)",
+          "gridPos": {"x": 12, "y": 17, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "expr": "max(kube_node_status_capacity{node=\"guaranine-controlplane\",resource=\"memory\",unit=\"byte\"})", "legendFormat": "Total RAM capacity"},
+            {"refId": "B", "expr": "sum(container_memory_working_set_bytes{node=\"guaranine-controlplane\",id=\"/\"})", "legendFormat": "Working set"},
+            {"refId": "C", "expr": "sum(container_memory_rss{node=\"guaranine-controlplane\",id=\"/\"})", "legendFormat": "Resident memory (RSS)"},
+            {"refId": "D", "expr": "sum(container_memory_cache{node=\"guaranine-controlplane\",id=\"/\"})", "legendFormat": "Page cache"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "bytes", "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 14, "type": "timeseries", "title": "OVH Network Traffic — Public ens3 vs Tailscale (B/s)",
+          "gridPos": {"x": 0, "y": 25, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "expr": "sum(rate(container_network_receive_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"ens3\"}[5m]))", "legendFormat": "OVH Public (ens3) Rx"},
+            {"refId": "B", "expr": "sum(rate(container_network_transmit_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"ens3\"}[5m]))", "legendFormat": "OVH Public (ens3) Tx"},
+            {"refId": "C", "expr": "sum(rate(container_network_receive_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"tailscale0\"}[5m]))", "legendFormat": "Tailscale (tailscale0) Rx"},
+            {"refId": "D", "expr": "sum(rate(container_network_transmit_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"tailscale0\"}[5m]))", "legendFormat": "Tailscale (tailscale0) Tx"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "Bps", "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 15, "type": "timeseries", "title": "OVH Local Disk Usage & SQLite Write I/O",
+          "gridPos": {"x": 12, "y": 25, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "expr": "max(container_fs_usage_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda5\"})", "legendFormat": "Persistent (/dev/vda5) used"},
+            {"refId": "B", "expr": "max(container_fs_usage_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda4\"})", "legendFormat": "Kairos state (/dev/vda4) used"},
+            {"refId": "C", "expr": "sum(rate(container_blkio_device_usage_total{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda\",operation=\"Write\"}[5m]))", "legendFormat": "Disk write rate (/dev/vda)"}
+          ],
+          "fieldConfig": {
+            "defaults": {"unit": "bytes", "min": 0},
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "Disk write rate (/dev/vda)"}, "properties": [
+                {"id": "unit", "value": "Bps"},
+                {"id": "custom.axisPlacement", "value": "right"}
+              ]}
+            ]
+          },
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         }
       ]
     }
@@ -598,6 +795,7 @@ spec:
             - {name: config, mountPath: /etc/grafana/provisioning/datasources/datasource.yaml, subPath: datasource.yaml, readOnly: true}
             - {name: config, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml, subPath: dashboards.yaml, readOnly: true}
             - {name: config, mountPath: /etc/grafana/dashboards/overview.json, subPath: overview.json, readOnly: true}
+            - {name: config, mountPath: /etc/grafana/dashboards/ovh.json, subPath: ovh.json, readOnly: true}
             - {name: secrets, mountPath: /etc/grafana/secrets, readOnly: true}
       volumes:
         - name: data
