@@ -90,7 +90,7 @@ def stage_controller(directory):
     terraform('plan', '-input=false', '-lock-timeout=60s', '-detailed-exitcode')
     handoff = json.loads(terraform('output', '-json', 'handoff'))
     print(json.dumps(handoff, indent=2))
-    print('OVH infrastructure is provisioned. Verify its console identity and Tailscale access. K3s remains stopped; Azure is unchanged.')
+    print('OVH infrastructure is provisioned. Verify its console identity and Tailscale access. K3s remains stopped.')
 
 
 if __name__ == '__main__':

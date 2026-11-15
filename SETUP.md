@@ -36,7 +36,7 @@ Apply the [tailnet policy](docs/security.md#tailnet-policy) before starting node
 
 ## Cloud preflight
 
-Before provisioning, check the OVH Public Cloud project's region, d2-2 availability, quota and CAD hourly cost. Monthly billing is a later, deliberate change. Keep the running Azure controller and its Terraform state separate until migration is approved.
+Before provisioning, check the OVH Public Cloud project's region, d2-2 availability, quota and CAD hourly cost. Monthly billing is a later, deliberate change.
 
 Check the [controller resources and disk limits](docs/architecture.md#controller-resources). Include compute, private image storage, public IPv4 and outbound traffic in the estimate. Stopped resources can still incur charges.
 

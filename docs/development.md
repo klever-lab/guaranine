@@ -15,9 +15,9 @@ env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bas
 | Markdown | Recursive PyMarkdown scan using [.pymarkdown.json](../.pymarkdown.json), respecting gitignore. |
 | Unit tests | [scripts/tests/](../scripts/tests/) covers private-file handling, role credentials, Wi-Fi capture, SSH trust, disk confirmations, USB flashing, rollout targeting/failures, deployment refusal and Terraform tool selection. |
 | Kairos validation | [validate-kairos.py](../scripts/validate-kairos.py) checks public and generated native profiles with the checksum-pinned upstream agent, JSON policy syntax, workflows with actionlint, shell with ShellCheck and Python compilation. |
-| Terraform validation | [validate-terraform.py](../scripts/validate-terraform.py) checks formatting, initialization, provider schemas, mock tests, lifecycle plans, retained-disk deletion refusal and the Azure roots' explicit local backends. OVH's remote backend is excluded from offline checks. |
+| Terraform validation | [validate-terraform.py](../scripts/validate-terraform.py) checks formatting, initialization, provider schemas, mock tests, lifecycle plans and VM replacement refusal. OVH's remote backend is excluded from offline checks. |
 
-The Terraform runner copies configuration into temporary storage, removes ambient cloud/Terraform inputs and uses mock providers. It verifies unchanged plans, Azure disk retention across VM replacement, and the specific `prevent_destroy` failures for Azure data-disk replacement and OVH VM replacement. OVH checks also cover private image hashing, the fixed d2-2 flavor and attachment to OVH's default security group. The packet harness checks actual ingress restrictions. No cloud provisioning is required, though tool/provider downloads need internet access.
+The Terraform runner copies configuration into temporary storage, removes ambient cloud/Terraform inputs and uses mock providers. It verifies unchanged plans, seed-image replacement without VM replacement, and the specific `prevent_destroy` failure for OVH VM replacement. OVH checks also cover private image hashing, the fixed d2-2 flavor and attachment to OVH's default security group. The packet harness checks actual ingress restrictions. No cloud provisioning is required, though tool/provider downloads need internet access.
 
 ## Firewall packet checks
 

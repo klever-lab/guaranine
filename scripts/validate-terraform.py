@@ -71,7 +71,7 @@ def test_events(root, env, *arguments, check=True):
     return result, events
 
 
-def check_lifecycle_plans(events, name):
+def check_lifecycle_plans(events):
     plans = {
         event["@testrun"]: event["test_plan"]
         for event in events
@@ -83,37 +83,21 @@ def check_lifecycle_plans(events, name):
     require(
         all(change["change"]["actions"] == ["no-op"] for change in changes)
         and all(change["actions"] == ["no-op"] for change in unchanged["output_changes"].values()),
-        f"An unchanged {name} deployment must produce no resource or output changes",
+        "An unchanged ovh deployment must produce no resource or output changes",
     )
-    if name == "ovh":
-        replacement = {
-            change["address"]: change["change"]["actions"]
-            for change in plans.get("replace_image_keep_vm", {}).get("resource_changes", [])
-        }
-        require(
-            replacement.get("openstack_images_image_v2.controller") == ["delete", "create"]
-            and replacement.get("openstack_compute_instance_v2.controller") == ["no-op"],
-            "Replacing the seed image must not rebuild or replace the installed OVH VM",
-        )
-        print("  unchanged infrastructure: no changes; seed image replacement: VM unchanged", flush=True)
-        return
-    if name == "image":
-        print(f"  unchanged {name} infrastructure: no changes", flush=True)
-        return
     replacement = {
         change["address"]: change["change"]["actions"]
-        for change in plans.get("replace_vm_keep_data", {}).get("resource_changes", [])
+        for change in plans.get("replace_image_keep_vm", {}).get("resource_changes", [])
     }
     require(
-        replacement.get("azurerm_linux_virtual_machine.coordinator") == ["delete", "create"]
-        and replacement.get("azurerm_managed_disk.coordinator_data") == ["no-op"]
-        and replacement.get("azurerm_managed_disk.coordinator_os") == ["no-op"],
-        "A real VM replacement plan must preserve the existing boot and data disks",
+        replacement.get("openstack_images_image_v2.controller") == ["delete", "create"]
+        and replacement.get("openstack_compute_instance_v2.controller") == ["no-op"],
+        "Replacing the seed image must not rebuild or replace the installed OVH VM",
     )
-    print("  unchanged deployment: no changes; VM replacement: boot and data disks retained", flush=True)
+    print("  unchanged infrastructure: no changes; seed image replacement: VM unchanged", flush=True)
 
 
-def check_disk_guard(root, env, name):
+def check_disk_guard(root, env):
     result, events = test_events(root, env, "-test-directory=guard-tests", check=False)
     errors = [
         event["diagnostic"]
@@ -125,12 +109,11 @@ def check_disk_guard(root, env, name):
         for event in events
         if event["type"] == "test_run" and event["test_run"]["progress"] == "complete"
     }
-    resource = "openstack_compute_instance_v2.controller" if name == "ovh" else "azurerm_managed_disk.coordinator_data"
-    run_name = "refuse_vm_replacement" if name == "ovh" else "refuse_disk_replacement"
+    resource = "openstack_compute_instance_v2.controller"
     require(
         result.returncode == 1
         and completed.get("seed_mock_state") == "pass"
-        and completed.get(run_name) == "error"
+        and completed.get("refuse_vm_replacement") == "error"
         and len(errors) == 1
         and errors[0]["summary"] == "Instance cannot be destroyed"
         and resource + " has lifecycle.prevent_destroy" in errors[0]["detail"],
@@ -139,14 +122,13 @@ def check_disk_guard(root, env, name):
     print(f"  {resource} replacement: refused by Terraform prevent_destroy", flush=True)
 
 
-
 def main():
     expected_version = (REPOSITORY / ".terraform-version").read_text().strip()
-    # Tests always use mocks; also remove ambient Azure credentials, TF inputs,
+    # Tests always use mocks; also remove ambient cloud credentials, TF inputs,
     # CLI flags, logs and backend/workspace configuration from the test process.
     env = {
         key: value for key, value in os.environ.items()
-        if not key.startswith(("ARM_", "AZURE_", "AWS_", "TF_", "OS_", "OVH_"))
+        if not key.startswith(("AWS_", "TF_", "OS_", "OVH_"))
     }
     env.update(TF_IN_AUTOMATION="1", CHECKPOINT_DISABLE="1")
     with tempfile.TemporaryDirectory(prefix="guaranine-terraform-") as directory:
@@ -160,44 +142,25 @@ def main():
             TF_PLUGIN_CACHE_DIR=str(scratch / "plugins"),
             TF_CLI_CONFIG_FILE=str(scratch / "terraform.rc"),
         )
-        for name, source in (("image", "infra/azure/image"), ("coordinator", "infra/azure/coordinator"),
-                             ("ovh", "infra/ovh")):
-            print(f"Terraform {name}: format, init, validate and mock tests", flush=True)
-            root = scratch / name
-            copy_configuration(REPOSITORY / source, root)
-            if name == "ovh":
-                image = scratch / "fixture.qcow2"
-                image.write_bytes(b"DISPOSABLE IMAGE FOR MOCKED TERRAFORM TESTS")
-                env["TF_VAR_image_path"] = str(image)
-                env["TF_VAR_image_sha256"] = hashlib.sha256(image.read_bytes()).hexdigest()
-                env["TF_VAR_state_bucket"] = "guaranine-disposable-state"
-            env["TF_DATA_DIR"] = str(scratch / f"{name}-data")
-            terraform(root, env, "fmt", "-check", "-recursive", "-no-color")
-            terraform(root, env, "init", "-backend=false", "-input=false", "-lockfile=readonly", "-no-color")
-            terraform(root, env, "validate", "-no-color")
-            _, events = test_events(root, env, "-verbose")
-            for event in events:
-                if event["type"] == "test_summary":
-                    require(event["test_summary"]["status"] == "pass", "Terraform tests did not pass")
-                    print("  " + event["@message"], flush=True)
-            check_lifecycle_plans(events, name)
-            if name in ("coordinator", "ovh"):
-                check_disk_guard(root, env, name)
-            if name == "ovh":
-                # Remote S3 authentication/locking is checked during operator
-                # setup; offline validation never contacts a state service.
-                continue
-            state = scratch / f"{name}.tfstate"
-            terraform(
-                root, env, "init", "-input=false", "-lockfile=readonly", "-no-color",
-                f"-backend-config=path={state}",
-            )
-            metadata = json.loads((Path(env["TF_DATA_DIR"]) / "terraform.tfstate").read_text())
-            require(
-                metadata["backend"]["type"] == "local" and metadata["backend"]["config"]["path"] == str(state),
-                "State must stay in the explicit operator path, with native local locking",
-            )
-            print("  protected local state backend: valid", flush=True)
+        print("Terraform ovh: format, init, validate and mock tests", flush=True)
+        root = scratch / "ovh"
+        copy_configuration(REPOSITORY / "infra/ovh", root)
+        image = scratch / "fixture.qcow2"
+        image.write_bytes(b"DISPOSABLE IMAGE FOR MOCKED TERRAFORM TESTS")
+        env["TF_VAR_image_path"] = str(image)
+        env["TF_VAR_image_sha256"] = hashlib.sha256(image.read_bytes()).hexdigest()
+        env["TF_VAR_state_bucket"] = "guaranine-disposable-state"
+        env["TF_DATA_DIR"] = str(scratch / "ovh-data")
+        terraform(root, env, "fmt", "-check", "-recursive", "-no-color")
+        terraform(root, env, "init", "-backend=false", "-input=false", "-lockfile=readonly", "-no-color")
+        terraform(root, env, "validate", "-no-color")
+        _, events = test_events(root, env, "-verbose")
+        for event in events:
+            if event["type"] == "test_summary":
+                require(event["test_summary"]["status"] == "pass", "Terraform tests did not pass")
+                print("  " + event["@message"], flush=True)
+        check_lifecycle_plans(events)
+        check_disk_guard(root, env)
 
 
 if __name__ == "__main__":

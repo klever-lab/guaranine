@@ -21,9 +21,9 @@ Application gateways can use the admin-owned `tag:guaranine-app-gateway`, with n
 
 Before applying it, back up the live policy outside the checkout. Use the standard [Access controls editor](https://console.tailscale.com/admin/acls); for API updates, validate first, use the live ETag with `If-Match` and read back the result. CI checks JSON syntax without credentials and never applies the live policy.
 
-Tailscale uses kernel networking and persistent identity, with subnet-route acceptance, Tailscale SSH and host DNS changes disabled. K3s uses Tailscale node addresses and binds Flannel to `tailscale0`; Flannel derives its MTU from that interface. Administration, API, kubelet and cross-node pod traffic use the tailnet. Private Azure/LAN addresses are never cluster endpoints. Other operator VPNs must preserve the `100.64.0.0/10` routes.
+Tailscale uses kernel networking and persistent identity, with subnet-route acceptance, Tailscale SSH and host DNS changes disabled. K3s uses Tailscale node addresses and binds Flannel to `tailscale0`; Flannel derives its MTU from that interface. Administration, API, kubelet and cross-node pod traffic use the tailnet. Cloud/LAN addresses are never cluster endpoints. Other operator VPNs must preserve the `100.64.0.0/10` routes.
 
-This BHS5 project has zero quota for custom security groups and rules, so the VM uses OVH's default group. The native host firewall restricts physical ingress to encrypted Tailscale transport on UDP 41641 and rejects direct private/LAN traffic. SSH and the Kubernetes API are reachable only over the tailnet. The VM's public interface supplies internet access for Tailscale/DERP and downloads. The existing Azure NSG remains unchanged during staging. Real direct/relayed paths, reconnects and temporary WAN outages still need live-network verification.
+This BHS5 project has zero quota for custom security groups and rules, so the VM uses OVH's default group. The native host firewall restricts physical ingress to encrypted Tailscale transport on UDP 41641 and rejects direct private/LAN traffic. SSH and the Kubernetes API are reachable only over the tailnet. The VM's public interface supplies internet access for Tailscale/DERP and downloads. Real direct/relayed paths, reconnects and temporary WAN outages still need live-network verification.
 
 ## LAN isolation
 

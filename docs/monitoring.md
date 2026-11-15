@@ -54,7 +54,7 @@ Follow [Optional monitoring](../SETUP.md#optional-monitoring) for a fresh deploy
 
 Local volumes stay pinned to that single worker; monitoring is unavailable while that laptop is offline. Volume capacities are scheduling declarations, not filesystem quotas. Prometheus prunes by its configured age or size, whichever comes first, and needs free disk space for its WAL and temporary blocks. Back up the private files and Grafana data separately from the controller's K3s backup; stop Grafana briefly for a consistent database copy. Metrics are local history and are not an off-machine backup.
 
-To move the volumes, stop their deployments and fence an unreachable old worker first. Copy their directories with ownership preserved to the replacement's persistent filesystem, then replace the static PV definitions with that worker's hostname and rebind the PVCs. Their `Retain` policy preserves data when claims are deleted. Do not delete the monitoring namespace as an update procedure. Controller replacement uses the normal [cloud restore procedure](operations.md#restore-on-another-cloud-vm); this monitoring stack has no Azure dependency.
+To move the volumes, stop their deployments and fence an unreachable old worker first. Copy their directories with ownership preserved to the replacement's persistent filesystem, then replace the static PV definitions with that worker's hostname and rebind the PVCs. Their `Retain` policy preserves data when claims are deleted. Do not delete the monitoring namespace as an update procedure. Controller replacement uses the normal [cloud restore procedure](operations.md#restore-on-another-cloud-vm).
 
 ## Check collection
 

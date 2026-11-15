@@ -1,6 +1,6 @@
 # Architecture
 
-Guaranine runs one K3s server in a cloud VM and K3s agents on laptops. All nodes use the same immutable Kairos/Hadron base. The server uses SQLite; applications run on workers. OVH is the prepared migration target; the Azure controller remains live until cutover.
+Guaranine runs one K3s server in an OVH Public Cloud VM and K3s agents on laptops. All nodes use the same immutable Kairos/Hadron base. The server uses SQLite; applications run on workers.
 
 ## Component ownership
 
@@ -13,7 +13,6 @@ Guaranine runs one K3s server in a cloud VM and K3s agents on laptops. All nodes
 | [kairos/worker.yaml](../kairos/worker.yaml) | K3s agent settings and power-off after installation. |
 | [kairos/auroraboot.yaml](../kairos/auroraboot.yaml) | Native UEFI disk build recipe; the CLI converts its raw output to QCOW2. |
 | [infra/ovh/main.tf](../infra/ovh/main.tf) | Private state bucket, image and d2-2 VM with a public network port using OVH's default security group. |
-| [infra/azure/](../infra/azure/) | Existing Azure resources retained for rollback and eventual cleanup. |
 | [kubernetes/](../kubernetes/) | Application network policy, [storage provisioner](storage.md), [monitoring stack](monitoring.md) and [Kairos Operator](operations.md#configuration-rollouts). |
 
 Terraform owns infrastructure, Kairos owns the OS and K3s configuration, and Kubernetes manifests own workloads. There is no custom management API or enrollment service. See [networking and security](security.md) for transport and trust boundaries.
@@ -32,13 +31,11 @@ AuroraBoot creates the controller's persistent partition on first boot. Its nati
 
 ## Controller resources
 
-The OVH target is Public Cloud `d2-2` in `BHS5`, with 1 vCPU, 2,000 MB RAM and a 25-GB local root disk. The [Terraform root](../infra/ovh/main.tf) fixes the flavor and checks the exact private image hash. This is the user's chosen economical trial; its single CPU is below K3s's documented two-core server minimum. Boot, API health and resource headroom must be measured before relying on it for the live cluster. Perform the [cloud preflight](../SETUP.md#cloud-preflight) before applying.
+The controller runs on OVH Public Cloud `d2-2` in `BHS5`, with 1 vCPU, 2,000 MB RAM and a 25-GB local root disk. The [Terraform root](../infra/ovh/main.tf) fixes the flavor and checks the exact private image hash. Perform the [cloud preflight](../SETUP.md#cloud-preflight) before applying.
 
 The controller boots a private UEFI Glance image without cloud-init user data or a guest agent. The instance ignores later `image_id` changes because the OpenStack provider otherwise rebuilds the disk in place. [Kairos upgrades](operations.md#os-updates) own installed OS updates.
 
-The VM has Terraform `prevent_destroy`, protecting its included disk against Terraform replacement or deletion while the resource remains configured. The local root disk cannot be detached and reattached to a replacement VM: deleting or rebuilding the instance loses its current contents. Before deliberate teardown, export the server state using [backup and restore](operations.md#backup). Terraform protection does not prevent deletion through the OVH console or API.
-
-The existing Azure controller uses 2 vCPUs, 4 GiB RAM, a 32-GiB OS disk and a separate retained 64-GiB `GUARANINE_DATA` disk. Its existing roots and state remain untouched during OVH staging. Neither deployment depends on an external management controller; [recovery](operations.md#restore-on-another-cloud-vm) supports another cloud VM.
+The VM has Terraform `prevent_destroy`, protecting its included disk against Terraform replacement or deletion while the resource remains configured. The local root disk cannot be detached and reattached to a replacement VM: deleting or rebuilding the instance loses its current contents. Before deliberate teardown, export the server state using [backup and restore](operations.md#backup). Terraform protection does not prevent deletion through the OVH console or API. The deployment does not depend on an external management controller; [recovery](operations.md#restore-on-another-cloud-vm) supports another cloud VM.
 
 ## Workloads and availability
 
