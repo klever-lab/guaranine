@@ -20,6 +20,11 @@ mock_provider "openstack" {
       name = "default"
     }
   }
+  mock_resource "openstack_networking_port_v2" {
+    defaults = {
+      port_security_enabled = true
+    }
+  }
 }
 
 mock_provider "aws" {}

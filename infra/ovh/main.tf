@@ -139,7 +139,8 @@ resource "openstack_images_image_v2" "controller" {
   }
 }
 
-# This BHS5 project has no quota for custom security groups or rules.
+# This BHS5 project has no quota for custom security groups or rules, and Ext-Net
+# enforces port security by default while disallowing create_port:port_security_enabled.
 # Native host nftables owns ingress restrictions and direct private/LAN isolation.
 data "openstack_networking_secgroup_v2" "controller" {
   region = var.region
@@ -147,12 +148,11 @@ data "openstack_networking_secgroup_v2" "controller" {
 }
 
 resource "openstack_networking_port_v2" "controller" {
-  region                = var.region
-  name                  = "guaranine-controller"
-  network_id            = data.openstack_networking_network_v2.public.id
-  security_group_ids    = [data.openstack_networking_secgroup_v2.controller.id]
-  port_security_enabled = true
-  admin_state_up        = true
+  region             = var.region
+  name               = "guaranine-controller"
+  network_id         = data.openstack_networking_network_v2.public.id
+  security_group_ids = [data.openstack_networking_secgroup_v2.controller.id]
+  admin_state_up     = true
 }
 
 # OpenStack-created instances start on hourly billing. Monthly billing is a
