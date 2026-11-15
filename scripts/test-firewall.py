@@ -8,6 +8,7 @@ import pwd
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 
 import yaml
@@ -35,7 +36,8 @@ def serve():
     # Bind synchronously so a failed fixture cannot silently look like isolation.
     for port, kind in ((18080, socket.SOCK_STREAM), (53, socket.SOCK_STREAM),
                        (53, socket.SOCK_DGRAM), (22, socket.SOCK_STREAM),
-                       (6443, socket.SOCK_STREAM), (10250, socket.SOCK_STREAM)):
+                       (6443, socket.SOCK_STREAM), (9100, socket.SOCK_STREAM),
+                       (10250, socket.SOCK_STREAM)):
         listener = socket.socket(socket.AF_INET6, kind)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
@@ -67,6 +69,7 @@ def probe(address, port, protocol, uid, mark):
 
 
 def exercise():
+    run('mount', '-t', 'tmpfs', 'tmpfs', '/run')
     run('ip', 'link', 'set', 'lo', 'up')
     run('sysctl', '-qw', 'net.ipv4.ip_forward=1', 'net.ipv6.conf.all.forwarding=1')
     with contextlib.ExitStack() as cleanup:
@@ -182,6 +185,43 @@ def exercise():
         check(pod, '2001:db8:2::1', False)
         print('Firewall packet checks passed: LAN blocked, internet/Tailscale preserved, DNS restricted, unconfigured egress blocked')
 
+        # Exercise the standalone Pi profile with the same real packet fixtures.
+        run('ip', 'link', 'set', 'lan0', 'name', 'eth0')
+        kiosk = yaml.safe_load((SCRIPT.parents[1] / 'kiosk/config.yaml').read_text())
+        files = {file['path']: file['content'] for file in kiosk['write_files']}
+        run('nft', '-f', '-', input='delete table inet guaranine\n' + files['/etc/guaranine/nftables.conf'])
+        check([], '198.51.100.1', False)
+        with tempfile.TemporaryDirectory(prefix='guaranine-kiosk-firewall-') as temporary:
+            dispatcher = Path(temporary) / 'dispatcher.py'
+            dispatcher.write_text(files['/etc/NetworkManager/dispatcher.d/20-guaranine-firewall'])
+            run(sys.executable, str(dispatcher), 'eth0', 'pre-up')
+            for address in local:
+                check([], address, False)
+                for protocol in ('tcp', 'udp'):
+                    check([], address, True, port=53, protocol=protocol, uid=1000)
+            check([], '198.51.100.1', True)
+            check([], '2001:db8:2::1', False)
+            for address in ('203.0.113.2', '2001:db8:1::2'):
+                for port in (22, 9100):
+                    check(lan, address, False, port=port)
+            for port in (22, 9100):
+                check(tailnet, '100.64.0.1', True, port=port)
+            check(tailnet, '100.64.0.1', False, port=6443)
+            check([], '100.64.0.2', True, port=22)
+
+            # SLAAC may add a public attached prefix without a dispatcher event.
+            run('ip', 'address', 'add', '2001:db8:3::2/64', 'dev', 'eth0', 'nodad')
+            run(*lan, 'ip', 'address', 'add', '2001:db8:3::1/64', 'dev', 'lan0-peer', 'nodad')
+            check([], '2001:db8:3::1', False)
+            # Encrypted Tailscale sockets retain IPv4 and IPv6 transport access.
+            for address in ('203.0.113.1', '2001:db8:3::1'):
+                check([], address, True, mark=0x80000)
+            run(sys.executable, str(dispatcher), 'eth0', 'pre-down')
+            check([], '198.51.100.1', False)
+            run(sys.executable, str(dispatcher), 'eth0', 'up')
+            check([], '198.51.100.1', True)
+        print('Kiosk packet checks passed: late IPv6 prefixes blocked, DNS/Tailscale preserved, SSH/metrics restricted')
+
 
 if __name__ == '__main__':
     if sys.argv[1:] == ['--server']:
@@ -194,4 +234,4 @@ if __name__ == '__main__':
         exercise()
     else:
         namespace = [] if os.geteuid() == 0 else ['--user', '--map-auto', '--map-root-user']
-        subprocess.run(['unshare', *namespace, '--net', sys.executable, str(SCRIPT), '--isolated'], check=True)
+        subprocess.run(['unshare', *namespace, '--mount', '--net', sys.executable, str(SCRIPT), '--isolated'], check=True)

@@ -14,7 +14,7 @@ env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bas
 | --- | --- |
 | Markdown | Recursive PyMarkdown scan using [.pymarkdown.json](../.pymarkdown.json), respecting gitignore. |
 | Unit tests | [scripts/tests/](../scripts/tests/) covers private-file handling, role credentials, Wi-Fi capture, SSH trust, disk confirmations, USB flashing, rollout targeting/failures, deployment refusal and Terraform tool selection. |
-| Kairos validation | [validate-kairos.py](../scripts/validate-kairos.py) checks public and generated native profiles with the checksum-pinned upstream agent, JSON policy syntax, workflows with actionlint, shell with ShellCheck and Python compilation. |
+| OS validation | [validate-kairos.py](../scripts/validate-kairos.py) checks public and generated native Kairos profiles with the checksum-pinned upstream agent, JSON policy syntax, kiosk scripts, workflows with actionlint, shell with ShellCheck and Python compilation. |
 | Terraform validation | [validate-terraform.py](../scripts/validate-terraform.py) checks formatting, initialization, provider schemas, mock tests, lifecycle plans and VM replacement refusal. OVH's remote backend is excluded from offline checks. |
 
 The Terraform runner copies configuration into temporary storage, removes ambient cloud/Terraform inputs and uses mock providers. It verifies unchanged plans, seed-image replacement without VM replacement, and the specific `prevent_destroy` failure for OVH VM replacement. OVH checks also cover private image hashing, the fixed d2-2 flavor and attachment to OVH's default security group. The packet harness checks actual ingress restrictions. No cloud provisioning is required, though tool/provider downloads need internet access.
@@ -27,7 +27,7 @@ Install `iproute2`, `nftables`, `iputils-ping` and the ordinary Linux namespace 
 uv run --no-project --with-requirements requirements.txt python scripts/test-firewall.py
 ```
 
-[test-firewall.py](../scripts/test-firewall.py) loads the actual native nftables rules into disposable namespaces. It checks host/pod LAN isolation over IPv4/IPv6, attached public subnets, denied physical ingress, permitted internet/Tailscale paths, DNS identity restrictions, subnet changes and blocked unconfigured egress. It first proves fixture connectivity so a broken fixture cannot silently count as isolation. CI runs it with sudo.
+[test-firewall.py](../scripts/test-firewall.py) loads the actual Kairos and standalone kiosk nftables rules into disposable namespaces. It checks host/pod LAN isolation over IPv4/IPv6, attached public subnets, denied physical ingress, permitted internet/Tailscale paths, DNS identity restrictions, subnet changes and blocked unconfigured egress. Kiosk checks also exercise the real NetworkManager dispatcher, a late IPv6 prefix without a dispatcher event, and marked IPv4/IPv6 Tailscale transport. It proves fixture connectivity so a broken fixture cannot silently count as isolation. CI runs it with sudo.
 
 ## Disposable image checks
 

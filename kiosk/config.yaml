@@ -13,7 +13,7 @@ users:
     groups: [users, audio, video, input, render]
     shell: /bin/bash
     lock_passwd: true
-    sudo: false
+    sudo: null
   - name: guaranine
     uid: 1001
     groups: [sudo]
@@ -22,6 +22,9 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
 package_update: true
 package_upgrade: true
+# The display manager quits Plymouth, but must wait for cloud-final first.
+bootcmd:
+  - [systemctl, mask, --now, plymouth-quit-wait.service]
 write_files:
   - path: /etc/guaranine/nftables.conf
     permissions: '0600'
@@ -58,6 +61,8 @@ write_files:
           ip daddr @lan4 reject
           ip6 daddr { fc00::/7, fe80::/10, fec0::/10, ff00::/8 } reject
           ip6 daddr @lan6 reject
+          # SLAAC can add attached IPv6 prefixes without dispatcher events.
+          meta nfproto ipv6 reject
           meta oif @connected_interfaces accept
         }
         chain forward {
@@ -235,14 +240,14 @@ write_files:
       ExecStart=/usr/local/bin/grafana-kiosk -c /home/kiosk/.config/guaranine-kiosk/config.yaml
       Restart=always
       RestartSec=10
-      RuntimeMaxSec=1d
+      RuntimeMaxSec=1h
       TimeoutStopSec=15
       KillMode=control-group
       NoNewPrivileges=yes
   - path: /etc/chromium/policies/managed/guaranine.json
     permissions: '0644'
     content: |
-      {"BrowserSignin": 0, "SyncDisabled": true, "PasswordManagerEnabled": false, "MetricsReportingEnabled": false, "URLBlocklist": ["*"], "URLAllowlist": ["https://monitoring.tail3a78b9.ts.net/*"]}
+      {"BrowserSignin": 0, "SyncDisabled": true, "PasswordManagerEnabled": false, "MetricsReportingEnabled": false, "URLBlocklist": ["*"], "URLAllowlist": ["https://.monitoring.tail3a78b9.ts.net/"]}
 runcmd:
   - [sh, -c, "printf '#cloud-config\\n' > /boot/firmware/user-data"]
   - [rm, -f, /etc/sudoers.d/010_pi-nopasswd, /etc/sudoers.d/010_wiz-nopasswd]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate native Kairos profiles, workflows, shell and public policy without credentials."""
+"""Validate OS profiles, workflows, shell and public policy without credentials."""
 import json
 import os
 from pathlib import Path
@@ -63,10 +63,20 @@ def main():
                             path = directory / (profile.stem + '-' + Path(file['path']).name)
                             path.write_text(file['content'])
                             shell.append(path)
+        for file in yaml.safe_load((ROOT / 'kiosk/config.yaml').read_text())['write_files']:
+            content = file['content']
+            if content.startswith('#!/bin/sh'):
+                path = directory / ('kiosk-' + Path(file['path']).name)
+                path.write_text(content)
+                shell.append(path)
+            elif content.startswith('#!/usr/bin/python3'):
+                compile(content, file['path'], 'exec')
+            elif file['path'].endswith('.json'):
+                json.loads(content)
         subprocess.run(['shellcheck', *map(str, shell)], check=True)
     for path in (ROOT / 'scripts').rglob('*.py'):
         compile(path.read_text(), str(path), 'exec')
-    print('Native Kairos profiles, policy, workflows and shell validated')
+    print('Native Kairos profiles, kiosk scripts/policy, workflows and shell validated')
 
 
 if __name__ == '__main__':
