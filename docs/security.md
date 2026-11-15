@@ -17,6 +17,8 @@ Nodes cannot administer peers. The policy retains the operator's broader persona
 
 The monitoring proxy has its own admin-owned tag, with no grants to reach other tailnet devices. Cluster node tags and unrelated users cannot connect to it. Its Serve configuration disables Funnel. The [monitoring guide](monitoring.md) owns its Kubernetes permissions and traffic.
 
+Application gateways can use the admin-owned `tag:guaranine-app-gateway`, with no grants to reach other tailnet devices. The tag permits Funnel; each application repository owns its gateway deployment and client access restrictions. This permission does not expose cluster nodes or monitoring.
+
 Before applying it, back up the live policy outside the checkout. Use the standard [Access controls editor](https://console.tailscale.com/admin/acls); for API updates, validate first, use the live ETag with `If-Match` and read back the result. CI checks JSON syntax without credentials and never applies the live policy.
 
 Tailscale uses kernel networking and persistent identity, with subnet-route acceptance, Tailscale SSH and host DNS changes disabled. K3s uses Tailscale node addresses and binds Flannel to `tailscale0`; Flannel derives its MTU from that interface. Administration, API, kubelet and cross-node pod traffic use the tailnet. Private Azure/LAN addresses are never cluster endpoints. Other operator VPNs must preserve the `100.64.0.0/10` routes.

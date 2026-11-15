@@ -2,7 +2,8 @@
   "tagOwners": {
     "tag:guaranine-controlplane": ["autogroup:admin"],
     "tag:guaranine-worker": ["autogroup:admin"],
-    "tag:guaranine-monitoring": ["autogroup:admin"]
+    "tag:guaranine-monitoring": ["autogroup:admin"],
+    "tag:guaranine-app-gateway": ["autogroup:admin"]
   },
   "grants": [
     {
@@ -35,6 +36,10 @@
     {
       "target": ["autogroup:member"],
       "attr": ["funnel"]
+    },
+    {
+      "target": ["tag:guaranine-app-gateway"],
+      "attr": ["funnel"]
     }
   ],
   "ssh": [
@@ -46,6 +51,16 @@
     }
   ],
   "tests": [
+    {
+      "src": "tag:guaranine-app-gateway",
+      "proto": "tcp",
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "100.123.102.71:22"]
+    },
+    {
+      "src": "user@example.com",
+      "proto": "tcp",
+      "deny": ["tag:guaranine-app-gateway:443"]
+    },
     {
       "src": "kianbahasadri@gmail.com",
       "accept": ["100.123.102.71:22", "100.123.102.71:9876"]
