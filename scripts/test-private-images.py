@@ -201,7 +201,7 @@ def fixture(role=None):
                          'cat /oem/01_layout.yaml > /dev/ttyS0'],
         }]
         checks += ['mountpoint -q /var/lib/rancher',
-                   'test "$(findmnt -nro MAJ:MIN --target /var/lib/rancher/k3s)" = '
+                   'test "$(findmnt -nro MAJ:MIN --mountpoint /var/lib/rancher)" = '
                    '"$(findmnt -nro MAJ:MIN --mountpoint /usr/local)"',
                    '! test -e /var/lib/rancher/k3s/.guaranine-ready',
                    '! systemctl is-active --quiet k3s']
