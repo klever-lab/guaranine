@@ -420,9 +420,27 @@ data:
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
+          "id": 16, "type": "stat", "title": "Total nodes",
+          "description": "All nodes registered in Kubernetes, including nodes that are not Ready.",
+          "gridPos": {"x": 0, "y": 16, "w": 3, "h": 3},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "count(kube_node_info)"}],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
+          "options": {"colorMode": "none", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 17, "type": "stat", "title": "Running nodes",
+          "description": "Nodes whose Kubernetes Ready condition is true.",
+          "gridPos": {"x": 3, "y": 16, "w": 3, "h": 3},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})"}],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
+          "options": {"colorMode": "none", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
           "id": 10, "type": "stat", "title": "Services",
           "description": "Namespaces with running pods, matching the service groups in the table.",
-          "gridPos": {"x": 0, "y": 16, "w": 4, "h": 3},
+          "gridPos": {"x": 6, "y": 16, "w": 3, "h": 3},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "count(count by(namespace) (kube_pod_status_phase{phase=\"Running\"} == 1))"}],
           "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
@@ -430,7 +448,7 @@ data:
         },
         {
           "id": 11, "type": "stat", "title": "Running pods",
-          "gridPos": {"x": 4, "y": 16, "w": 4, "h": 3},
+          "gridPos": {"x": 9, "y": 16, "w": 3, "h": 3},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(kube_pod_status_phase{phase=\"Running\"} == 1)"}],
           "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
@@ -439,7 +457,7 @@ data:
         {
           "id": 12, "type": "stat", "title": "Pod CPU",
           "description": "Total CPU usage of running pods, in cores, averaged over five minutes.",
-          "gridPos": {"x": 8, "y": 16, "w": 4, "h": 3},
+          "gridPos": {"x": 12, "y": 16, "w": 3, "h": 3},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(sum by(namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",pod!=\"\"}[5m])) and on(namespace,pod) (kube_pod_status_phase{phase=\"Running\"} == 1))"}],
           "fieldConfig": {"defaults": {"unit": "cores", "decimals": 4, "min": 0}},
@@ -448,7 +466,7 @@ data:
         {
           "id": 13, "type": "stat", "title": "Pod memory",
           "description": "Total memory working set of running pods.",
-          "gridPos": {"x": 12, "y": 16, "w": 4, "h": 3},
+          "gridPos": {"x": 15, "y": 16, "w": 3, "h": 3},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(sum by(namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",pod!=\"\"}) and on(namespace,pod) (kube_pod_status_phase{phase=\"Running\"} == 1))"}],
           "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1, "min": 0}},
@@ -457,7 +475,7 @@ data:
         {
           "id": 14, "type": "stat", "title": "Disk used",
           "description": "Used space on mounted block filesystems across reporting nodes, including OS and workload data. Excludes RAM, overlays and loop-mounted OS images; this is not per-pod disk usage.",
-          "gridPos": {"x": 16, "y": 16, "w": 4, "h": 3},
+          "gridPos": {"x": 18, "y": 16, "w": 3, "h": 3},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(max by(node,device) (container_fs_usage_bytes{id=\"/\",device=~\"/dev/(sd|vd|nvme|mmcblk).*\"}))"}],
           "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1, "min": 0}},
@@ -466,7 +484,7 @@ data:
         {
           "id": 15, "type": "stat", "title": "Disk capacity",
           "description": "Total capacity of the mounted block filesystems counted by Disk used. Unmounted partitions and disks are excluded.",
-          "gridPos": {"x": 20, "y": 16, "w": 4, "h": 3},
+          "gridPos": {"x": 21, "y": 16, "w": 3, "h": 3},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(max by(node,device) (container_fs_limit_bytes{id=\"/\",device=~\"/dev/(sd|vd|nvme|mmcblk).*\"}))"}],
           "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1, "min": 0}},
