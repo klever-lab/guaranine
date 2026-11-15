@@ -170,6 +170,10 @@ If the Ready check stops or times out, resume without reinstalling:
 
 See [operations](docs/operations.md) for maintenance, backups and recovery, or [development](docs/development.md) for validation.
 
+## Raspberry Pi dashboard display
+
+The dedicated Pi 2 Model B uses the stock Raspberry Pi OS image pinned in [kiosk/versions.json](kiosk/versions.json), with [kiosk/config.yaml](kiosk/config.yaml) and private configuration added during SD-card preparation. Its prepared card boots directly into the Grafana display after applying first-boot updates. Connect Ethernet, HDMI and power; leave it connected while setup completes. See [display operation and qualification](docs/monitoring.md#raspberry-pi-dashboard-display) for private operator files, recovery and the remaining physical checks.
+
 ## Node management
 
 Install the pinned upstream Kairos Operator and repository configuration:

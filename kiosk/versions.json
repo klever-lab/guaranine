@@ -1,0 +1,20 @@
+{
+  "os": {
+    "url": "https://downloads.raspberrypi.com/raspios_armhf/images/raspios_armhf-2026-10-06/2026-10-06-raspios-trixie-armhf.img.xz",
+    "sha256": "97b9de8ca68d290b548e7a1b895eba15b953985ada4d4faa91032ada6a6162ad",
+    "image_sha256": "99aa8805a727711bd4175f79e0136c2fcda90efdc7d20a500f60f0f8a2143f53",
+    "image_size": 5888802816
+  },
+  "tailscale": {
+    "url": "https://pkgs.tailscale.com/stable/tailscale_1.104.7_arm.tgz",
+    "sha256": "1c753fef45d497491081db37552b7a2a42c7932292743bf6936cb1a42b6bceb0"
+  },
+  "grafana_kiosk": {
+    "url": "https://github.com/grafana/grafana-kiosk/releases/download/v1.0.13/grafana-kiosk.linux.armv7",
+    "sha256": "00eddf34391cf493032ddf1184e5c65507766e47b8d7725d0546c7868d798d02"
+  },
+  "node_exporter": {
+    "url": "https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-armv7.tar.gz",
+    "sha256": "ae3d72fbf77f9ebed553c24465310e0880383f45d3d1566357ce7a31a997acb2"
+  }
+}

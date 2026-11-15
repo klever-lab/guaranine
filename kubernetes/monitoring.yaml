@@ -200,6 +200,10 @@ spec:
         - ipBlock: {cidr: 100.64.0.0/10}
       ports:
         - {protocol: TCP, port: 10250}
+    - to:
+        - ipBlock: {cidr: 100.82.17.107/32}
+      ports:
+        - {protocol: TCP, port: 9100}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -293,6 +297,10 @@ data:
       - job_name: kube-state-metrics
         static_configs:
           - targets: [kube-state-metrics:8080]
+      - job_name: grafana-pi
+        static_configs:
+          - targets: [100.82.17.107:9100]
+            labels: {instance: grafana-pi}
       - job_name: kubelet-cadvisor
         scheme: https
         metrics_path: /metrics/cadvisor

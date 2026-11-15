@@ -12,10 +12,14 @@
 | Both node roles | Both node roles | UDP 8472 | Flannel VXLAN |
 | Operator | Nodes | TCP 22 | Ordinary key-based SSH |
 | Operator | Monitoring proxy | TCP 443 | Private Grafana HTTPS |
+| Kiosk | Monitoring proxy | TCP 443 | Private dashboard display |
+| Worker | Kiosk | TCP 9100 | Prometheus host metrics |
 
 Nodes cannot administer peers. The policy retains the operator's broader personal access; the table describes cluster traffic, not a replacement for the complete policy.
 
 The monitoring proxy has its own admin-owned tag, with no grants to reach other tailnet devices. Cluster node tags and unrelated users cannot connect to it. Its Serve configuration disables Funnel. The [monitoring guide](monitoring.md) owns its Kubernetes permissions and traffic.
+
+The display has the admin-owned `tag:guaranine-kiosk`. It can reach Grafana but has no grant to administer cluster nodes or personal devices. Operators retain ordinary key-based SSH access. Its [OS profile](../kiosk/config.yaml) installs the firewall before NetworkManager starts. NetworkManager's pre-up, pre-down and DHCP hooks maintain attached-subnet and active-interface sets; physical egress stays blocked until those sets are populated. The Pi permits tailnet SSH and metrics, network setup and DNS, and encrypted Tailscale transport. Direct LAN traffic remains blocked, including attached public subnets.
 
 Application gateways can use the admin-owned `tag:guaranine-app-gateway`, with no grants to reach other tailnet devices. The tag permits Funnel; each application repository owns its gateway deployment and client access restrictions. This permission does not expose cluster nodes or monitoring.
 
@@ -56,3 +60,5 @@ The Tailscale API token stays on the operator. The controller gets a single-use 
 Live USB sessions run `tailscaled --state=mem:` through a conditional runtime environment override. This registers a temporary, ephemeral device even with the reusable non-ephemeral key; Tailscale removes disconnected ephemeral devices. The override exists only under `/run` and is absent after installation, so installed workers retain persistent identities. No device cleanup service or second registration key is needed.
 
 The registration window limits new registrations, not device lifetime. Expiry or revocation does not remove registered nodes, prevent copied media from booting, or revoke copied join credentials. The ISO is not hardware-bound. Retire identities deliberately using the [operations guide](operations.md#retire-a-worker).
+
+The kiosk SD image contains an individually enrolled, persistent Tailscale identity and private first-boot configuration. Keep it and its operator copy private and use that identity on one Pi at a time. The enrollment key is consumed during preparation; the Pi retains its tagged identity across reboots. Cloud-init clears the boot partition's `user-data` after provisioning, before the display session starts. Its installed Viewer configuration and SSH host key retain their private filesystem permissions.

@@ -3,6 +3,7 @@
     "tag:guaranine-controlplane": ["autogroup:admin"],
     "tag:guaranine-worker": ["autogroup:admin"],
     "tag:guaranine-monitoring": ["autogroup:admin"],
+    "tag:guaranine-kiosk": ["autogroup:admin"],
     "tag:guaranine-app-gateway": ["autogroup:admin"]
   },
   "grants": [
@@ -25,6 +26,16 @@
       "src": ["tag:guaranine-worker"],
       "dst": ["tag:guaranine-controlplane", "tag:guaranine-worker"],
       "ip": ["tcp:10250"]
+    },
+    {
+      "src": ["tag:guaranine-kiosk"],
+      "dst": ["tag:guaranine-monitoring"],
+      "ip": ["tcp:443"]
+    },
+    {
+      "src": ["tag:guaranine-worker"],
+      "dst": ["tag:guaranine-kiosk"],
+      "ip": ["tcp:9100"]
     },
     {
       "src": ["tag:guaranine-controlplane", "tag:guaranine-worker"],
@@ -51,6 +62,18 @@
     }
   ],
   "tests": [
+    {
+      "src": "tag:guaranine-kiosk",
+      "proto": "tcp",
+      "accept": ["tag:guaranine-monitoring:443"],
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "100.123.102.71:22"]
+    },
+    {
+      "src": "tag:guaranine-worker",
+      "proto": "tcp",
+      "accept": ["tag:guaranine-kiosk:9100"],
+      "deny": ["tag:guaranine-kiosk:22"]
+    },
     {
       "src": "tag:guaranine-app-gateway",
       "proto": "tcp",

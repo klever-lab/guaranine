@@ -1,0 +1,252 @@
+#cloud-config
+# Raspberry Pi 2 B, Raspberry Pi OS 32-bit. Private enrollment and Viewer
+# credentials are supplied outside Git when preparing an individual SD card.
+hostname: grafana-pi
+manage_etc_hosts: true
+timezone: America/New_York
+disable_root: true
+ssh_pwauth: false
+enable_ssh: true
+users:
+  - name: kiosk
+    uid: 1000
+    groups: [users, audio, video, input, render]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: false
+  - name: guaranine
+    uid: 1001
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: ALL=(ALL) NOPASSWD:ALL
+package_update: true
+package_upgrade: true
+write_files:
+  - path: /etc/guaranine/nftables.conf
+    permissions: '0600'
+    content: |
+      table inet guaranine {
+        set local_networks {
+          type ipv4_addr; flags interval;
+          elements = { 0.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 }
+        }
+        set lan4 { type ipv4_addr; flags interval; }
+        set lan6 { type ipv6_addr; flags interval; }
+        set connected_interfaces { type iface_index; }
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iifname "lo" accept
+          ct state established,related accept
+          udp sport 67 udp dport 68 accept
+          udp sport 547 udp dport 546 accept
+          ip6 hoplimit 255 icmpv6 type { nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+          ip6 hoplimit 1 ip6 saddr fe80::/10 icmpv6 type mld-listener-query accept
+          udp dport 41641 accept
+          iifname "tailscale0" tcp dport { 22, 9100 } accept
+        }
+        chain output {
+          type filter hook output priority -10; policy drop;
+          oifname { "lo", "tailscale0" } accept
+          meta mark & 0xff0000 == 0x80000 accept
+          meta skuid 0 udp sport 68 udp dport 67 accept
+          meta skuid 0 udp sport 546 udp dport 547 accept
+          ip6 hoplimit 255 icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept
+          ip6 hoplimit 1 icmpv6 type { mld-listener-report, mld-listener-done, mld2-listener-report } accept
+          meta l4proto { tcp, udp } th dport 53 accept
+          ip daddr @local_networks reject
+          ip daddr @lan4 reject
+          ip6 daddr { fc00::/7, fe80::/10, fec0::/10, ff00::/8 } reject
+          ip6 daddr @lan6 reject
+          meta oif @connected_interfaces accept
+        }
+        chain forward {
+          type filter hook forward priority -10; policy drop;
+        }
+      }
+  - path: /etc/systemd/system/guaranine-firewall.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Guaranine kiosk firewall
+      DefaultDependencies=no
+      After=local-fs.target
+      Before=network-pre.target
+      Wants=network-pre.target
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/sbin/nft -f /etc/guaranine/nftables.conf
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/NetworkManager.service.d/guaranine.conf
+    permissions: '0644'
+    content: |
+      [Unit]
+      Requires=guaranine-firewall.service
+      After=guaranine-firewall.service
+  - path: /etc/NetworkManager/dispatcher.d/20-guaranine-firewall
+    permissions: '0700'
+    content: |
+      #!/usr/bin/python3
+      import fcntl
+      import ipaddress
+      import json
+      import subprocess
+      import sys
+
+      if len(sys.argv) != 3 or not sys.argv[1].startswith(('eth', 'en')):
+          sys.exit(0)
+      if sys.argv[2] not in ('pre-up', 'up', 'pre-down', 'down', 'dhcp4-change', 'dhcp6-change'):
+          sys.exit(0)
+      with open('/run/guaranine-firewall.lock', 'w') as lock:
+          fcntl.flock(lock, fcntl.LOCK_EX)
+          try:
+              links = json.loads(subprocess.check_output(['ip', '-j', 'address', 'show']))
+              sets = {'lan4': set(), 'lan6': set(), 'connected_interfaces': set()}
+              for link in links:
+                  name = link['ifname']
+                  if not name.startswith(('eth', 'en')) or 'UP' not in link['flags']:
+                      continue
+                  if name == sys.argv[1] and sys.argv[2] in ('pre-down', 'down'):
+                      continue
+                  addresses = link.get('addr_info', [])
+                  for address in addresses:
+                      network = ipaddress.ip_network(f"{address['local']}/{address['prefixlen']}", strict=False)
+                      sets['lan4' if network.version == 4 else 'lan6'].add(str(network))
+                  if addresses:
+                      sets['connected_interfaces'].add(str(link['ifindex']))
+              commands = []
+              for name, values in sets.items():
+                  commands.append(f'flush set inet guaranine {name}')
+                  if values:
+                      commands.append(f'add element inet guaranine {name} {{ ' + ', '.join(sorted(values)) + ' }')
+              subprocess.run(['nft', '-f', '-'], input='\n'.join(commands) + '\n', text=True, check=True)
+          except Exception:
+              subprocess.run(['nft', 'flush', 'set', 'inet', 'guaranine', 'connected_interfaces'], check=True)
+              raise
+  - path: /etc/systemd/system/tailscaled.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Tailscale
+      Requires=guaranine-firewall.service
+      After=guaranine-firewall.service network.target
+      [Service]
+      RuntimeDirectory=tailscale
+      StateDirectory=tailscale
+      ExecStart=/usr/local/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+      ExecStopPost=/usr/local/sbin/tailscaled --cleanup
+      Restart=on-failure
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/guaranine-tailscale.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Configure Grafana kiosk Tailscale access
+      Requires=tailscaled.service
+      After=tailscaled.service network-online.target
+      Wants=network-online.target
+      StartLimitIntervalSec=0
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/bin/tailscale set --accept-dns=true --accept-routes=false --ssh=false
+      Restart=on-failure
+      RestartSec=10
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/ssh.service.d/guaranine.conf
+    permissions: '0644'
+    content: |
+      [Unit]
+      Requires=guaranine-firewall.service
+      After=guaranine-firewall.service
+  - path: /etc/ssh/sshd_config.d/20-guaranine.conf
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+      AllowUsers guaranine
+  - path: /etc/systemd/system/guaranine-node-exporter.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Prometheus host metrics
+      Requires=guaranine-firewall.service
+      After=guaranine-firewall.service
+      [Service]
+      User=nobody
+      Group=nogroup
+      ExecStart=/usr/local/bin/node_exporter --web.listen-address=:9100
+      Restart=on-failure
+      RestartSec=5
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/lightdm/lightdm.conf
+    permissions: '0644'
+    defer: true
+    content: |
+      [Seat:*]
+      autologin-user=kiosk
+      autologin-user-timeout=0
+      autologin-session=guaranine-kiosk
+      user-session=guaranine-kiosk
+      allow-guest=false
+      xserver-allow-tcp=false
+  - path: /etc/systemd/system/lightdm.service.d/guaranine.conf
+    permissions: '0644'
+    content: |
+      [Unit]
+      After=cloud-final.service
+  - path: /usr/share/xsessions/guaranine-kiosk.desktop
+    permissions: '0644'
+    content: |
+      [Desktop Entry]
+      Name=Grafana kiosk
+      Type=Application
+      Exec=/usr/local/bin/guaranine-display
+  - path: /usr/local/bin/guaranine-display
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      set -eu
+      xset s off
+      xset -dpms
+      xset s noblank
+      xsetroot -solid black
+      openbox --sm-disable &
+      systemctl --user import-environment DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
+      exec systemctl --user start --wait guaranine-kiosk.service
+  - path: /etc/systemd/user/guaranine-kiosk.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Grafana dashboard display
+      StartLimitIntervalSec=0
+      [Service]
+      ExecStart=/usr/local/bin/grafana-kiosk -c /home/kiosk/.config/guaranine-kiosk/config.yaml
+      Restart=always
+      RestartSec=10
+      RuntimeMaxSec=1d
+      TimeoutStopSec=15
+      KillMode=control-group
+      NoNewPrivileges=yes
+  - path: /etc/chromium/policies/managed/guaranine.json
+    permissions: '0644'
+    content: |
+      {"BrowserSignin": 0, "SyncDisabled": true, "PasswordManagerEnabled": false, "MetricsReportingEnabled": false, "URLBlocklist": ["*"], "URLAllowlist": ["https://monitoring.tail3a78b9.ts.net/*"]}
+runcmd:
+  - [sh, -c, "printf '#cloud-config\\n' > /boot/firmware/user-data"]
+  - [rm, -f, /etc/sudoers.d/010_pi-nopasswd, /etc/sudoers.d/010_wiz-nopasswd]
+  - [systemctl, mask, --now, userconfig.service]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, guaranine-firewall.service, tailscaled.service, guaranine-tailscale.service, guaranine-node-exporter.service, ssh.service]
+  - [systemctl, start, --no-block, guaranine-tailscale.service, guaranine-node-exporter.service]

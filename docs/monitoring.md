@@ -60,6 +60,8 @@ To move the volumes, stop their deployments and fence an unreachable old worker 
 
 ## Check collection
 
+The `grafana-pi` scrape job collects Node Exporter metrics from the standalone display. Its target address and egress exception live in [the monitoring manifest](../kubernetes/monitoring.yaml). These metrics are separate from Kubernetes node discovery and the cAdvisor-based node charts. Query `up{job="grafana-pi"}` in Explore to check collection; it becomes available after the Pi boots.
+
 ```bash
 kubectl -n monitoring get pods,pvc
 kubectl -n monitoring logs deployment/monitoring-proxy --tail=30
@@ -72,3 +74,20 @@ For scrape errors, temporarily forward `service/prometheus` to operator loopback
 Verified on 2026-11-13: all four deployments became Ready, all four Prometheus targets were up, and all eight dashboard queries returned data. Trusted HTTPS, the existing Grafana login and Secure/HttpOnly/SameSite cookies worked; anonymous dashboard access returned 401. Reapplication and proxy replacement preserved its tailnet identity, with the enrollment key removed and Funnel unavailable. Grafana reused its database and Prometheus retained earlier samples after pod replacement. Live probes confirmed permitted backend/API/HTTPS access for the proxy and denied Prometheus, exporter, kubelet and public HTTP access. A probe on the controller could not reach monitoring services or proxy health directly from another namespace. Earlier Grafana probes also confirmed its permitted Prometheus/DNS access and denied API, kubelet, exporter and public-internet access. Full OS reboot persistence was not tested.
 
 The components and permissions follow [Grafana provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/), [Prometheus Kubernetes discovery](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#kubernetes_sd_config), [Kubernetes kubelet authorization](https://kubernetes.io/docs/reference/access-authn-authz/kubelet-authn-authz/), and [Tailscale container configuration](https://tailscale.com/docs/features/containers/docker/docker-params).
+
+## Raspberry Pi dashboard display
+
+The Ethernet-connected Pi 2 Model B runs a dedicated native display session, independently of Kubernetes. [The OS profile](../kiosk/config.yaml) owns its users, browser supervision, screen settings, first-boot updates and service configuration. [The asset pins](../kiosk/versions.json) own the Raspberry Pi OS 32-bit image and prebuilt ARM binaries. [Setup](../SETUP.md#raspberry-pi-dashboard-display) owns the boot instructions; [security](security.md) owns enrollment, private media and network access.
+
+The session starts Chromium through the upstream Grafana Kiosk utility and opens the existing Guaranine dashboard. The `grafana-pi` Grafana account has the Viewer role. Browser sessions are restarted periodically to renew login and recover accumulated browser state. The display user has no sudo access; the separate `guaranine` account accepts the operator's SSH key.
+
+The protected operator directory's `kiosk/` contains the prepared image, individual device record, Viewer password, pinned SSH configuration and preparation logs. It is outside the checkout. Use its native SSH configuration after boot:
+
+```bash
+operator_dir="${GUARANINE_OPERATOR_DIR:-$HOME/.local/state/guaranine-kairos}"
+ssh -F "$operator_dir/kiosk/ssh_config" grafana-pi
+```
+
+Restart the display session with `sudo systemctl restart lightdm`. Check the connection and metric services with `sudo systemctl status tailscaled guaranine-tailscale guaranine-node-exporter`. Inspect browser logs with `sudo journalctl _UID=1000 _SYSTEMD_USER_UNIT=guaranine-kiosk.service --no-pager -n 50`. A complete OS hang still needs a local power cycle. The Pi automatically resumes the installed setup after power returns; the monitor must also be powered on and using the correct HDMI input.
+
+Software checks on 2026-11-15 verified upstream image and binary checksums, the edited ext4 filesystem, private configuration against the image's cloud-init schema, and execution of the ARM utilities under Cortex-A7 emulation. A headless browser on the operator computer automatically logged in as the Viewer and opened the dashboard. Packet tests loaded the actual Pi firewall and exercised IPv4/IPv6 LAN isolation, DNS, tailnet SSH/metrics, encrypted transport and interface down/up. Tailnet policy validation passed, and the prepared kiosk identity reached private Grafana. Physical Pi boot, monitor readability, browser/network/Grafana recovery and the 48-hour stability test remain pending.
