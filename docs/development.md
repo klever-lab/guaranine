@@ -31,7 +31,7 @@ uv run --no-project --with-requirements requirements.txt python scripts/test-fir
 
 ## Disposable image checks
 
-With privileged Docker access, `sudo`, `qemu-system-x86_64` and OVMF installed, run:
+With privileged Docker access, `sudo`, `qemu-system-x86_64`, `qemu-img` and OVMF installed, run:
 
 ```bash
 uv run --no-project --with-requirements requirements.txt python scripts/test-private-images.py

@@ -47,7 +47,7 @@ jobs:
         timeout-minutes: 5
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install --yes --no-install-recommends qemu-system-x86 ovmf
+          sudo apt-get install --yes --no-install-recommends qemu-system-x86 qemu-utils ovmf
           if test -c /dev/kvm; then
             sudo chmod a+rw /dev/kvm
           fi
