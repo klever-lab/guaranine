@@ -1,8 +1,8 @@
-# Public VHD recipe. The image source and private cloud-config are supplied at build time.
+# Public UEFI disk recipe; private cloud-config is supplied at build time.
 disable_http_server: true
 disable_netboot: true
 disable_iso: true
 disk:
-  vhd: true
+  efi: true
   boot_active: true
   size: "8192"

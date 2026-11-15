@@ -7,7 +7,7 @@ stages:
       commands:
         - udevadm trigger --action=change --subsystem-match=block && udevadm wait --timeout=30 --settle /dev/disk/by-label/COS_PERSISTENT
   initramfs:
-    - name: Configure the K3s server and retained data volume
+    - name: Configure the K3s server on native persistent storage
       files:
         - path: /etc/rancher/k3s/config.yaml.d/10-controlplane.yaml
           permissions: 0600
@@ -45,25 +45,15 @@ stages:
                     usernames: []
                     runtimeClasses: []
                     namespaces: [kube-system]
-        - path: /etc/systemd/system/var-lib-rancher-k3s.mount
-          permissions: 0644
-          content: |
-            [Unit]
-            Description=Retained K3s data
-            JobTimeoutSec=30
-            [Mount]
-            What=/dev/disk/by-label/GUARANINE_DATA
-            Where=/var/lib/rancher/k3s
-            Type=ext4
-            Options=defaults
         - path: /etc/systemd/system/k3s.service.d/role.conf
           permissions: 0644
           content: |
             [Unit]
-            BindsTo=var-lib-rancher-k3s.mount
-            After=var-lib-rancher-k3s.mount
+            RequiresMountsFor=/usr/local /var/lib/rancher
+            ConditionPathExists=/var/lib/rancher/k3s/.guaranine-ready
             [Service]
             Environment=K3S_ROLE=server
+            ExecStartPre=/bin/sh -ec 'persistent=$(findmnt -nro MAJ:MIN --mountpoint /usr/local); test -n "$persistent"; test "$(findmnt -nro MAJ:MIN --target /var/lib/rancher)" = "$persistent"'
       systemctl:
         enable: [k3s.service]
   boot:

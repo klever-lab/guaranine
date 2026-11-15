@@ -189,7 +189,7 @@ stages:
             ip=$(tailscale ip -4)
             test -n "$ip"
             if [ "$K3S_ROLE" = server ]; then
-              mountpoint -q /var/lib/rancher/k3s
+              mountpoint -q /var/lib/rancher
               install -Dm0600 /etc/rancher/k3s/network-policy.yaml /var/lib/rancher/k3s/server/manifests/guaranine-network.yaml
               exec /usr/bin/k3s server --node-ip "$ip"
             fi

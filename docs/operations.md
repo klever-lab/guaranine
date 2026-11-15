@@ -26,7 +26,7 @@ The USB confirmation identifies the selected drive, asks for `ERASE` and explain
 
 Incomplete builds preserve outputs and protected logs. Inspect them before revoking the batch key, archiving outputs and retrying. Failed subprocesses can also leave protected `error-*.log` files. Do not put diagnostic contents in public issues or logs. The CLI does not automatically repeat key-creation POSTs after ambiguous transport failures; inspect the live Tailscale state before retrying.
 
-`./guaranine controlplane` reuses a completed VHD under `nodes/guaranine-controlplane/` while its registration key is valid. An incomplete controller image needs inspection before another build. `bootstrap` refuses to overwrite an existing kubeconfig or `controlplane-known-hosts`; inspect those files instead of treating it as a repeatable repair command.
+`./guaranine controlplane` reuses a completed QCOW2 under `controller/` while its registration key is valid. An incomplete controller image needs inspection before another build. This directory is separate from the live Azure controller's saved files. `bootstrap` refuses to overwrite an existing kubeconfig or `controlplane-known-hosts`; inspect those files instead of treating it as a repeatable repair command.
 
 For worker retries, follow the [installation boundaries](../SETUP.md#install-a-worker), including the check after an interrupted remote install. [Enrollment limits](security.md#private-material-and-enrollment) explain why ending a batch does not retire its devices.
 
@@ -52,13 +52,17 @@ A disconnected machine may still be running. WAN disconnection is not fencing.
 
 Use [native K3s SQLite backup/restore](https://docs.k3s.io/datastore/backup-restore), including the server token. For a consistent full server-directory copy, briefly stop K3s, archive `server/` from the mounted `/var/lib/rancher/k3s`, and restart K3s in an `EXIT` trap. Stream the archive over pinned Tailscale SSH into a mode-0600 operator file.
 
-Back up operator configuration/keys, Terraform state and application volumes separately, outside the student subscription. Back up Terraform state after every apply. A retained disk is not an off-machine backup.
+Back up operator configuration/keys, Terraform state and application volumes separately, outside the cloud project. Back up Terraform state after every apply. Terraform deletion protection is not an off-machine backup. Take and verify a fresh export before deliberately rebuilding or deleting the OVH VM; its local root disk cannot follow a replacement VM.
 
 ## Restore on another cloud VM
 
-Fence the old server first. Boot the same prepared Kairos base on a replacement cloud VM, with fresh Tailscale registration if required. Keep K3s stopped while attaching and mounting the retained/restored `GUARANINE_DATA` volume. If the disk was lost, prepare an empty ext4 replacement with that label before restoring. Never initialize or format a volume containing recovery data.
+Boot the prepared Kairos base on a replacement cloud VM with its own Tailscale identity and fresh registration if required. The new controller joins the tailnet but its activation marker is absent, keeping K3s stopped. Verify native persistent storage and its console SSH fingerprint before transferring private state. Preserve the old server, its disks, Terraform state and operator endpoint during this preparation.
 
-Restore the server directory with K3s stopped and preserve the server token from the backup, then start K3s. Verify API health, worker connectivity and application data. Update both the kubeconfig endpoint and private `operator.yaml` endpoint for the replacement's tailnet address, and verify its SSH fingerprint through the protected console before replacing the pinned controller host key. Keep the old server fenced throughout recovery.
+Cutover interrupts the single-server control plane and requires explicit approval. Stop K3s on the old controller, disable its automatic restart and take the final consistent server-directory backup. Verify the export before changing anything else. Restore it under the new VM's `/var/lib/rancher/k3s` with K3s stopped, preserving the server token and existing cluster identity. Do not create a new empty cluster. The Azure source uses its existing mounted data volume; the OVH destination uses native Kairos persistence, with no extra disk to format.
+
+Keep the old server fenced. Create the destination's mode-0600 `/var/lib/rancher/k3s/.guaranine-ready` marker only after checking persistence and the restored state, then start K3s. Verify API health, worker reconnection, CPU/memory headroom and application continuity. Update both the kubeconfig and private `operator.yaml` endpoints, replace the pinned controller host key with the verified new key, and update each worker's saved and installed server endpoint over pinned Tailscale SSH before restarting its agent. Preserve the existing CA and tokens; changing the address does not require reinstalling workers.
+
+If validation fails, stop and fence the new server before restarting the old one and reverting endpoints. Retain the old VM and recovery copy until the migration and a separate rebuild/restore exercise have passed. Existing worker workloads may continue through an API interruption; this does not make controller replacement downtime-free. Do not destroy Azure resources or switch billing as part of staging.
 
 ## Migrate an older deployment
 

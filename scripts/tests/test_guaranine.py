@@ -224,8 +224,8 @@ class PrivateConfigTests(unittest.TestCase):
             role='controlplane', token='SERVER-SECRET', agent_token='AGENT-ONLY')
         self.assertEqual(server['hostname'], cli.role_config('controlplane')['hostname'])
         text = cli.cloud_yaml(server)
-        self.assertIn('GUARANINE_DATA', text)
-        self.assertIn('var-lib-rancher-k3s.mount', text)
+        self.assertNotIn('GUARANINE_DATA', text)
+        self.assertIn('ConditionPathExists=/var/lib/rancher/k3s/.guaranine-ready', text)
         self.assertIn('PodSecurityConfiguration', text)
         self.assertIn('restricted', text)
         self.assertNotIn('mkfs', text)
@@ -239,7 +239,7 @@ class PrivateConfigTests(unittest.TestCase):
         self.assertEqual(server_files[config['agent-token-file']]['content'], 'AGENT-ONLY\n')
         self.assertEqual(server_files[config['agent-token-file']]['permissions'], 0o600)
         self.assertEqual(set(config['disable']), {'traefik', 'servicelb', 'local-storage', 'metrics-server', 'gateway-api-crd'})
-        self.assertIn('BindsTo=var-lib-rancher-k3s.mount', server_files['/etc/systemd/system/k3s.service.d/role.conf']['content'])
+        self.assertIn('RequiresMountsFor=/usr/local /var/lib/rancher', server_files['/etc/systemd/system/k3s.service.d/role.conf']['content'])
         self.assertNotIn('node-name', common | config | join)
         self.assertNotIn('cluster-init', common | config)
         with self.assertRaises(ValueError):
@@ -1260,53 +1260,33 @@ efibootmgr() {
                   contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'identity not confirmed')):
                 with cli.verified_connection('100.64.0.8', self.root): self.fail('Unconfirmed SSH key accepted')
 
-    def test_data_disk_with_signatures_is_never_formatted(self):
-        disk = {'path': '/dev/vdb', 'size': 64 * 2**30, 'model': 'Fixture', 'serial': 'disk-b', 'tran': 'virtio'}
-        with (patch.object(cli, 'read_disks', return_value=[disk]), patch('builtins.input') as prompt,
-              patch.object(cli.questionary, 'select') as select,
-              patch.object(cli, 'private_command', side_effect=['', '{"signatures":[{"type":"xfs"}]}']) as command,
-              contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError)):
-            select.return_value.unsafe_ask.return_value = disk
-            cli.initialize_data(['ssh'], self.root)
-        prompt.assert_not_called()
-        self.assertFalse(any('mkfs' in str(call) for call in command.call_args_list))
-
-    def test_existing_data_label_is_reused_without_selection_or_formatting(self):
-        with (patch.object(cli, 'private_command', return_value='present') as command,
-              patch.object(cli.questionary, 'select') as select, patch('builtins.input') as prompt):
-            cli.initialize_data(['ssh'], self.root)
-        prompt.assert_not_called()
-        select.assert_not_called()
-        self.assertEqual(command.call_count, 1)
-
-    def test_data_disk_selection_cancels_before_signature_checks_or_formatting(self):
-        disk = {'path': '/dev/vdb', 'size': 64 * 2**30, 'model': 'Fixture', 'serial': 'disk-b', 'tran': 'virtio'}
-        for answer in (False, None):
-            with (self.subTest(answer=answer), patch.object(cli, 'read_disks', return_value=[disk]),
-                  patch.object(cli, 'private_command', return_value='') as command,
-                  patch.object(cli.questionary, 'select') as select, patch('builtins.input') as prompt,
-                  contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'initialization cancelled')):
-                select.return_value.unsafe_ask.return_value = answer
-                cli.initialize_data(['ssh'], self.root)
-            prompt.assert_not_called()
-            self.assertEqual(command.call_count, 1)
-            self.assertFalse(any('wipefs' in str(call) or 'mkfs' in str(call) for call in command.call_args_list))
-
-    def test_data_disk_signatures_are_checked_again_after_confirmation(self):
-        disk = {'path': '/dev/vdb', 'size': 64 * 2**30, 'model': 'Fixture', 'serial': 'disk-b', 'tran': 'virtio'}
-        for signatures in ('[]', '[{"type":"ext4"}]'):
-            replies = ['', '{"signatures":[]}', '{"signatures":' + signatures + '}', '']
-            with (self.subTest(signatures=signatures), patch.object(cli, 'read_disks', return_value=[disk]),
-                  patch.object(cli.questionary, 'select') as select,
-                  patch('builtins.input', return_value='INITIALIZE /dev/vdb'),
-                  patch.object(cli, 'private_command', side_effect=replies) as command,
-                  contextlib.redirect_stdout(io.StringIO())):
-                select.return_value.unsafe_ask.return_value = disk
-                if signatures == '[]':
-                    cli.initialize_data(['ssh'], self.root)
+    def test_new_controller_requires_confirmation_before_activation(self):
+        for answer in ('', 'no', 'INITIALIZE'):
+            with (self.subTest(answer=answer), patch('builtins.input', return_value=answer),
+                  patch.object(cli, 'private_command', return_value='') as command):
+                if answer == 'INITIALIZE':
+                    cli.initialize_controller(['ssh'], self.root)
                 else:
-                    with self.assertRaises(ValueError): cli.initialize_data(['ssh'], self.root)
-            self.assertEqual(any('mkfs' in str(call) for call in command.call_args_list), signatures == '[]')
+                    with self.assertRaisesRegex(ValueError, 'remains stopped'):
+                        cli.initialize_controller(['ssh'], self.root)
+            self.assertEqual(command.call_count, 2 if answer == 'INITIALIZE' else 1)
+            self.assertFalse(any('mkfs' in str(call) for call in command.call_args_list))
+
+    def test_restored_controller_activates_without_creating_a_new_cluster(self):
+        with (patch.object(cli, 'private_command', return_value='restored') as command,
+              patch('builtins.input') as prompt):
+            cli.initialize_controller(['ssh'], self.root)
+        prompt.assert_not_called()
+        self.assertIn('server/db/state.db', command.call_args_list[0].args[0][-1])
+        self.assertIn('.guaranine-ready', command.call_args_list[1].args[0][-1])
+        self.assertFalse(any('mkfs' in str(call) or 'rm ' in str(call) for call in command.call_args_list))
+
+    def test_controller_persistence_failure_prevents_activation(self):
+        with (patch.object(cli, 'private_command', side_effect=ValueError('Persistence not mounted')) as command,
+              patch('builtins.input') as prompt, self.assertRaisesRegex(ValueError, 'Persistence')):
+            cli.initialize_controller(['ssh'], self.root)
+        self.assertEqual(command.call_count, 1)
+        prompt.assert_not_called()
 
     def test_disk_inventory_excludes_boot_usb_readonly_and_nested_mounts(self):
         good = {'path': '/dev/vdb', 'type': 'disk', 'size': 64 * 2**30, 'ro': False, 'mountpoints': []}

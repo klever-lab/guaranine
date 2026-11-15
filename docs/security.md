@@ -23,7 +23,7 @@ Before applying it, back up the live policy outside the checkout. Use the standa
 
 Tailscale uses kernel networking and persistent identity, with subnet-route acceptance, Tailscale SSH and host DNS changes disabled. K3s uses Tailscale node addresses and binds Flannel to `tailscale0`; Flannel derives its MTU from that interface. Administration, API, kubelet and cross-node pod traffic use the tailnet. Private Azure/LAN addresses are never cluster endpoints. Other operator VPNs must preserve the `100.64.0.0/10` routes.
 
-The Azure NSG denies physical inbound access and direct VNet egress. Its public IPv4 provides explicit internet egress for Tailscale/DERP and downloads; it is not an SSH or Kubernetes endpoint. Real direct/relayed paths, reconnects and temporary WAN outages still need live-network verification.
+The OVH security group permits inbound UDP 41641 for encrypted Tailscale transport; SSH and the Kubernetes API are reachable only over the tailnet. The host firewall still rejects direct private/LAN traffic. The VM's public interface supplies internet access for Tailscale/DERP and downloads. The existing Azure NSG remains unchanged during staging. Real direct/relayed paths, reconnects and temporary WAN outages still need live-network verification.
 
 ## LAN isolation
 

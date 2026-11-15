@@ -6,7 +6,7 @@ Use the arrow keys and Enter in selection menus. Cancel or Skip is selected init
 
 ## Prerequisites
 
-Install Git, Python 3.12+, `uv`, Docker, `sudo`, OpenSSH client tools, Tailscale and `nmcli`. Building images needs privileged Docker access and space for uncompressed disk images. USB flashing uses sudo. Azure needs the Terraform version in [.terraform-version](.terraform-version), Azure CLI, AzCopy and `qemu-img`. Use a `kubectl` version matching K3s in [kairos/versions.json](kairos/versions.json).
+Install Git, Python 3.12+, `uv`, Docker, `sudo`, OpenSSH client tools, Tailscale, `nmcli`, `qemu-img` and the Terraform version in [.terraform-version](.terraform-version). Building images needs privileged Docker access and space for uncompressed disk images. USB flashing uses sudo. Use a `kubectl` version matching K3s in [kairos/versions.json](kairos/versions.json).
 
 Before building laptop media, read the [hardware inventory, network requirements and qualification limits](docs/hardware.md). Before replacing an existing deployment, complete the [migration prerequisites](docs/operations.md#migrate-an-older-deployment).
 
@@ -36,9 +36,16 @@ Apply the [tailnet policy](docs/security.md#tailnet-policy) before starting node
 
 ## Cloud preflight
 
-Before provisioning, check your Azure for Students subscription, remaining credit, expiry, spending limit, region/SKU availability, quota and total cost. Do not apply with unknown credit/cost/quota or use an automatic paid fallback. Keep existing Azure services separate.
+Before provisioning, check the OVH Public Cloud project's region, d2-2 availability, quota and CAD hourly cost. Monthly billing is a later, deliberate change. Keep the running Azure controller and its Terraform state separate until migration is approved.
 
-Check the [controller resources](docs/architecture.md#controller-resources) and your Terraform variables. Include compute, both disks, image/upload storage, public IPv4 and outbound traffic. Stopped VMs can still incur disk/image/IP costs.
+Check the [controller resources and disk limits](docs/architecture.md#controller-resources). Include compute, private image storage, public IPv4 and outbound traffic in the estimate. Stopped resources can still incur charges.
+
+Create a project-scoped OpenStack user with Compute Operator, Image Operator, Network Operator and Network Security Operator roles. Save its credentials in a mode-0600 `ovh-clouds.yaml` under the operator directory, following the [standard OpenStack clouds.yaml format](https://docs.openstack.org/openstacksdk/latest/user/config/configuration.html). Name the cloud `guaranine`, use password authentication and select the actual catalog region (`BHS5` for this deployment), which can differ from an older OpenRC region label. Keep passwords out of Terraform variables and the checkout.
+
+```bash
+export OS_CLIENT_CONFIG_FILE="$GUARANINE_OPERATOR_DIR/ovh-clouds.yaml"
+export OS_CLOUD=guaranine
+```
 
 ## Controller image and Terraform
 
@@ -46,48 +53,33 @@ Check the [controller resources](docs/architecture.md#controller-resources) and 
 ./guaranine controlplane
 ```
 
-The VHD is in `nodes/guaranine-controlplane/image/` under the operator directory. Check its fixed-VHD format and record its byte length and SHA-256:
+The private QCOW2 is in `controller/image/` under the operator directory. Check its format and record its SHA-256:
 
 ```bash
-controller_vhd="$GUARANINE_OPERATOR_DIR/nodes/guaranine-controlplane/image/guaranine-kairos.vhd"
-qemu-img info -f vpc "$controller_vhd"
-stat --format=%s "$controller_vhd"
-sha256sum "$controller_vhd"
+controller_image="$GUARANINE_OPERATOR_DIR/controller/image/guaranine-kairos.qcow2"
+qemu-img info -f qcow2 "$controller_image"
+sha256sum "$controller_image"
 ```
 
 For incomplete or expired builds, follow [image batches and retries](docs/operations.md#image-batches-and-retries).
 
-Copy the [image example](infra/azure/image/terraform.tfvars.example) to `$GUARANINE_OPERATOR_DIR/image.tfvars` and the [coordinator example](infra/azure/coordinator/terraform.tfvars.example) to `$GUARANINE_OPERATOR_DIR/coordinator.tfvars`. Fill in your values. For upload, use `image_ready = false`, the VHD's actual size/hash and a unique `guaranine-kairos-...` name. Changed image contents need their own state file.
+Copy the [OVH example](infra/ovh/terraform.tfvars.example) to `$GUARANINE_OPERATOR_DIR/ovh.tfvars`. Set the region, absolute image path and its actual SHA-256. Terraform uploads the image privately and boots it directly; no temporary Ubuntu VM or public provisioning ports are required.
 
 Keep local Terraform state on protected operator storage with [off-machine backups](docs/operations.md#backup). Use one operator at a time. Review every saved plan before applying it.
 
 ```bash
 mkdir -p "$GUARANINE_OPERATOR_DIR/terraform"
-export TF_DATA_DIR="$GUARANINE_OPERATOR_DIR/terraform/image-cache"
-terraform -chdir=infra/azure/image init -lockfile=readonly \
-  -backend-config="path=$GUARANINE_OPERATOR_DIR/terraform/image.tfstate"
-terraform -chdir=infra/azure/image plan -var-file="$GUARANINE_OPERATOR_DIR/image.tfvars" \
-  -out="$GUARANINE_OPERATOR_DIR/image.tfplan"
-terraform -chdir=infra/azure/image show "$GUARANINE_OPERATOR_DIR/image.tfplan"
-terraform -chdir=infra/azure/image apply "$GUARANINE_OPERATOR_DIR/image.tfplan"
+export TF_DATA_DIR="$GUARANINE_OPERATOR_DIR/terraform/ovh-cache"
+terraform -chdir=infra/ovh init -lockfile=readonly \
+  -backend-config="path=$GUARANINE_OPERATOR_DIR/terraform/ovh.tfstate"
+terraform -chdir=infra/ovh plan -var-file="$GUARANINE_OPERATOR_DIR/ovh.tfvars" \
+  -out="$GUARANINE_OPERATOR_DIR/ovh.tfplan"
+terraform -chdir=infra/ovh show "$GUARANINE_OPERATOR_DIR/ovh.tfplan"
+terraform -chdir=infra/ovh apply "$GUARANINE_OPERATOR_DIR/ovh.tfplan"
+terraform -chdir=infra/ovh plan -var-file="$GUARANINE_OPERATOR_DIR/ovh.tfvars" -detailed-exitcode
 ```
 
-The first apply creates upload staging. Get `upload_disk_id` and follow the [Azure direct-upload procedure](https://learn.microsoft.com/azure/virtual-machines/linux/disks-upload-vhd-to-managed-disk-cli): grant a short-lived write SAS, upload the exact VHD with AzCopy, then revoke disk access in an `EXIT` trap, including on failure. Keep shell tracing off and AzCopy logs/job plans private. Keep SAS values and image contents out of Terraform state.
-
-Set `image_ready = true` and repeat plan/show/apply to close export access. Copy the `source_disk_id` output to `coordinator.tfvars`; use `name_prefix = "guaranine-kairos"` for the new deployment.
-
-```bash
-export TF_DATA_DIR="$GUARANINE_OPERATOR_DIR/terraform/coordinator-cache"
-terraform -chdir=infra/azure/coordinator init -lockfile=readonly \
-  -backend-config="path=$GUARANINE_OPERATOR_DIR/terraform/coordinator.tfstate"
-terraform -chdir=infra/azure/coordinator plan -var-file="$GUARANINE_OPERATOR_DIR/coordinator.tfvars" \
-  -out="$GUARANINE_OPERATOR_DIR/coordinator.tfplan"
-terraform -chdir=infra/azure/coordinator show "$GUARANINE_OPERATOR_DIR/coordinator.tfplan"
-terraform -chdir=infra/azure/coordinator apply "$GUARANINE_OPERATOR_DIR/coordinator.tfplan"
-terraform -chdir=infra/azure/coordinator plan -var-file="$GUARANINE_OPERATOR_DIR/coordinator.tfvars" -detailed-exitcode
-```
-
-Confirm the final plan shows no changes. Keep the `handoff` output with the VM and disk IDs.
+Confirm the final plan shows no changes. Keep the `handoff` output with the cloud resource IDs. The new VM joins Tailscale with K3s stopped. If replacing the running controller, stop here and follow [migration and recovery](docs/operations.md#restore-on-another-cloud-vm) after approval for cutover.
 
 ## Bootstrap the controller
 
@@ -97,7 +89,7 @@ After the VM registers with Tailscale, verify its tailnet IPv4 address and run:
 ./guaranine bootstrap
 ```
 
-Compare the displayed SSH fingerprint with the protected VM console and enter `yes` if they match. For a new deployment, choose the NEW EMPTY retained data disk and type `INITIALIZE /dev/DISK` using its device path. Disks with filesystem signatures are refused. For an existing cluster, follow the [restore procedure](docs/operations.md#restore-on-another-cloud-vm) to reuse the retained/restored `GUARANINE_DATA` volume without formatting it.
+Compare the displayed SSH fingerprint with the protected VM console and enter `yes` if they match. For a new deployment, type `INITIALIZE` to create a NEW EMPTY cluster on native Kairos persistent storage. For an existing cluster, follow the [restore procedure](docs/operations.md#restore-on-another-cloud-vm) first. Bootstrap refuses to overwrite an existing kubeconfig or pinned controller key; it is not the migration command.
 
 Bootstrap waits for Ready, saves the kubeconfig and pinned server host key, and records the Tailscale endpoint in `operator.yaml`.
 

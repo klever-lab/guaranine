@@ -200,7 +200,11 @@ def fixture(role=None):
                          'lsblk -o NAME,SIZE,TYPE,LABEL,PARTLABEL > /dev/ttyS0; blkid > /dev/ttyS0; '
                          'cat /oem/01_layout.yaml > /dev/ttyS0'],
         }]
-        checks += ['! mountpoint -q /var/lib/rancher/k3s', '! systemctl is-active --quiet k3s']
+        checks += ['mountpoint -q /var/lib/rancher',
+                   'test "$(findmnt -nro MAJ:MIN --target /var/lib/rancher/k3s)" = '
+                   '"$(findmnt -nro MAJ:MIN --mountpoint /usr/local)"',
+                   '! test -e /var/lib/rancher/k3s/.guaranine-ready',
+                   '! systemctl is-active --quiet k3s']
     elif role == 'worker':
         checks += ['! test -f /run/cos/live_mode', 'test "$(hostname)" = fixture-worker',
                    '! test -e /run/guaranine-tailscale-live.env',
@@ -278,7 +282,8 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
         stream.truncate(16 * 1024**3)
         stream.write(b'DISPOSABLE DATA MUST SURVIVE UNAUTHORIZED BOOT\n')
     before = None if install else cli.digest(disk)
-    command = ['qemu-system-x86_64', *acceleration, '-m', '2048', '-smp', '2', '-display', 'none',
+    memory, cores = ('2000', '1') if image.suffix == '.qcow2' else ('2048', '2')
+    command = ['qemu-system-x86_64', *acceleration, '-m', memory, '-smp', cores, '-display', 'none',
                '-serial', 'stdio', '-monitor', 'none', '-uuid', f'00000000-0000-4000-8000-{number:012}',
                '-netdev', 'user,id=n0,restrict=on', '-device', 'virtio-net-pci,netdev=n0']
     command += ['-fsdev', f'local,id=wifi,path={directory / "wifi-tools"},security_model=none,readonly=on',
@@ -289,15 +294,15 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
         pairs = [code for root in ('/usr/share/OVMF', '/usr/share/edk2/x64') for code in Path(root).glob('*CODE*.fd')
                  if 'secboot' not in code.resolve().name and Path(str(code).replace('CODE', 'VARS')).exists()]
         if not pairs:
-            raise ValueError('Install OVMF to boot the Gen2 VHD fixture')
+            raise ValueError('Install OVMF to boot the UEFI controller fixture')
         code = pairs[0]
         variables = firmware or directory / f'uefi-{number}.fd'
         if not variables.exists():
             shutil.copyfile(Path(str(code).replace('CODE', 'VARS')), variables)
         command += ['-drive', f'if=pflash,format=raw,readonly=on,file={code}',
                     '-drive', f'if=pflash,format=raw,file={variables}']
-    if image.suffix == '.vhd':
-        command += ['-drive', f'file={image},format=vpc,if=virtio']
+    if image.suffix == '.qcow2':
+        command += ['-drive', f'file={image},format=qcow2,if=virtio']
     elif image.suffix == '.iso':
         command += ['-device', 'ich9-usb-ehci1,id=usb',
                     '-drive', f'if=none,id=installer,file={image},format=raw,readonly=on',
@@ -367,11 +372,11 @@ def main():
                 iso.unlink()
                 print('Live suite passed: BIOS, legacy CPU and UEFI boots have distinct SSH identities.', flush=True)
             if suite in ('all', 'controller'):
-                with timed('Controller VHD build'):
-                    vhd = cli.build_image(fixture('controlplane'), 'vhd', directory / 'vhd', source)
-                boot(vhd, directory, 4, uefi=True)
-                vhd.unlink()
-                print('Controller suite passed: missing data kept K3s stopped.', flush=True)
+                with timed('Controller QCOW2 build'):
+                    controller = cli.build_image(fixture('controlplane'), 'qcow2', directory / 'controller', source)
+                boot(controller, directory, 4, uefi=True)
+                controller.unlink()
+                print('Controller suite passed: native persistent storage mounted; unactivated K3s stayed stopped.', flush=True)
             if suite in ('all', 'worker-bios', 'worker-uefi'):
                 # Only this disposable fixture authorizes installation onto its QEMU disk.
                 installer = fixture()
@@ -396,7 +401,7 @@ def main():
         except Exception:
             # This harness creates disposable credentials only. Keep failed CI diagnosable.
             logs = [*directory.glob('error-*.log'), *directory.glob('boot-*.log'),
-                    directory / 'iso/build.log', directory / 'vhd/build.log', directory / 'install/build.log',
+                    directory / 'iso/build.log', directory / 'controller/build.log', directory / 'install/build.log',
                     directory / 'wifi-tools.log']
             for log in logs:
                 if log.exists():

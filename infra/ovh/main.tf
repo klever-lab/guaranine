@@ -1,0 +1,157 @@
+terraform {
+  required_version = "= 1.17.1"
+
+  required_providers {
+    openstack = {
+      source  = "terraform-provider-openstack/openstack"
+      version = "= 3.4.0"
+    }
+  }
+
+  backend "local" {}
+}
+
+# Standard clouds.yaml / OS_* authentication; credentials never enter variables.
+provider "openstack" {}
+
+variable "region" {
+  description = "Exact region from the project's OpenStack service catalog, such as BHS5."
+  type        = string
+}
+
+variable "image_path" {
+  description = "Protected local Kairos QCOW2 produced by ./guaranine controlplane."
+  type        = string
+
+  validation {
+    condition     = startswith(var.image_path, "/") && endswith(var.image_path, ".qcow2")
+    error_message = "Supply an absolute path to the private QCOW2 outside the checkout."
+  }
+}
+
+variable "image_sha256" {
+  description = "SHA-256 of the exact private image reviewed before deployment."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{64}$", var.image_sha256))
+    error_message = "Supply the image's lowercase SHA-256 digest."
+  }
+}
+
+data "openstack_compute_flavor_v2" "controller" {
+  region = var.region
+  name   = "d2-2"
+}
+
+data "openstack_networking_network_v2" "public" {
+  region   = var.region
+  name     = "Ext-Net"
+  external = true
+}
+
+resource "openstack_images_image_v2" "controller" {
+  region           = var.region
+  name             = "guaranine-controller-${substr(var.image_sha256, 0, 12)}"
+  local_file_path  = var.image_path
+  container_format = "bare"
+  disk_format      = "qcow2"
+  visibility       = "private"
+  verify_checksum  = true
+  min_disk_gb      = 25
+  min_ram_mb       = 2000
+
+  properties = {
+    architecture     = "x86_64"
+    hw_firmware_type = "uefi"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = try(filesha256(var.image_path) == var.image_sha256, false)
+      error_message = "The private image must exist and match its reviewed SHA-256."
+    }
+  }
+}
+
+resource "openstack_networking_secgroup_v2" "controller" {
+  region               = var.region
+  name                 = "guaranine-controller"
+  description          = "Only encrypted Tailscale transport is reachable publicly."
+  delete_default_rules = true
+}
+
+resource "openstack_networking_secgroup_rule_v2" "tailscale" {
+  for_each          = toset(["IPv4", "IPv6"])
+  region            = var.region
+  security_group_id = openstack_networking_secgroup_v2.controller.id
+  direction         = "ingress"
+  ethertype         = each.value
+  protocol          = "udp"
+  port_range_min    = 41641
+  port_range_max    = 41641
+  remote_ip_prefix  = each.value == "IPv4" ? "0.0.0.0/0" : "::/0"
+}
+
+# Native host nftables still rejects direct private/LAN egress and limits DNS/DHCP.
+resource "openstack_networking_secgroup_rule_v2" "egress" {
+  for_each          = toset(["IPv4", "IPv6"])
+  region            = var.region
+  security_group_id = openstack_networking_secgroup_v2.controller.id
+  direction         = "egress"
+  ethertype         = each.value
+  remote_ip_prefix  = each.value == "IPv4" ? "0.0.0.0/0" : "::/0"
+}
+
+resource "openstack_networking_port_v2" "controller" {
+  region                = var.region
+  name                  = "guaranine-controller"
+  network_id            = data.openstack_networking_network_v2.public.id
+  security_group_ids    = [openstack_networking_secgroup_v2.controller.id]
+  port_security_enabled = true
+  admin_state_up        = true
+}
+
+# OpenStack-created instances start on hourly billing. Monthly billing is a
+# separate follow-up; booting this image does not start the restored K3s server.
+resource "openstack_compute_instance_v2" "controller" {
+  region              = var.region
+  name                = "guaranine-controlplane"
+  flavor_id           = data.openstack_compute_flavor_v2.controller.id
+  image_id            = openstack_images_image_v2.controller.id
+  config_drive        = false
+  stop_before_destroy = true
+
+  network {
+    port = openstack_networking_port_v2.controller.id
+  }
+
+  metadata = {
+    project    = "guaranine"
+    managed_by = "terraform"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+    # image_id changes otherwise rebuild the root disk in place, bypassing
+    # prevent_destroy. Kairos owns installed OS updates instead.
+    ignore_changes = [image_id]
+  }
+
+  depends_on = [
+    openstack_networking_secgroup_rule_v2.tailscale,
+    openstack_networking_secgroup_rule_v2.egress,
+  ]
+}
+
+output "handoff" {
+  description = "Cloud inventory only; discover and verify the Tailscale SSH address separately."
+  value = {
+    instance_id = openstack_compute_instance_v2.controller.id
+    region      = var.region
+    flavor      = data.openstack_compute_flavor_v2.controller.name
+    image_id    = openstack_compute_instance_v2.controller.image_id
+    port_id     = openstack_networking_port_v2.controller.id
+    transport   = "tailscale"
+  }
+}

@@ -425,6 +425,8 @@ def build_base(directory):
 
 def build_image(config, image_format, directory, source):
     """Run the pinned upstream builder offline. Private config only enters stdin."""
+    if image_format not in ('iso', 'qcow2'):
+        raise ValueError('Use iso or qcow2 image format')
     live_cmdline = role_config('worker')['install']['grub_options']['extra_cmdline']
     directory = output_directory(directory)
     log = directory / 'build.log'
@@ -460,12 +462,18 @@ fi
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
         if result.returncode:
             raise ValueError(f'Kairos build failed (exit {result.returncode}). Private log: {log}')
-        suffix = '.iso' if image_format == 'iso' else '.vhd'
+        suffix = '.iso' if image_format == 'iso' else '.raw'
         images = list((Path(scratch) / 'images').glob('*' + suffix))
         if len(images) != 1 or images[0].is_symlink() or not images[0].is_file() or images[0].stat().st_size <= 0:
             raise ValueError('The upstream builder must return exactly one nonempty regular image')
         images[0].chmod(0o600)
-        image = images[0].rename(directory / ('guaranine-kairos' + suffix))
+        if image_format == 'qcow2':
+            image = directory / 'guaranine-kairos.qcow2'
+            private_command(['qemu-img', 'convert', '-f', 'raw', '-O', 'qcow2', str(images[0]), str(image)],
+                            directory, timeout=600)
+            image.chmod(0o600)
+        else:
+            image = images[0].rename(directory / ('guaranine-kairos' + suffix))
     return image
 
 
@@ -566,9 +574,9 @@ def prepare_iso(_args):
 def prepare_controlplane(_args):
     directory = operator_directory()
     settings = operator_settings()
-    node = directory / 'nodes' / role_config('controlplane')['hostname']
+    node = directory / 'controller'
     key, config_path = node / 'tailscale-key.json', node / 'config.yaml'
-    image = node / 'image/guaranine-kairos.vhd'
+    image = node / 'image/guaranine-kairos.qcow2'
     if image.exists():
         auth_record(key)
         protected(image)
@@ -589,10 +597,11 @@ def prepare_controlplane(_args):
             private_write(config_path, cloud_yaml(config))
         else:
             config = yaml.safe_load(protected(config_path).read_text())
-        image = build_image(config, 'vhd', node / 'image', source)
+        image = build_image(config, 'qcow2', node / 'image', source)
         auth_record(key)
-    print(f'Controller VHD ready: {image}')
-    print('Azure is unchanged. Prepare the K3s data volume separately.')
+    print(f'Controller QCOW2 ready: {image}')
+    print(f'Image SHA-256: {digest(image)}')
+    print('The new VM will join Tailscale with K3s stopped until state is restored or initialization is confirmed.')
 
 
 def ssh_command(address, hosts):
@@ -688,34 +697,16 @@ def check_install_labels(connection, directory, selected):
         pending.extend(disk.get('children', []))
 
 
-def initialize_data(connection, directory):
-    present = private_command([*connection,
-        'test ! -e /dev/disk/by-label/GUARANINE_DATA || printf present'], directory)
-    if present == 'present':
-        return
-    disks = read_disks(connection, directory)
-    if not disks:
-        raise ValueError('No unmounted K3s data disk found; attach the retained disk before bootstrap')
-    selected = questionary.select('NEW EMPTY retained data disk', choices=[
-        questionary.Choice('Cancel', value=False),
-        *[questionary.Choice(f'{disk["path"]} | {disk["size"] / 2**30:.1f} GiB | '
-                            f'{disk["model"] or "Unknown model"} | {disk["serial"] or "No serial"}', value=disk)
-          for disk in disks],
-    ]).unsafe_ask()
-    if not selected:
-        raise ValueError('Data disk initialization cancelled')
-    disk = selected['path']
-    signatures = json.loads(private_command([*connection, 'wipefs --no-act --json ' + shlex.quote(disk)], directory))
-    if signatures.get('signatures'):
-        raise ValueError('The disk contains existing signatures; restore or attach a NEW EMPTY disk instead')
-    if input(f'Type INITIALIZE {disk} to format that empty disk for K3s: ').strip() != 'INITIALIZE ' + disk:
-        raise ValueError('Data disk initialization cancelled')
-    if selected not in read_disks(connection, directory):
-        raise ValueError('The selected data disk changed; nothing was formatted')
-    signatures = json.loads(private_command([*connection, 'wipefs --no-act --json ' + shlex.quote(disk)], directory))
-    if signatures.get('signatures'):
-        raise ValueError('The data disk acquired filesystem signatures; nothing was formatted')
-    private_command([*connection, 'mkfs.ext4 -L GUARANINE_DATA -- ' + shlex.quote(disk)], directory)
+def initialize_controller(connection, directory):
+    """Keep a staged controller stopped until new-cluster or restored-state activation."""
+    existing = private_command([*connection, 'persistent=$(findmnt -nro MAJ:MIN --mountpoint /usr/local) && '
+        'test -n "$persistent" && test "$(findmnt -nro MAJ:MIN --target /var/lib/rancher)" = "$persistent" && '
+        'if test -s /var/lib/rancher/k3s/server/db/state.db; then printf restored; fi'], directory)
+    if existing != 'restored':
+        if input('Type INITIALIZE to create a NEW EMPTY cluster: ').strip() != 'INITIALIZE':
+            raise ValueError('Controller initialization cancelled; K3s remains stopped')
+    private_command([*connection, 'install -d -m0700 /var/lib/rancher/k3s && '
+        'install -m0600 /dev/null /var/lib/rancher/k3s/.guaranine-ready'], directory)
 
 
 def bootstrap(_args):
@@ -727,7 +718,7 @@ def bootstrap(_args):
         raise ValueError('kubeconfig or controlplane-known-hosts already exists; inspect before rerunning bootstrap')
     address = tailnet_ip(input('Controller Tailscale IPv4 address: ').strip())
     with verified_connection(address, directory) as (connection, hosts):
-        initialize_data(connection, directory)
+        initialize_controller(connection, directory)
         private_command([*connection, 'systemctl start --no-block k3s.service'], directory)
         raw = private_command([*connection, 'timeout 180 sh -ec \'until k3s kubectl wait --for=condition=Ready '
             f'node/{name} --timeout=10s >/dev/null 2>&1; '
@@ -1063,7 +1054,7 @@ def main(argv=None):
     iso = commands.add_parser('iso', help='Build or update the laptop ISO; optionally flash a USB')
     iso.add_argument('--rebuild', action='store_true', help='Rebuild even if the source is unchanged')
     iso.set_defaults(action=prepare_iso)
-    commands.add_parser('controlplane', help='Build or reuse the Azure VHD').set_defaults(action=prepare_controlplane)
+    commands.add_parser('controlplane', help='Build or reuse the staged controller QCOW2').set_defaults(action=prepare_controlplane)
     commands.add_parser('bootstrap', help='Start the cloud controller and save its kubeconfig').set_defaults(action=bootstrap)
     worker = commands.add_parser('worker', help='Add or forget a worker')
     worker.add_argument('--wait', metavar='NAME', help='Wait for Ready without reinstalling')

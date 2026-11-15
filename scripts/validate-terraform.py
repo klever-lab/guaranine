@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Exercise the real Terraform CLI and provider schema, without Azure access."""
+"""Exercise Terraform provider schemas and lifecycle guards without cloud access."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -84,6 +85,18 @@ def check_lifecycle_plans(events, name):
         and all(change["actions"] == ["no-op"] for change in unchanged["output_changes"].values()),
         f"An unchanged {name} deployment must produce no resource or output changes",
     )
+    if name == "ovh":
+        replacement = {
+            change["address"]: change["change"]["actions"]
+            for change in plans.get("replace_image_keep_vm", {}).get("resource_changes", [])
+        }
+        require(
+            replacement.get("openstack_images_image_v2.controller") == ["delete", "create"]
+            and replacement.get("openstack_compute_instance_v2.controller") == ["no-op"],
+            "Replacing the seed image must not rebuild or replace the installed OVH VM",
+        )
+        print("  unchanged infrastructure: no changes; seed image replacement: VM unchanged", flush=True)
+        return
     if name == "image":
         print(f"  unchanged {name} infrastructure: no changes", flush=True)
         return
@@ -100,7 +113,7 @@ def check_lifecycle_plans(events, name):
     print("  unchanged deployment: no changes; VM replacement: boot and data disks retained", flush=True)
 
 
-def check_disk_guard(root, env):
+def check_disk_guard(root, env, name):
     result, events = test_events(root, env, "-test-directory=guard-tests", check=False)
     errors = [
         event["diagnostic"]
@@ -112,16 +125,18 @@ def check_disk_guard(root, env):
         for event in events
         if event["type"] == "test_run" and event["test_run"]["progress"] == "complete"
     }
+    resource = "openstack_compute_instance_v2.controller" if name == "ovh" else "azurerm_managed_disk.coordinator_data"
+    run_name = "refuse_vm_replacement" if name == "ovh" else "refuse_disk_replacement"
     require(
         result.returncode == 1
         and completed.get("seed_mock_state") == "pass"
-        and completed.get("refuse_disk_replacement") == "error"
+        and completed.get(run_name) == "error"
         and len(errors) == 1
         and errors[0]["summary"] == "Instance cannot be destroyed"
-        and "azurerm_managed_disk.coordinator_data has lifecycle.prevent_destroy" in errors[0]["detail"],
+        and resource + " has lifecycle.prevent_destroy" in errors[0]["detail"],
         "Persistent disk deletion guard did not produce exactly the expected refusal:\n" + result.stdout,
     )
-    print("  persistent disk replacement: refused by Terraform prevent_destroy", flush=True)
+    print(f"  {resource} replacement: refused by Terraform prevent_destroy", flush=True)
 
 
 
@@ -131,7 +146,7 @@ def main():
     # CLI flags, logs and backend/workspace configuration from the test process.
     env = {
         key: value for key, value in os.environ.items()
-        if not key.startswith(("ARM_", "AZURE_", "TF_"))
+        if not key.startswith(("ARM_", "AZURE_", "TF_", "OS_", "OVH_"))
     }
     env.update(TF_IN_AUTOMATION="1", CHECKPOINT_DISABLE="1")
     with tempfile.TemporaryDirectory(prefix="guaranine-terraform-") as directory:
@@ -145,10 +160,16 @@ def main():
             TF_PLUGIN_CACHE_DIR=str(scratch / "plugins"),
             TF_CLI_CONFIG_FILE=str(scratch / "terraform.rc"),
         )
-        for name in ("image", "coordinator"):
+        for name, source in (("image", "infra/azure/image"), ("coordinator", "infra/azure/coordinator"),
+                             ("ovh", "infra/ovh")):
             print(f"Terraform {name}: format, init, validate and mock tests", flush=True)
             root = scratch / name
-            copy_configuration(REPOSITORY / "infra/azure" / name, root)
+            copy_configuration(REPOSITORY / source, root)
+            if name == "ovh":
+                image = scratch / "fixture.qcow2"
+                image.write_bytes(b"DISPOSABLE IMAGE FOR MOCKED TERRAFORM TESTS")
+                env["TF_VAR_image_path"] = str(image)
+                env["TF_VAR_image_sha256"] = hashlib.sha256(image.read_bytes()).hexdigest()
             env["TF_DATA_DIR"] = str(scratch / f"{name}-data")
             terraform(root, env, "fmt", "-check", "-recursive", "-no-color")
             terraform(root, env, "init", "-backend=false", "-input=false", "-lockfile=readonly", "-no-color")
@@ -159,8 +180,8 @@ def main():
                     require(event["test_summary"]["status"] == "pass", "Terraform tests did not pass")
                     print("  " + event["@message"], flush=True)
             check_lifecycle_plans(events, name)
-            if name == "coordinator":
-                check_disk_guard(root, env)
+            if name in ("coordinator", "ovh"):
+                check_disk_guard(root, env, name)
             state = scratch / f"{name}.tfstate"
             terraform(
                 root, env, "init", "-input=false", "-lockfile=readonly", "-no-color",
