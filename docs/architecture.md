@@ -12,7 +12,7 @@ Guaranine runs one K3s server in a cloud VM and K3s agents on laptops. All nodes
 | [kairos/controlplane.yaml](../kairos/controlplane.yaml) | K3s server settings, persistence check and activation guard. |
 | [kairos/worker.yaml](../kairos/worker.yaml) | K3s agent settings and power-off after installation. |
 | [kairos/auroraboot.yaml](../kairos/auroraboot.yaml) | Native UEFI disk build recipe; the CLI converts its raw output to QCOW2. |
-| [infra/ovh/main.tf](../infra/ovh/main.tf) | Private state bucket, image, d2-2 VM, public network port and security group. |
+| [infra/ovh/main.tf](../infra/ovh/main.tf) | Private state bucket, image and d2-2 VM with a public network port using OVH's default security group. |
 | [infra/azure/](../infra/azure/) | Existing Azure resources retained for rollback and eventual cleanup. |
 | [kubernetes/](../kubernetes/) | Application network policy, [storage provisioner](storage.md), [monitoring stack](monitoring.md) and [Kairos Operator](operations.md#configuration-rollouts). |
 

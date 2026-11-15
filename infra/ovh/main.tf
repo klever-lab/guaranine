@@ -139,40 +139,18 @@ resource "openstack_images_image_v2" "controller" {
   }
 }
 
-resource "openstack_networking_secgroup_v2" "controller" {
-  region               = var.region
-  name                 = "guaranine-controller"
-  description          = "Only encrypted Tailscale transport is reachable publicly."
-  delete_default_rules = true
-}
-
-resource "openstack_networking_secgroup_rule_v2" "tailscale" {
-  for_each          = toset(["IPv4", "IPv6"])
-  region            = var.region
-  security_group_id = openstack_networking_secgroup_v2.controller.id
-  direction         = "ingress"
-  ethertype         = each.value
-  protocol          = "udp"
-  port_range_min    = 41641
-  port_range_max    = 41641
-  remote_ip_prefix  = each.value == "IPv4" ? "0.0.0.0/0" : "::/0"
-}
-
-# Native host nftables still rejects direct private/LAN egress and limits DNS/DHCP.
-resource "openstack_networking_secgroup_rule_v2" "egress" {
-  for_each          = toset(["IPv4", "IPv6"])
-  region            = var.region
-  security_group_id = openstack_networking_secgroup_v2.controller.id
-  direction         = "egress"
-  ethertype         = each.value
-  remote_ip_prefix  = each.value == "IPv4" ? "0.0.0.0/0" : "::/0"
+# This BHS5 project has no quota for custom security groups or rules.
+# Native host nftables owns ingress restrictions and direct private/LAN isolation.
+data "openstack_networking_secgroup_v2" "controller" {
+  region = var.region
+  name   = "default"
 }
 
 resource "openstack_networking_port_v2" "controller" {
   region                = var.region
   name                  = "guaranine-controller"
   network_id            = data.openstack_networking_network_v2.public.id
-  security_group_ids    = [openstack_networking_secgroup_v2.controller.id]
+  security_group_ids    = [data.openstack_networking_secgroup_v2.controller.id]
   port_security_enabled = true
   admin_state_up        = true
 }
@@ -203,10 +181,6 @@ resource "openstack_compute_instance_v2" "controller" {
     ignore_changes = [image_id]
   }
 
-  depends_on = [
-    openstack_networking_secgroup_rule_v2.tailscale,
-    openstack_networking_secgroup_rule_v2.egress,
-  ]
 }
 
 output "handoff" {

@@ -14,6 +14,12 @@ mock_provider "openstack" {
       name = "Ext-Net"
     }
   }
+  mock_data "openstack_networking_secgroup_v2" {
+    defaults = {
+      id   = "c2a3a7a8-0b09-468d-85d7-f1a77bd90e3c"
+      name = "default"
+    }
+  }
 }
 
 mock_provider "aws" {}
@@ -51,17 +57,12 @@ run "seed_mock_state" {
 
   assert {
     condition = (
-      openstack_networking_secgroup_v2.controller.delete_default_rules &&
-      length(openstack_networking_secgroup_rule_v2.tailscale) == 2 &&
-      alltrue([for rule in openstack_networking_secgroup_rule_v2.tailscale :
-        rule.direction == "ingress" && rule.protocol == "udp" &&
-        rule.port_range_min == 41641 && rule.port_range_max == 41641
-      ]) &&
+      data.openstack_networking_secgroup_v2.controller.name == "default" &&
       openstack_networking_port_v2.controller.port_security_enabled &&
-      openstack_networking_port_v2.controller.security_group_ids == toset([openstack_networking_secgroup_v2.controller.id]) &&
+      openstack_networking_port_v2.controller.security_group_ids == toset([data.openstack_networking_secgroup_v2.controller.id]) &&
       openstack_compute_instance_v2.controller.network[0].port == openstack_networking_port_v2.controller.id
     )
-    error_message = "The VM must use its dedicated port and firewall, exposing only encrypted Tailscale transport."
+    error_message = "The VM must use its dedicated port and OVH default group; native host rules enforce Tailscale-only access."
   }
 }
 

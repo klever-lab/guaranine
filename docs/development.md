@@ -17,7 +17,7 @@ env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bas
 | Kairos validation | [validate-kairos.py](../scripts/validate-kairos.py) checks public and generated native profiles with the checksum-pinned upstream agent, JSON policy syntax, workflows with actionlint, shell with ShellCheck and Python compilation. |
 | Terraform validation | [validate-terraform.py](../scripts/validate-terraform.py) checks formatting, initialization, provider schemas, mock tests, lifecycle plans, retained-disk deletion refusal and the Azure roots' explicit local backends. OVH's remote backend is excluded from offline checks. |
 
-The Terraform runner copies configuration into temporary storage, removes ambient cloud/Terraform inputs and uses mock providers. It verifies unchanged plans, Azure disk retention across VM replacement, and the specific `prevent_destroy` failures for Azure data-disk replacement and OVH VM replacement. OVH checks also cover private image hashing, the fixed d2-2 flavor and Tailscale-only public ingress. No cloud provisioning is required, though tool/provider downloads need internet access.
+The Terraform runner copies configuration into temporary storage, removes ambient cloud/Terraform inputs and uses mock providers. It verifies unchanged plans, Azure disk retention across VM replacement, and the specific `prevent_destroy` failures for Azure data-disk replacement and OVH VM replacement. OVH checks also cover private image hashing, the fixed d2-2 flavor and attachment to OVH's default security group. The packet harness checks actual ingress restrictions. No cloud provisioning is required, though tool/provider downloads need internet access.
 
 ## Firewall packet checks
 
