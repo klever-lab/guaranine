@@ -414,18 +414,28 @@ data:
           "id": 9, "type": "table", "title": "Running pods by service",
           "gridPos": {"x": 0, "y": 16, "w": 24, "h": 10},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "max by(namespace,pod,node) (kube_pod_info * on(namespace,pod,uid) group_left() (kube_pod_status_phase{phase=\"Running\"} == 1))", "instant": true, "range": false, "format": "table"}],
+          "targets": [
+            {"refId": "A", "instant": true, "range": false, "format": "table", "expr": "label_join(max by(namespace,pod,node) (kube_pod_info * on(namespace,pod,uid) group_left() (kube_pod_status_phase{phase=\"Running\"} == 1)), \"pod_id\", \"/\", \"namespace\", \"pod\")"},
+            {"refId": "B", "instant": true, "range": false, "format": "table", "expr": "sum by(pod_id) (label_join(sum by(namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",pod!=\"\"}[5m])), \"pod_id\", \"/\", \"namespace\", \"pod\"))"},
+            {"refId": "C", "instant": true, "range": false, "format": "table", "expr": "sum by(pod_id) (label_join(sum by(namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",pod!=\"\"}), \"pod_id\", \"/\", \"namespace\", \"pod\"))"}
+          ],
           "transformations": [
+            {"id": "joinByField", "options": {"byField": "pod_id", "mode": "outerTabular"}},
+            {"id": "filterByValue", "options": {"type": "include", "match": "all", "filters": [
+              {"fieldName": "namespace", "config": {"id": "isNotNull", "options": {}}}
+            ]}},
             {"id": "organize", "options": {
-              "excludeByName": {"Time": true, "Value": true},
-              "indexByName": {"namespace": 0, "pod": 1, "node": 2},
-              "renameByName": {"namespace": "Service", "pod": "Pod", "node": "Node"}
+              "excludeByName": {"Time 1": true, "Time 2": true, "Time 3": true, "pod_id": true, "Value #A": true},
+              "indexByName": {"namespace": 0, "pod": 1, "node": 2, "Value #B": 3, "Value #C": 4},
+              "renameByName": {"namespace": "Service", "pod": "Pod", "node": "Node", "Value #B": "CPU", "Value #C": "Memory"}
             }},
             {"id": "groupToNestedTable", "options": {
               "showSubframeHeaders": true,
               "rules": [
                 {"matcher": {"id": "byName", "options": "Service"}, "operation": "groupby", "aggregations": []},
-                {"matcher": {"id": "byName", "options": "Pod"}, "operation": "aggregate", "aggregations": ["count"], "keepNestedField": true}
+                {"matcher": {"id": "byName", "options": "Pod"}, "operation": "aggregate", "aggregations": ["count"], "keepNestedField": true},
+                {"matcher": {"id": "byName", "options": "CPU"}, "operation": "aggregate", "aggregations": ["sum"], "keepNestedField": true},
+                {"matcher": {"id": "byName", "options": "Memory"}, "operation": "aggregate", "aggregations": ["sum"], "keepNestedField": true}
               ]
             }}
           ],
@@ -438,7 +448,11 @@ data:
               "kube-system": {"text": "DNS"},
               "openebs": {"text": "Storage"}
             }}]}]},
-            {"matcher": {"id": "byName", "options": "Pod (count)"}, "properties": [{"id": "displayName", "value": "Pods"}]}
+            {"matcher": {"id": "byName", "options": "Pod (count)"}, "properties": [{"id": "displayName", "value": "Pods"}]},
+            {"matcher": {"id": "byName", "options": "CPU (sum)"}, "properties": [{"id": "unit", "value": "cores"}, {"id": "decimals", "value": 4}, {"id": "displayName", "value": "CPU"}]},
+            {"matcher": {"id": "byName", "options": "Memory (sum)"}, "properties": [{"id": "unit", "value": "bytes"}, {"id": "decimals", "value": 1}, {"id": "displayName", "value": "Memory"}]},
+            {"matcher": {"id": "byName", "options": "CPU", "scope": "nested"}, "properties": [{"id": "unit", "value": "cores"}, {"id": "decimals", "value": 4}]},
+            {"matcher": {"id": "byName", "options": "Memory", "scope": "nested"}, "properties": [{"id": "unit", "value": "bytes"}, {"id": "decimals", "value": 1}]}
           ]},
           "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Service", "desc": false}]}
         }
