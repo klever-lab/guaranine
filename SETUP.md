@@ -144,7 +144,7 @@ Open, WPA personal and WPA3 personal networks are supported. Enterprise, missing
 
 The CLI prints the ISO path and enrollment deadline in local time. Enroll before that deadline and follow the [media handling limits](docs/security.md#private-material-and-enrollment). To change networks or reuse a batch, follow [image batches and retries](docs/operations.md#image-batches-and-retries).
 
-Choose a USB, checking its path, model, size, serial and label, or select **Skip flashing** to keep the ISO without writing a USB. Type `ERASE` to confirm. The CLI rechecks and unmounts the drive, writes with progress, then flushes it. Do not remove the USB until `Flashed` appears. System mounts, active encrypted/LVM volumes and the ISO's own disk are excluded. Redirected runs do not offer flashing.
+Choose a USB, checking its path, model, size, serial and label, or select **Skip flashing** to keep the ISO without writing a USB. Type `ERASE` to confirm. The CLI rechecks and unmounts the drive, writes with progress, flushes it and verifies every written image byte. Do not remove the USB until `Flashed` appears. System mounts, active encrypted/LVM volumes and the ISO's own disk are excluded. Redirected runs do not offer flashing.
 
 ## Install a worker
 
@@ -173,6 +173,14 @@ See [operations](docs/operations.md) for maintenance, backups and recovery, or [
 ## Raspberry Pi dashboard display
 
 The dedicated Pi 2 Model B uses the stock Raspberry Pi OS image pinned in [kiosk/versions.json](kiosk/versions.json), with [kiosk/config.yaml](kiosk/config.yaml) and private configuration added during SD-card preparation. Its prepared card boots directly into the Grafana display after applying first-boot updates. Connect Ethernet, HDMI and power; leave it connected while setup completes. See [display operation and qualification](docs/monitoring.md#raspberry-pi-dashboard-display) for private operator files, recovery and the remaining physical checks.
+
+To recreate the card for this Pi, put the SD card in a USB reader attached to the operator computer and run:
+
+```bash
+./guaranine kiosk
+```
+
+The command verifies the saved private recovery image. Select the reader's whole drive, check its path, model, size and serial, then type `ERASE`. It unmounts, writes and verifies the card before reporting success. With the Pi powered off, insert the card and connect Ethernet, HDMI and power. The installed setup resumes automatically after first-boot updates.
 
 ## Node management
 

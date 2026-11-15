@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Kairos images, install laptops and roll out host configuration over Tailscale."""
+"""Prepare Guaranine machines, flash installation media and manage host configuration."""
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -143,7 +143,7 @@ def check_name(name):
 
 
 def usb_disks(image):
-    """Offer plain USB disks, excluding system mounts and the ISO's own disk."""
+    """Offer plain USB disks, excluding system mounts and the image's own disk."""
     source = image.stat()
     source_device = f'{os.major(source.st_dev)}:{os.minor(source.st_dev)}'
     result = subprocess.run(['lsblk', '--json', '--bytes', '--paths', '--tree', '--output',
@@ -196,7 +196,7 @@ def flash_diagnostics(log, path, *, since=None, elapsed=None):
         print(f'Could not append USB diagnostics to {log}: {error}', file=sys.stderr)
 
 
-def flash_iso(image):
+def flash_image(image):
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return False
     image = protected(image)
@@ -212,7 +212,7 @@ def flash_iso(image):
                 f'{disk["path"]} | {disk.get("model") or "Unknown model"} | '
                 f'{disk["size"] / 2**30:.1f} GiB | {disk.get("serial") or "No serial"} | {labels or "No label"}',
                 value=disk))
-        selected = questionary.select('Flash the ISO to a USB drive', choices=choices).unsafe_ask()
+        selected = questionary.select('Flash the image to a USB drive or SD card reader', choices=choices).unsafe_ask()
         if not selected:
             return False
         path = selected['path']
@@ -252,20 +252,49 @@ def flash_iso(image):
                 with logger.stdin:
                     subprocess.run(command,
                                    stdout=logger.stdin, stderr=subprocess.STDOUT, check=True, timeout=900)
+                    subprocess.run(['sudo', '--', 'blockdev', '--flushbufs', path],
+                                   stdout=logger.stdin, stderr=subprocess.STDOUT, check=True, timeout=30)
+                    print('Verifying every written image byte. Keep the USB or SD card attached.', flush=True)
+                    subprocess.run(['sudo', '--', 'cmp', '--silent', f'--bytes={image.stat().st_size}',
+                                    '--', str(image), path],
+                                   stdout=logger.stdin, stderr=subprocess.STDOUT, check=True, timeout=900)
             if logger.returncode:
                 raise subprocess.CalledProcessError(logger.returncode, ['tee'])
         except (OSError, subprocess.SubprocessError) as error:
             with log.open('a') as saved:
                 saved.write(f'\n{type(error).__name__}: {error}\n')
-            raise ValueError(f'USB write failed; the USB may be incomplete. ISO saved: {image}. '
+            raise ValueError(f'USB write or verification failed; the media may be incomplete. Image saved: {image}. '
                              f'Private log: {log}') from error
         finally:
             flash_diagnostics(log, path, since=started, elapsed=time.monotonic() - write_started)
-        print(f'\nFlashed {image.name} to {path}. You can remove the USB.')
+        print(f'\nFlashed {image.name} to {path}. Readback verified; you can remove the USB or SD card.')
         return True
     except (EOFError, KeyboardInterrupt):
-        print(f'\nFlashing cancelled. ISO saved: {image}')
+        print(f'\nFlashing cancelled. Image saved: {image}')
         return False
+
+
+def prepare_kiosk(_args):
+    """Restore this Pi from its protected, individually enrolled recovery image."""
+    directory = operator_directory() / 'kiosk'
+    if not (directory / 'grafana-pi.img').exists() or not (directory / 'prepared-image.json').exists():
+        raise ValueError(f'Restore the protected kiosk recovery backup to {directory} first; '
+                         'this command requires its prepared image and checksum record')
+    image = protected(directory / 'grafana-pi.img')
+    record = json.loads(protected(directory / 'prepared-image.json').read_text())
+    if (not isinstance(record, dict) or record.get('size') != image.stat().st_size or image.stat().st_size <= 0
+            or not re.fullmatch(r'[0-9a-f]{64}', str(record.get('sha256', '')))):
+        raise ValueError('Invalid kiosk recovery image size or checksum record; nothing was flashed')
+    with progress('Verifying the saved Pi recovery image…'):
+        if digest(image) != record['sha256']:
+            raise ValueError('Kiosk recovery image checksum mismatch; nothing was flashed')
+    print(f'Pi recovery image ready: {image}')
+    print('This image restores the existing grafana-pi identity. Use it on one Pi at a time.')
+    if flash_image(image):
+        print('With the Pi powered off, insert the card and connect Ethernet, HDMI and power.')
+        print('First-boot updates finish before the Grafana dashboard opens automatically.')
+    else:
+        print('SD card not flashed. Run ./guaranine kiosk to try again.')
 
 
 def operator_directory():
@@ -568,7 +597,7 @@ def prepare_iso(_args):
     print(f'ISO source: commit {current_source["commit"][:12]}, inputs {current_source["sources_sha256"][:12]}.')
     expires = datetime.fromisoformat(record['expires'].replace('Z', '+00:00')).astimezone()
     print(f'Enroll laptops before {expires:%Y-%m-%d %H:%M:%S %Z}.')
-    if flash_iso(image):
+    if flash_image(image):
         print('Boot the laptop from this USB. Wi-Fi connects automatically.')
         print('On this computer, run: ./guaranine worker')
     else:
@@ -1109,6 +1138,7 @@ def main(argv=None):
     iso = commands.add_parser('iso', help='Build or update the laptop ISO; optionally flash a USB')
     iso.add_argument('--rebuild', action='store_true', help='Rebuild even if the source is unchanged')
     iso.set_defaults(action=prepare_iso)
+    commands.add_parser('kiosk', help='Verify and flash this Pi\'s saved Grafana recovery image').set_defaults(action=prepare_kiosk)
     commands.add_parser('controlplane', help='Build or reuse the staged controller QCOW2').set_defaults(action=prepare_controlplane)
     commands.add_parser('deploy', help='Build and provision the OVH controller through GitHub Actions').set_defaults(action=deploy_controller)
     commands.add_parser('bootstrap', help='Start the cloud controller and save its kubeconfig').set_defaults(action=bootstrap)

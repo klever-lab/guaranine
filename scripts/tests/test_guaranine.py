@@ -977,7 +977,7 @@ efibootmgr() {
               patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
               patch.object(cli, 'mint', side_effect=mint) as mint_key,
               patch.object(cli, 'build_image', side_effect=build) as builder,
-              patch.object(cli, 'operator_wifi') as wifi, patch.object(cli, 'flash_iso', return_value=False) as flash,
+              patch.object(cli, 'operator_wifi') as wifi, patch.object(cli, 'flash_image', return_value=False) as flash,
               contextlib.redirect_stdout(output)):
             cli.prepare_iso(None)
         mint_key.assert_called_once()
@@ -999,7 +999,7 @@ efibootmgr() {
         with (patch.object(cli, 'private_command', return_value='linux'),
               patch.object(cli, 'build_base', side_effect=ValueError('DISPOSABLE base failure')),
               patch.object(cli, 'mint') as mint, patch.object(cli, 'build_image') as build,
-              patch.object(cli, 'flash_iso') as flash, contextlib.redirect_stdout(io.StringIO()),
+              patch.object(cli, 'flash_image') as flash, contextlib.redirect_stdout(io.StringIO()),
               self.assertRaisesRegex(ValueError, 'base failure')):
             cli.prepare_iso(None)
         mint.assert_not_called()
@@ -1023,7 +1023,7 @@ efibootmgr() {
         with (patch.object(cli, 'private_command', return_value='linux'),
               patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
               patch.object(cli, 'mint', side_effect=mint) as mint_key,
-              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'flash_iso') as flash,
+              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'flash_image') as flash,
               contextlib.redirect_stdout(io.StringIO())):
             with self.assertRaisesRegex(ValueError, 'media failure'):
                 cli.prepare_iso(None)
@@ -1044,7 +1044,7 @@ efibootmgr() {
         record['capabilities']['devices']['create']['tags'] = ['tag:guaranine-controlplane']
         key.write_text(json.dumps(record))
         with (patch.object(cli, 'build_base') as base, patch.object(cli, 'mint') as mint,
-              patch.object(cli, 'flash_iso') as flash, self.assertRaises(ValueError)):
+              patch.object(cli, 'flash_image') as flash, self.assertRaises(ValueError)):
             cli.prepare_iso(None)
         base.assert_not_called()
         mint.assert_not_called()
@@ -1085,7 +1085,7 @@ efibootmgr() {
                       patch.object(cli, 'build_base', return_value='PUBLIC-BASE') as base,
                       patch.object(cli, 'build_image', side_effect=build) as builder,
                       patch.object(cli, 'mint') as mint, patch.object(cli, 'operator_wifi') as wifi,
-                      patch.object(cli, 'flash_iso', return_value=False), contextlib.redirect_stdout(io.StringIO())):
+                      patch.object(cli, 'flash_image', return_value=False), contextlib.redirect_stdout(io.StringIO())):
                     cli.prepare_iso(SimpleNamespace(rebuild=forced))
                 base.assert_called_once()
                 builder.assert_called_once()
@@ -1114,7 +1114,7 @@ efibootmgr() {
         with (patch.object(cli, 'iso_source', return_value=source),
               patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
               patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'mint') as mint,
-              patch.object(cli, 'operator_wifi') as wifi, patch.object(cli, 'flash_iso', return_value=False) as flash,
+              patch.object(cli, 'operator_wifi') as wifi, patch.object(cli, 'flash_image', return_value=False) as flash,
               contextlib.redirect_stdout(io.StringIO())):
             with self.assertRaisesRegex(ValueError, 'failed rebuild'):
                 cli.prepare_iso(None)
@@ -1141,7 +1141,7 @@ efibootmgr() {
             return directory / image.name
         with (patch.object(cli, 'iso_source', side_effect=lambda: current[0]),
               patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
-              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'flash_iso') as flash,
+              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'flash_image') as flash,
               contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError)):
             cli.prepare_iso(None)
         flash.assert_not_called()
@@ -1166,7 +1166,7 @@ efibootmgr() {
               patch.object(cli, 'operator_wifi', return_value='DISPOSABLE-WIFI'),
               patch.object(cli, 'private_command', return_value='linux'),
               patch.object(cli, 'build_base', return_value='PUBLIC-BASE'),
-              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'flash_iso', side_effect=flash),
+              patch.object(cli, 'build_image', side_effect=build), patch.object(cli, 'flash_image', side_effect=flash),
               contextlib.redirect_stdout(io.StringIO())):
             cli.prepare_iso(None)
 
@@ -1243,7 +1243,7 @@ efibootmgr() {
         cli.private_write(image.parent / 'source.json', json.dumps(source))
         for flashed in (False, True):
             output = io.StringIO()
-            with (self.subTest(flashed=flashed), patch.object(cli, 'flash_iso', return_value=flashed),
+            with (self.subTest(flashed=flashed), patch.object(cli, 'flash_image', return_value=flashed),
                   patch.object(cli, 'iso_source', return_value=source),
                   patch.object(cli, 'build_base') as build, patch.object(cli, 'mint') as mint,
                   contextlib.redirect_stdout(output)):
@@ -1322,6 +1322,73 @@ efibootmgr() {
             self.assertEqual([disk['path'] for disk in cli.read_disks(['ssh'], self.root)], ['/dev/vdb'])
 
 
+class KioskRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.directory = cli.output_directory(self.root / 'kiosk')
+        self.image = self.directory / 'grafana-pi.img'
+        cli.private_write(self.image, 'DISPOSABLE-PRIVATE-PI-IMAGE')
+        self.record = self.directory / 'prepared-image.json'
+        cli.private_write(self.record, json.dumps({'size': self.image.stat().st_size,
+                                                  'sha256': cli.digest(self.image)}))
+        environment = patch.dict(os.environ, GUARANINE_OPERATOR_DIR=str(self.root))
+        environment.start()
+        self.addCleanup(environment.stop)
+        previous_umask = os.umask(0o077)
+        self.addCleanup(os.umask, previous_umask)
+
+    def test_kiosk_command_restores_saved_identity_without_cluster_or_enrollment_credentials(self):
+        for flashed in (False, True):
+            output = io.StringIO()
+            with (self.subTest(flashed=flashed), patch.object(cli, 'flash_image', return_value=flashed) as flash,
+                  patch.object(cli.subprocess, 'run') as run, contextlib.redirect_stdout(output)):
+                cli.main(['kiosk'])
+            flash.assert_called_once_with(self.image)
+            run.assert_not_called()
+            self.assertEqual('insert the card' in output.getvalue(), flashed)
+            self.assertEqual('SD card not flashed' in output.getvalue(), not flashed)
+            self.assertIn('one Pi at a time', output.getvalue())
+            self.assertNotIn(self.image.read_text(), output.getvalue())
+
+    def test_missing_recovery_files_never_offer_flashing(self):
+        for missing in (self.image, self.record):
+            saved = missing.read_bytes()
+            missing.unlink()
+            with (self.subTest(missing=missing.name), patch.object(cli, 'flash_image') as flash,
+                  self.assertRaisesRegex(ValueError, 'recovery backup')):
+                cli.prepare_kiosk(None)
+            flash.assert_not_called()
+            cli.private_write(missing, saved.decode())
+
+    def test_corruption_and_invalid_record_stop_before_drive_selection(self):
+        original = json.loads(self.record.read_text())
+        records = [{**original, **update} for update in (
+            {'size': 0}, {'size': original['size'] + 1}, {'sha256': 'invalid'}, {'sha256': '0' * 64})]
+        for record in [*records, [], None]:
+            self.record.write_text(json.dumps(record))
+            with (self.subTest(record=record), patch.object(cli, 'flash_image') as flash,
+                  contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'nothing was flashed')):
+                cli.prepare_kiosk(None)
+            flash.assert_not_called()
+
+    def test_public_recovery_files_and_symlinks_are_rejected_before_flash(self):
+        for path in (self.image, self.record):
+            path.chmod(0o644)
+            with (self.subTest(public=path.name), patch.object(cli, 'flash_image') as flash,
+                  self.assertRaisesRegex(ValueError, 'mode 0600')):
+                cli.prepare_kiosk(None)
+            flash.assert_not_called()
+            path.chmod(0o600)
+        real = self.directory / 'other-image'
+        self.image.rename(real)
+        self.image.symlink_to(real)
+        with patch.object(cli, 'flash_image') as flash, self.assertRaisesRegex(ValueError, 'regular file'):
+            cli.prepare_kiosk(None)
+        flash.assert_not_called()
+
+
 class USBFlashingTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -1364,7 +1431,7 @@ class USBFlashingTests(unittest.TestCase):
                   patch.object(cli, 'usb_disks') as disks, patch('builtins.input') as prompt,
                   patch.object(cli.questionary, 'select') as select,
                   patch.object(cli.subprocess, 'run') as run):
-                cli.flash_iso(self.image)
+                cli.flash_image(self.image)
                 disks.assert_not_called()
                 prompt.assert_not_called()
                 select.assert_not_called()
@@ -1379,13 +1446,13 @@ class USBFlashingTests(unittest.TestCase):
                     select.return_value.unsafe_ask.side_effect = answer
                 else:
                     select.return_value.unsafe_ask.return_value = answer
-                self.assertFalse(cli.flash_iso(self.image))
+                self.assertFalse(cli.flash_image(self.image))
                 prompt.assert_not_called()
                 run.assert_not_called()
         with (patch.object(cli, 'usb_disks', return_value=[]), patch('builtins.input') as prompt,
               patch.object(cli.questionary, 'select') as select,
               patch.object(cli.subprocess, 'run') as run):
-            cli.flash_iso(self.image)
+            cli.flash_image(self.image)
         prompt.assert_not_called()
         select.assert_not_called()
         run.assert_not_called()
@@ -1396,7 +1463,7 @@ class USBFlashingTests(unittest.TestCase):
               patch.object(cli.questionary, 'select') as select, patch('builtins.input', return_value='yes'),
               patch.object(cli.subprocess, 'run') as run):
             select.return_value.unsafe_ask.return_value = self.disk
-            self.assertFalse(cli.flash_iso(self.image))
+            self.assertFalse(cli.flash_image(self.image))
         run.assert_not_called()
         output = self.output.getvalue()
         self.assertIn('Confirmation must be ERASE.', output)
@@ -1421,7 +1488,7 @@ class USBFlashingTests(unittest.TestCase):
                       patch.object(cli.questionary, 'select', side_effect=terminal_select),
                       patch('builtins.input', return_value='') as prompt,
                       patch.object(cli.subprocess, 'run') as run):
-                    self.assertFalse(cli.flash_iso(self.image))
+                    self.assertFalse(cli.flash_image(self.image))
                 self.assertEqual(len(selected), 1)
                 self.assertIs(selected[0], expected)
                 self.assertEqual(prompt.call_count, int(bool(expected)))
@@ -1437,17 +1504,21 @@ class USBFlashingTests(unittest.TestCase):
               patch.object(cli.questionary, 'select') as select,
               patch('builtins.input', return_value='ERASE'), patch.object(cli.subprocess, 'run') as run):
             select.return_value.unsafe_ask.return_value = second
-            self.assertTrue(cli.flash_iso(self.image))
+            self.assertTrue(cli.flash_image(self.image))
         self.assertEqual([call.args[0] for call in run.call_args_list], [
             ['sudo', '--', 'umount', '--all-targets', '--', '/dev/sdz1'],
             ['sudo', '--', 'dd', f'if={self.image}', 'of=/dev/sdz', 'bs=4M', 'oflag=dsync',
-             'status=progress', 'conv=fsync,nocreat']])
+             'status=progress', 'conv=fsync,nocreat'],
+            ['sudo', '--', 'blockdev', '--flushbufs', '/dev/sdz'],
+            ['sudo', '--', 'cmp', '--silent', f'--bytes={self.image.stat().st_size}',
+             '--', str(self.image), '/dev/sdz']])
         choices = select.call_args.kwargs['choices']
         self.assertIs(choices[2].value, second)
         self.assertIn('DISPOSABLE-USB-B', choices[2].title)
         self.assertIn('Writing ', self.output.getvalue())
         self.assertIn('Do not remove the USB.', self.output.getvalue())
         self.assertIn('Flashed guaranine-kairos.iso to /dev/sdz.', self.output.getvalue())
+        self.assertIn('Readback verified', self.output.getvalue())
 
     def test_device_changes_before_or_after_unmount_never_start_a_write(self):
         changed = {**self.disk, 'serial': 'DIFFERENT-USB'}
@@ -1457,7 +1528,7 @@ class USBFlashingTests(unittest.TestCase):
                   patch.object(cli.questionary, 'select') as select, patch('builtins.input', return_value='ERASE'),
                   patch.object(cli.subprocess, 'run') as run, self.assertRaises(ValueError)):
                 select.return_value.unsafe_ask.return_value = self.disk
-                cli.flash_iso(self.image)
+                cli.flash_image(self.image)
             self.assertTrue(all('dd' not in call.args[0] for call in run.call_args_list))
 
     def test_unmount_or_write_failures_never_report_success(self):
@@ -1472,7 +1543,7 @@ class USBFlashingTests(unittest.TestCase):
                   patch.object(cli.subprocess, 'run', side_effect=effects) as run,
                   self.assertRaises(subprocess.CalledProcessError if fail_unmount else ValueError)):
                 select.return_value.unsafe_ask.return_value = self.disk
-                cli.flash_iso(self.image)
+                cli.flash_image(self.image)
             self.assertEqual(run.call_count, 1 if fail_unmount else 2)
         self.assertNotIn('Flashed ', self.output.getvalue())
 
@@ -1486,6 +1557,12 @@ class USBFlashingTests(unittest.TestCase):
                 self.output.truncate()
                 previous_logs = set(self.image.parent.glob('flash-*.log'))
                 def write(arguments, **kwargs):
+                    if arguments[:3] == ['sudo', '--', 'blockdev']:
+                        self.assertEqual(kwargs['timeout'], 30)
+                        return subprocess.CompletedProcess(arguments, 0)
+                    if arguments[:3] == ['sudo', '--', 'cmp']:
+                        self.assertEqual(kwargs['timeout'], 900)
+                        return subprocess.CompletedProcess(arguments, 0)
                     if 'dd' not in arguments:
                         self.assertEqual(kwargs['timeout'], 10)
                         kwargs['stdout'].write('DISPOSABLE device/kernel diagnostics\n')
@@ -1504,10 +1581,10 @@ class USBFlashingTests(unittest.TestCase):
                       contextlib.redirect_stderr(terminal)):
                     select.return_value.unsafe_ask.return_value = unmounted
                     if outcome == 'success':
-                        self.assertTrue(cli.flash_iso(self.image))
+                        self.assertTrue(cli.flash_image(self.image))
                     else:
-                        with self.assertRaisesRegex(ValueError, 'USB write failed.*Private log:') as error:
-                            cli.flash_iso(self.image)
+                        with self.assertRaisesRegex(ValueError, 'USB write or verification failed.*Private log:') as error:
+                            cli.flash_image(self.image)
                 log, = set(self.image.parent.glob('flash-*.log')) - previous_logs
                 self.assertEqual(log.stat().st_mode & 0o777, 0o600)
                 self.assertIn(str(log), self.output.getvalue())
@@ -1529,6 +1606,44 @@ class USBFlashingTests(unittest.TestCase):
                                   log.read_text())
                 self.assertEqual('Flashed ' in self.output.getvalue(), outcome == 'success')
                 self.assertEqual(self.image.read_text(), 'DISPOSABLE-ISO')
+
+    def test_actual_write_and_readback_reject_corruption_and_flush_failure(self):
+        destination = self.image.parent / 'fixture-card'
+        self.image.write_bytes(bytes(range(256)) * 257)
+        unmounted = {**self.disk, 'path': str(destination), 'children': []}
+        real_run = subprocess.run
+        for outcome in ('success', 'corrupt-readback', 'flush-error'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryFile(mode='w+') as terminal:
+                destination.write_bytes(b'\0' * (self.image.stat().st_size + 1024))
+                self.output.seek(0)
+                self.output.truncate()
+                commands = []
+                def execute(arguments, **kwargs):
+                    self.assertEqual(arguments[:2], ['sudo', '--'])
+                    commands.append(arguments[2])
+                    if arguments[2] == 'blockdev':
+                        if outcome == 'flush-error':
+                            raise subprocess.CalledProcessError(1, arguments)
+                        return subprocess.CompletedProcess(arguments, 0)
+                    if arguments[2] == 'cmp' and outcome == 'corrupt-readback':
+                        with destination.open('r+b') as stream:
+                            stream.write(b'X')
+                    return real_run(arguments[2:], **kwargs)
+                with (patch.object(cli, 'usb_disks', return_value=[unmounted]),
+                      patch.object(cli.questionary, 'select') as select,
+                      patch('builtins.input', return_value='ERASE'),
+                      patch.object(cli.subprocess, 'run', side_effect=execute),
+                      contextlib.redirect_stderr(terminal)):
+                    select.return_value.unsafe_ask.return_value = unmounted
+                    if outcome == 'success':
+                        self.assertTrue(cli.flash_image(self.image))
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'verification failed'):
+                            cli.flash_image(self.image)
+                self.assertEqual(commands, ['dd', 'blockdev'] + ([] if outcome == 'flush-error' else ['cmp']))
+                self.assertEqual('Readback verified' in self.output.getvalue(), outcome == 'success')
+                if outcome == 'success':
+                    self.assertEqual(destination.read_bytes()[:self.image.stat().st_size], self.image.read_bytes())
 
     def test_diagnostics_capture_power_state_and_kernel_window_without_another_sudo_prompt(self):
         log = self.image.parent / 'diagnostics.log'

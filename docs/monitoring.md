@@ -89,6 +89,8 @@ operator_dir="${GUARANINE_OPERATOR_DIR:-$HOME/.local/state/guaranine-kairos}"
 ssh -F "$operator_dir/kiosk/ssh_config" grafana-pi
 ```
 
+Back up that protected directory. The [card recovery command](../SETUP.md#raspberry-pi-dashboard-display) requires `grafana-pi.img` and its `prepared-image.json` size/checksum record, both operator-owned with private permissions. It restores the saved image as-is, including the existing Tailscale identity, SSH host key and Viewer credentials; keep that identity registered and the Viewer account valid. It needs no fresh enrollment key or cluster API connection. Refresh the prepared image and its checksum together when changing the kiosk profile; the command does not rebuild it from source.
+
 Restart the display session with `sudo systemctl restart lightdm`. Check the connection and metric services with `sudo systemctl status tailscaled guaranine-tailscale guaranine-node-exporter`. Inspect browser logs with `sudo journalctl _UID=1000 _SYSTEMD_USER_UNIT=guaranine-kiosk.service --no-pager -n 50`. If first boot has not reached the display, inspect `sudo systemctl status cloud-final` for update progress. Plymouth's wait service is masked so it cannot block that initialization stage. A complete OS hang still needs a local power cycle. The Pi automatically resumes the installed setup after power returns; the monitor must also be powered on and using the correct HDMI input.
 
 OS and browser updates run during first boot. Later OS/browser updates and upgrades of the pinned standalone binaries require operator maintenance; no unattended updater is configured.

@@ -13,7 +13,7 @@ env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bas
 | Check | Source and scope |
 | --- | --- |
 | Markdown | Recursive PyMarkdown scan using [.pymarkdown.json](../.pymarkdown.json), respecting gitignore. |
-| Unit tests | [scripts/tests/](../scripts/tests/) covers private-file handling, role credentials, Wi-Fi capture, SSH trust, disk confirmations, USB flashing, rollout targeting/failures, deployment refusal and Terraform tool selection. |
+| Unit tests | [scripts/tests/](../scripts/tests/) covers private-file handling, role credentials, Wi-Fi capture, SSH trust, disk confirmations, USB flashing/readback, Pi recovery-image checks, rollout targeting/failures, deployment refusal and Terraform tool selection. |
 | OS validation | [validate-kairos.py](../scripts/validate-kairos.py) checks public and generated native Kairos profiles with the checksum-pinned upstream agent, JSON policy syntax, kiosk scripts, workflows with actionlint, shell with ShellCheck and Python compilation. |
 | Terraform validation | [validate-terraform.py](../scripts/validate-terraform.py) checks formatting, initialization, provider schemas, mock tests, lifecycle plans and VM replacement refusal. OVH's remote backend is excluded from offline checks. |
 
