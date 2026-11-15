@@ -380,51 +380,51 @@ data:
       "panels": [
         {
           "id": 1, "type": "stat", "title": "Ready nodes",
-          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 2},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "instant": true}],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "graphMode": "none", "textMode": "value", "text": {"valueSize": 24}}
         },
         {
           "id": 2, "type": "stat", "title": "Running pods",
-          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 2},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "expr": "sum(kube_pod_status_phase{phase=\"Running\"})", "instant": true}],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "graphMode": "none", "textMode": "value", "text": {"valueSize": 24}}
         },
         {
           "id": 3, "type": "stat", "title": "Unready pods",
-          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 2},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "expr": "sum(kube_pod_status_ready{condition=\"false\"} * on(namespace,pod,uid) group_left() (kube_pod_status_phase{phase=\"Running\"} == 1)) or vector(0)", "instant": true}],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "graphMode": "none", "textMode": "value", "text": {"valueSize": 24}}
         },
         {
           "id": 4, "type": "stat", "title": "Container restarts (1h)",
-          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 2},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "expr": "sum(increase(kube_pod_container_status_restarts_total[1h])) or vector(0)", "instant": true}],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "graphMode": "none", "textMode": "value", "text": {"valueSize": 24}}
         },
         {
-          "id": 5, "type": "timeseries", "title": "Node CPU usage (cores)",
-          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+          "id": 5, "type": "timeseries", "title": "Node CPU usage (%)",
+          "gridPos": {"x": 0, "y": 2, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "sum by(node) (rate(container_cpu_usage_seconds_total{id=\"/\"}[5m]))", "legendFormat": "{{node}}"}],
-          "fieldConfig": {"defaults": {"unit": "cores", "min": 0}},
+          "targets": [{"refId": "A", "expr": "100 * sum by(node) (rate(container_cpu_usage_seconds_total{id=\"/\"}[5m])) / on(node) max by(node) (kube_node_status_capacity{resource=\"cpu\",unit=\"core\"})", "legendFormat": "{{node}}"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1}},
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
-          "id": 6, "type": "timeseries", "title": "Node memory working set",
-          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+          "id": 6, "type": "timeseries", "title": "Node memory working set (%)",
+          "gridPos": {"x": 12, "y": 2, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "sum by(node) (container_memory_working_set_bytes{id=\"/\"})", "legendFormat": "{{node}}"}],
-          "fieldConfig": {"defaults": {"unit": "bytes", "min": 0}},
+          "targets": [{"refId": "A", "expr": "100 * sum by(node) (container_memory_working_set_bytes{id=\"/\"}) / on(node) max by(node) (kube_node_status_capacity{resource=\"memory\",unit=\"byte\"})", "legendFormat": "{{node}}"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1}},
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
           "id": 7, "type": "timeseries", "title": "Pod CPU usage (cores)",
-          "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+          "gridPos": {"x": 0, "y": 10, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "expr": "sum by(namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",pod!=\"\"}[5m]))", "legendFormat": "{{namespace}} / {{pod}}"}],
           "fieldConfig": {"defaults": {"unit": "cores", "min": 0}},
@@ -432,11 +432,23 @@ data:
         },
         {
           "id": 8, "type": "timeseries", "title": "Pod memory working set",
-          "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+          "gridPos": {"x": 12, "y": 10, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "expr": "sum by(namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",pod!=\"\"})", "legendFormat": "{{namespace}} / {{pod}}"}],
           "fieldConfig": {"defaults": {"unit": "bytes", "min": 0}},
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 9, "type": "table", "title": "Running pods",
+          "gridPos": {"x": 0, "y": 18, "w": 24, "h": 10},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "max by(namespace,pod,node) (kube_pod_info * on(namespace,pod,uid) group_left() (kube_pod_status_phase{phase=\"Running\"} == 1))", "instant": true, "range": false, "format": "table"}],
+          "transformations": [{"id": "organize", "options": {
+            "excludeByName": {"Time": true, "Value": true},
+            "indexByName": {"namespace": 0, "pod": 1, "node": 2},
+            "renameByName": {"namespace": "Namespace", "pod": "Pod", "node": "Node"}
+          }}],
+          "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Namespace", "desc": false}, {"displayName": "Pod", "desc": false}]}
         }
       ]
     }
