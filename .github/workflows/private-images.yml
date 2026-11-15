@@ -5,20 +5,24 @@ on:
       - 'kairos/**'
       - 'kubernetes/**'
       - 'scripts/guaranine.py'
+      - 'scripts/deploy-controller.py'
       - 'scripts/test-private-images.py'
       - 'guaranine'
       - 'requirements.txt'
       - '.github/workflows/private-images.yml'
+      - '.github/workflows/deploy.yml'
   push:
     branches: [main]
     paths:
       - 'kairos/**'
       - 'kubernetes/**'
       - 'scripts/guaranine.py'
+      - 'scripts/deploy-controller.py'
       - 'scripts/test-private-images.py'
       - 'guaranine'
       - 'requirements.txt'
       - '.github/workflows/private-images.yml'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 permissions:
   contents: read

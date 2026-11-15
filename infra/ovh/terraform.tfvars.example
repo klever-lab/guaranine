@@ -1,3 +1,5 @@
 region       = "BHS5"
+state_bucket = "YOUR_PRIVATE_OVH_STATE_BUCKET"
+storage_region = "bhs"
 image_path   = "/ABSOLUTE/OPERATOR/DIRECTORY/controller/image/guaranine-kairos.qcow2"
 image_sha256 = "REPLACE_WITH_THE_IMAGE_SHA256"

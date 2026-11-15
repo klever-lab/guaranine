@@ -43,9 +43,9 @@ def main():
         for path in profiles:
             subprocess.run([str(agent), 'agent', '--strict-validation', 'validate', str(path)], check=True)
         for role in (None, 'worker', 'controlplane'):
-            arguments = {} if role is None else dict(name='test-' + role, role=role,
-                cluster_endpoint='https://100.64.0.1:6443', token='DISPOSABLE-SERVER' if role == 'controlplane' else 'DISPOSABLE-AGENT',
-                agent_token='DISPOSABLE-AGENT')
+            arguments = {} if role is None else dict(name='test-' + role, role=role)
+            if role == 'worker':
+                arguments.update(cluster_endpoint='https://100.64.0.1:6443', token='DISPOSABLE-AGENT')
             config = cli.machine_config('tskey-auth-DISPOSABLE',
                 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER', **arguments)
             path = directory / ((role or 'live') + '.yaml')

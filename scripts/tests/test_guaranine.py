@@ -253,6 +253,16 @@ class PrivateConfigTests(unittest.TestCase):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 cli.machine_config('key', 'pub', **arguments)
 
+    def test_staged_controller_has_no_cluster_credentials_and_cannot_activate(self):
+        config = cli.machine_config('tskey-auth-DISPOSABLE', 'ssh-ed25519 PUBLIC', role='controlplane')
+        files = {file['path']: file for steps in config['stages'].values()
+                 for step in steps for file in step.get('files', [])}
+        self.assertNotIn('/etc/rancher/k3s/token', files)
+        self.assertNotIn('/etc/rancher/k3s/agent-token', files)
+        self.assertNotIn('/var/lib/rancher/k3s/.guaranine-ready', files)
+        self.assertIn('ConditionPathExists=/var/lib/rancher/k3s/.guaranine-ready',
+                      files['/etc/systemd/system/k3s.service.d/role.conf']['content'])
+
     def test_failed_commands_keep_secret_diagnostics_private(self):
         result = subprocess.CompletedProcess([], 1, stdout='SECRET', stderr='PRIVATE')
         with patch.object(cli.subprocess, 'run', return_value=result), self.assertRaises(ValueError) as error:
@@ -1261,6 +1271,8 @@ efibootmgr() {
                 with cli.verified_connection('100.64.0.8', self.root): self.fail('Unconfirmed SSH key accepted')
 
     def test_new_controller_requires_confirmation_before_activation(self):
+        cli.private_write(self.root / 'server-token', 'DISPOSABLE-SERVER\n')
+        cli.private_write(self.root / 'agent-token', 'DISPOSABLE-AGENT\n')
         for answer in ('', 'no', 'INITIALIZE'):
             with (self.subTest(answer=answer), patch('builtins.input', return_value=answer),
                   patch.object(cli, 'private_command', return_value='') as command):
@@ -1269,16 +1281,22 @@ efibootmgr() {
                 else:
                     with self.assertRaisesRegex(ValueError, 'remains stopped'):
                         cli.initialize_controller(['ssh'], self.root)
-            self.assertEqual(command.call_count, 2 if answer == 'INITIALIZE' else 1)
+            self.assertEqual(command.call_count, 5 if answer == 'INITIALIZE' else 1)
             self.assertFalse(any('mkfs' in str(call) for call in command.call_args_list))
 
     def test_restored_controller_activates_without_creating_a_new_cluster(self):
+        cli.private_write(self.root / 'server-token', 'DISPOSABLE-SERVER\n')
+        cli.private_write(self.root / 'agent-token', 'DISPOSABLE-AGENT\n')
         with (patch.object(cli, 'private_command', return_value='restored') as command,
               patch('builtins.input') as prompt):
             cli.initialize_controller(['ssh'], self.root)
         prompt.assert_not_called()
         self.assertIn('server/db/state.db', command.call_args_list[0].args[0][-1])
-        self.assertIn('.guaranine-ready', command.call_args_list[1].args[0][-1])
+        self.assertIn('.guaranine-ready', command.call_args_list[-1].args[0][-1])
+        self.assertIn('/oem/99_guaranine-cluster.yaml', command.call_args_list[1].args[0][-1])
+        profile = yaml.safe_load(command.call_args_list[1].kwargs['data'])
+        self.assertEqual([file['content'] for file in profile['stages']['initramfs'][0]['files']],
+                         ['DISPOSABLE-SERVER\n', 'DISPOSABLE-AGENT\n'])
         self.assertFalse(any('mkfs' in str(call) or 'rm ' in str(call) for call in command.call_args_list))
 
     def test_controller_persistence_failure_prevents_activation(self):

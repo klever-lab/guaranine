@@ -12,7 +12,7 @@ Guaranine runs one K3s server in a cloud VM and K3s agents on laptops. All nodes
 | [kairos/controlplane.yaml](../kairos/controlplane.yaml) | K3s server settings, persistence check and activation guard. |
 | [kairos/worker.yaml](../kairos/worker.yaml) | K3s agent settings and power-off after installation. |
 | [kairos/auroraboot.yaml](../kairos/auroraboot.yaml) | Native UEFI disk build recipe; the CLI converts its raw output to QCOW2. |
-| [infra/ovh/main.tf](../infra/ovh/main.tf) | Private image, d2-2 VM, public network port and security group. |
+| [infra/ovh/main.tf](../infra/ovh/main.tf) | Private state bucket, image, d2-2 VM, public network port and security group. |
 | [infra/azure/](../infra/azure/) | Existing Azure resources retained for rollback and eventual cleanup. |
 | [kubernetes/](../kubernetes/) | Application network policy, [storage provisioner](storage.md), [monitoring stack](monitoring.md) and [Kairos Operator](operations.md#configuration-rollouts). |
 
@@ -20,7 +20,7 @@ Terraform owns infrastructure, Kairos owns the OS and K3s configuration, and Kub
 
 ## Images and node roles
 
-The CLI builds a local public base tagged from a hash of the version manifest, Dockerfile and shared Kairos configuration. Pinned AuroraBoot turns that base into private laptop ISO or controller QCOW2 media. [Dependency pins](development.md#dependency-pins) and [private material handling](security.md#private-material-and-enrollment) have separate owners.
+For controller deployment, the CLI dispatches a manual Actions workflow. Its first job builds the OS base and publishes a commit tag to GHCR; the second pulls its immutable digest and supplies private enrollment configuration to pinned AuroraBoot. The private QCOW2 goes directly to OVH Glance through Terraform. Local laptop and controller builds use the same base and media functions. [Dependency pins](development.md#dependency-pins) and [private material handling](security.md#private-material-and-enrollment) have separate owners.
 
 The shared profile disables automatic installation. Live media loads its private configuration into RAM, gives each boot its own machine/SSH identity and starts networking without enabling K3s. An installed worker receives the native worker profile through an explicit manual installation. Its root filesystem comes from the live media, so installation does not need a public image registry or LAN provisioning service.
 

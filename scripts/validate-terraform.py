@@ -146,7 +146,7 @@ def main():
     # CLI flags, logs and backend/workspace configuration from the test process.
     env = {
         key: value for key, value in os.environ.items()
-        if not key.startswith(("ARM_", "AZURE_", "TF_", "OS_", "OVH_"))
+        if not key.startswith(("ARM_", "AZURE_", "AWS_", "TF_", "OS_", "OVH_"))
     }
     env.update(TF_IN_AUTOMATION="1", CHECKPOINT_DISABLE="1")
     with tempfile.TemporaryDirectory(prefix="guaranine-terraform-") as directory:
@@ -170,6 +170,7 @@ def main():
                 image.write_bytes(b"DISPOSABLE IMAGE FOR MOCKED TERRAFORM TESTS")
                 env["TF_VAR_image_path"] = str(image)
                 env["TF_VAR_image_sha256"] = hashlib.sha256(image.read_bytes()).hexdigest()
+                env["TF_VAR_state_bucket"] = "guaranine-disposable-state"
             env["TF_DATA_DIR"] = str(scratch / f"{name}-data")
             terraform(root, env, "fmt", "-check", "-recursive", "-no-color")
             terraform(root, env, "init", "-backend=false", "-input=false", "-lockfile=readonly", "-no-color")
@@ -182,6 +183,10 @@ def main():
             check_lifecycle_plans(events, name)
             if name in ("coordinator", "ovh"):
                 check_disk_guard(root, env, name)
+            if name == "ovh":
+                # Remote S3 authentication/locking is checked during operator
+                # setup; offline validation never contacts a state service.
+                continue
             state = scratch / f"{name}.tfstate"
             terraform(
                 root, env, "init", "-input=false", "-lockfile=readonly", "-no-color",

@@ -16,12 +16,24 @@ mock_provider "openstack" {
   }
 }
 
+mock_provider "aws" {}
+
 variables {
-  region = "BHS5"
+  region       = "BHS5"
+  state_bucket = "guaranine-disposable-state"
 }
 
 run "seed_mock_state" {
   command = apply
+
+  assert {
+    condition = (
+      !aws_s3_bucket.state.force_destroy &&
+      aws_s3_bucket_versioning.state.versioning_configuration[0].status == "Enabled" &&
+      one(aws_s3_bucket_server_side_encryption_configuration.state.rule).apply_server_side_encryption_by_default[0].sse_algorithm == "AES256"
+    )
+    error_message = "Keep versioned, encrypted state without automatic object deletion."
+  }
 
   assert {
     condition = (

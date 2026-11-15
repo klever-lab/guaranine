@@ -156,9 +156,9 @@ tar -C /fixture-tools -cf - .
 
 
 def fixture(role=None):
-    args = {} if role is None else dict(name='fixture-' + role, role=role,
-        cluster_endpoint='https://100.64.0.1:6443',
-        token='DISPOSABLE-SERVER' if role == 'controlplane' else 'DISPOSABLE-AGENT', agent_token='DISPOSABLE-AGENT')
+    args = {} if role is None else dict(name='fixture-' + role, role=role)
+    if role == 'worker':
+        args.update(cluster_endpoint='https://100.64.0.1:6443', token='DISPOSABLE-AGENT')
     config = cli.machine_config('tskey-auth-DISPOSABLE-NO-TAILNET-ACCESS', PUBLIC_KEY,
         wifi=None if role == 'controlplane' else 'update_config=0\np2p_disabled=1\nnetwork={\nssid=74657374\nkey_mgmt=WPA-PSK\npsk="guaranine-disposable-wifi"\n}\n', **args)
     config['stages']['initramfs'].append({'name': 'Reserve the disposable serial port for test diagnostics',
@@ -203,6 +203,8 @@ def fixture(role=None):
         checks += ['mountpoint -q /var/lib/rancher',
                    'test "$(findmnt -nro MAJ:MIN --mountpoint /var/lib/rancher)" = '
                    '"$(findmnt -nro MAJ:MIN --mountpoint /usr/local)"',
+                   '! test -e /etc/rancher/k3s/token',
+                   '! test -e /etc/rancher/k3s/agent-token',
                    '! test -e /var/lib/rancher/k3s/.guaranine-ready',
                    '! systemctl is-active --quiet k3s']
     elif role == 'worker':

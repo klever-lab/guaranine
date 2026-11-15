@@ -6,13 +6,75 @@ terraform {
       source  = "terraform-provider-openstack/openstack"
       version = "= 3.4.0"
     }
+    aws = {
+      source  = "hashicorp/aws"
+      version = "= 6.73.0"
+    }
   }
 
-  backend "local" {}
+  backend "s3" {
+    key                         = "guaranine/ovh.tfstate"
+    use_lockfile                = true
+    encrypt                     = true
+    use_path_style              = true
+    skip_credentials_validation = true
+    skip_region_validation      = true
+    skip_requesting_account_id  = true
+    skip_metadata_api_check     = true
+    skip_s3_checksum            = true
+  }
 }
 
 # Standard clouds.yaml / OS_* authentication; credentials never enter variables.
 provider "openstack" {}
+
+variable "state_bucket" {
+  description = "Private OVH S3 bucket holding this root's state and lock."
+  type        = string
+}
+
+variable "storage_region" {
+  description = "OVH S3 region code (different from the OpenStack compute region)."
+  type        = string
+  default     = "bhs"
+}
+
+# This provider calls OVH's S3 API, not AWS infrastructure.
+provider "aws" {
+  region                      = var.storage_region
+  skip_credentials_validation = true
+  skip_region_validation      = true
+  skip_requesting_account_id  = true
+  skip_metadata_api_check     = true
+  s3_use_path_style           = true
+  endpoints {
+    s3 = "https://s3.${var.storage_region}.io.cloud.ovh.net"
+  }
+}
+
+resource "aws_s3_bucket" "state" {
+  bucket        = var.state_bucket
+  force_destroy = false
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "state" {
+  bucket = aws_s3_bucket.state.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
+  bucket = aws_s3_bucket.state.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
 
 variable "region" {
   description = "Exact region from the project's OpenStack service catalog, such as BHS5."
@@ -64,9 +126,12 @@ resource "openstack_images_image_v2" "controller" {
   properties = {
     architecture     = "x86_64"
     hw_firmware_type = "uefi"
+    guaranine_sha256 = var.image_sha256
   }
 
   lifecycle {
+    # The exact same image can be downloaded to a different runner path.
+    ignore_changes = [local_file_path]
     precondition {
       condition     = try(filesha256(var.image_path) == var.image_sha256, false)
       error_message = "The private image must exist and match its reviewed SHA-256."

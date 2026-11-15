@@ -1,0 +1,101 @@
+name: Stage OVH controller
+run-name: Stage OVH controller at ${{ inputs.commit }}
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Reviewed main commit
+        required: true
+        type: string
+      enrollment_expires:
+        description: Temporary Tailscale enrollment expiry
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: ovh-controller-deployment
+  cancel-in-progress: false
+jobs:
+  base:
+    if: github.ref == 'refs/heads/main' && github.sha == inputs.commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies
+        run: python3 -m pip install --requirement requirements.txt
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | sudo docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish the OS base without private configuration
+        id: publish
+        run: python3 scripts/deploy-controller.py publish
+      - name: Clear registry credentials
+        if: always()
+        run: sudo docker logout ghcr.io
+  stage:
+    needs: base
+    if: github.ref == 'refs/heads/main' && github.sha == inputs.commit
+    environment: ovh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install private image tools
+        run: |
+          python3 -m pip install --requirement requirements.txt python-openstackclient==10.5.0
+          sudo apt-get update --error-on=any
+          sudo apt-get install --yes --no-install-recommends qemu-utils
+      - name: Pull the exact public OS base
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KAIROS_IMAGE: ${{ needs.base.outputs.image }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | sudo docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          sudo docker pull "$KAIROS_IMAGE"
+          sudo docker logout ghcr.io
+      - name: Build privately and provision the stopped controller
+        env:
+          KAIROS_IMAGE: ${{ needs.base.outputs.image }}
+          DEPLOY_COMMIT: ${{ inputs.commit }}
+          ENROLLMENT_EXPIRES: ${{ inputs.enrollment_expires }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          SSH_PUBLIC_KEY: ${{ vars.SSH_PUBLIC_KEY }}
+          OS_AUTH_URL: https://auth.cloud.ovh.net/v3
+          OS_AUTH_TYPE: password
+          OS_USERNAME: ${{ secrets.OS_USERNAME }}
+          OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
+          OS_PROJECT_ID: ${{ secrets.OS_PROJECT_ID }}
+          OS_USER_DOMAIN_NAME: Default
+          OS_PROJECT_DOMAIN_NAME: Default
+          OS_REGION_NAME: ${{ vars.OVH_REGION }}
+          OS_IDENTITY_API_VERSION: '3'
+          OVH_STATE_BUCKET: ${{ vars.OVH_STATE_BUCKET }}
+          OVH_STORAGE_REGION: ${{ vars.OVH_STORAGE_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+          AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+          TF_IN_AUTOMATION: '1'
+          CHECKPOINT_DISABLE: '1'
+        run: python3 scripts/deploy-controller.py stage

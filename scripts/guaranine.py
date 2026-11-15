@@ -23,6 +23,8 @@ import urllib.request
 import questionary
 import yaml
 
+from terraform_tool import ensure_terraform
+
 ROOT = Path(__file__).resolve().parents[1]
 PINS = json.loads((ROOT / 'kairos/versions.json').read_text())
 TAILNET = ipaddress.ip_network('100.64.0.0/10')
@@ -387,16 +389,18 @@ def machine_config(key, public_key, *, name=None, role=None, cluster_endpoint=No
     if wifi:
         files.append(config_file('/etc/guaranine/wifi.conf', wifi))
     if role:
-        if not name or not token:
-            raise ValueError('A named worker or control plane needs its own K3s token')
-        files.append(config_file('/etc/rancher/k3s/token', token.strip() + '\n'))
+        if not name or (role == 'worker' and not token):
+            raise ValueError('A named worker needs its own K3s token')
+        if token:
+            files.append(config_file('/etc/rancher/k3s/token', token.strip() + '\n'))
         if role == 'worker':
             files.append(config_file('/etc/rancher/k3s/config.yaml.d/90-join.yaml',
                                      yaml.safe_dump({'server': endpoint(cluster_endpoint)})))
         else:
-            if not agent_token or agent_token.strip() == token.strip():
+            if bool(token) != bool(agent_token) or (token and agent_token.strip() == token.strip()):
                 raise ValueError('The control plane needs a separate agent token')
-            files.append(config_file('/etc/rancher/k3s/agent-token', agent_token.strip() + '\n'))
+            if agent_token:
+                files.append(config_file('/etc/rancher/k3s/agent-token', agent_token.strip() + '\n'))
             files.append(config_file('/etc/rancher/k3s/network-policy.yaml',
                                      (ROOT / 'kubernetes/network-policy.yaml').read_text()))
     config['stages']['initramfs'].append({'name': 'Configure Guaranine private inputs', 'files': files})
@@ -604,6 +608,49 @@ def prepare_controlplane(_args):
     print('The new VM will join Tailscale with K3s stopped until state is restored or initialization is confirmed.')
 
 
+def deploy_controller(_args):
+    """Dispatch trusted main; only a short-lived enrollment key leaves the operator."""
+    directory = operator_directory()
+    settings = operator_settings()
+    repository = json.loads(private_command(
+        ['gh', 'repo', 'view', '--json', 'nameWithOwner,defaultBranchRef'], directory))
+    repo = repository['nameWithOwner']
+    if repository['defaultBranchRef']['name'] != 'main':
+        raise ValueError('Controller deployment requires main as the default branch')
+    commit = private_command(['gh', 'api', f'repos/{repo}/commits/main', '--jq', '.sha'], directory).strip()
+    active = json.loads(private_command(['gh', 'run', 'list', '--repo', repo, '--workflow', 'deploy.yml',
+        '--branch', 'main', '--limit', '20', '--json', 'status'], directory))
+    if any(run['status'] != 'completed' for run in active):
+        raise ValueError('An OVH deployment is already queued or running; inspect it before starting another')
+    policies = json.loads(private_command(
+        ['gh', 'api', f'repos/{repo}/environments/ovh/deployment-branch-policies'], directory))
+    if [(policy['name'], policy['type']) for policy in policies.get('branch_policies', [])] != [('main', 'branch')]:
+        raise ValueError('Configure the ovh environment to allow only the main branch before deploying')
+    batch = output_directory(directory / ('deploy-' + str(time.time_ns())))
+    key = batch / 'tailscale-key.json'
+    mint(settings['tailscale_api_token'].strip(), settings['tailnet'], 'controlplane', key)
+    record = auth_record(key)
+    private_command(['gh', 'secret', 'set', 'TAILSCALE_AUTH_KEY', '--repo', repo, '--env', 'ovh'],
+                    batch, data=record['key'])
+    private_command(['gh', 'variable', 'set', 'SSH_PUBLIC_KEY', '--repo', repo, '--env', 'ovh',
+                     '--body', (directory / 'ssh_key.pub').read_text().strip()], batch)
+    result = private_command(['gh', 'workflow', 'run', 'deploy.yml', '--repo', repo, '--ref', 'main', '--json'],
+        batch, data=json.dumps({'commit': commit, 'enrollment_expires': record['expires']}))
+    match = re.search(r'https://github\.com/' + re.escape(repo) + r'/actions/runs/(\d+)', result)
+    if not match:
+        raise ValueError('Workflow dispatched. Inspect gh run list --workflow deploy.yml before retrying; no run URL was returned')
+    print(f'Deploying main at {commit[:12]}: {match[0]}', flush=True)
+    subprocess.run(['gh', 'run', 'watch', match[1], '--repo', repo, '--exit-status', '--interval', '10'], check=True)
+    os.environ['TF_DATA_DIR'] = str(directory / 'terraform/ovh-cache')
+    os.environ['AWS_SHARED_CREDENTIALS_FILE'] = str(protected(directory / 'ovh-s3-credentials'))
+    binary = ensure_terraform((ROOT / '.terraform-version').read_text().strip(), directory / 'terraform', os.environ)
+    command = [str(binary), '-chdir=' + str(ROOT / 'infra/ovh')]
+    private_command([*command, 'init', '-reconfigure', '-input=false', '-lockfile=readonly',
+                     '-backend-config=' + str(protected(directory / 'ovh.backend.hcl'))], batch, timeout=600)
+    private_write(batch / 'ovh.tfstate', private_command([*command, 'state', 'pull'], batch))
+    print(f'Infrastructure state backup saved: {batch / "ovh.tfstate"}')
+
+
 def ssh_command(address, hosts):
     address = tailnet_ip(address)
     key = protected(operator_directory() / 'ssh_key')
@@ -705,6 +752,14 @@ def initialize_controller(connection, directory):
     if existing != 'restored':
         if input('Type INITIALIZE to create a NEW EMPTY cluster: ').strip() != 'INITIALIZE':
             raise ValueError('Controller initialization cancelled; K3s remains stopped')
+    credentials = [config_file('/etc/rancher/k3s/token', protected(directory / 'server-token').read_text()),
+                   config_file('/etc/rancher/k3s/agent-token', protected(directory / 'agent-token').read_text())]
+    profile = cloud_yaml({'stages': {'initramfs': [{'name': 'Restore Guaranine cluster credentials', 'files': credentials}]}})
+    # OEM persists across boots; the Actions image contains no cluster tokens.
+    private_command([*connection, 'install -m0600 /dev/stdin /oem/99_guaranine-cluster.yaml'], directory, data=profile)
+    for file in credentials:
+        private_command([*connection, 'install -Dm0600 /dev/stdin ' + shlex.quote(file['path'])],
+                        directory, data=file['content'])
     private_command([*connection, 'install -d -m0700 /var/lib/rancher/k3s && '
         'install -m0600 /dev/null /var/lib/rancher/k3s/.guaranine-ready'], directory)
 
@@ -1055,6 +1110,7 @@ def main(argv=None):
     iso.add_argument('--rebuild', action='store_true', help='Rebuild even if the source is unchanged')
     iso.set_defaults(action=prepare_iso)
     commands.add_parser('controlplane', help='Build or reuse the staged controller QCOW2').set_defaults(action=prepare_controlplane)
+    commands.add_parser('deploy', help='Build and provision the OVH controller through GitHub Actions').set_defaults(action=deploy_controller)
     commands.add_parser('bootstrap', help='Start the cloud controller and save its kubeconfig').set_defaults(action=bootstrap)
     worker = commands.add_parser('worker', help='Add or forget a worker')
     worker.add_argument('--wait', metavar='NAME', help='Wait for Ready without reinstalling')
@@ -1070,6 +1126,8 @@ def main(argv=None):
     except yaml.YAMLError:
         parser.exit(1, 'Invalid YAML; check the local operator/configuration file.\n')
     except (EOFError, KeyboardInterrupt):
+        if argv and argv[0] == 'deploy':
+            parser.exit(1, 'Cancelled. A dispatched deployment continues in Actions; inspect it before retrying.\n')
         if argv and argv[0] == 'rollout':
             parser.exit(1, 'Cancelled. A submitted NodeOp continues in the cluster; inspect its status before retrying.\n')
         parser.exit(1, 'Cancelled. If installation was already sent, check the laptop before retrying.\n')

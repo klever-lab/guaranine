@@ -1,7 +1,9 @@
 mock_provider "openstack" {}
+mock_provider "aws" {}
 
 variables {
-  region = "BHS5"
+  region       = "BHS5"
+  state_bucket = "guaranine-disposable-state"
 }
 
 run "seed_mock_state" {
