@@ -3,6 +3,7 @@
 Start with [SETUP.md](../SETUP.md) for first-time deployment. These guides own the ongoing documentation:
 
 - [Architecture](architecture.md) — component ownership, image flow, controller resources and availability limits.
+- [OVH controller egress and IPv4 cost](ovh-egress.md) — NAT pricing, AWS comparison, IPv6-only egress limitations and cost alternatives.
 - [Laptop hardware](hardware.md) — model inventory, Wi-Fi coverage, boot requirements and qualification evidence.
 - [Networking and security](security.md) — tailnet policy, LAN isolation, workload restrictions and private material.
 - [Application storage](storage.md) — automatic PVC provisioning, local disk limits, retention and recovery.
