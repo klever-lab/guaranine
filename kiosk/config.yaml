@@ -35,7 +35,6 @@ write_files:
           elements = { 0.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 }
         }
         set lan4 { type ipv4_addr; flags interval; }
-        set lan6 { type ipv6_addr; flags interval; }
         set connected_interfaces { type iface_index; }
         chain input {
           type filter hook input priority 0; policy drop;
@@ -59,8 +58,6 @@ write_files:
           meta l4proto { tcp, udp } th dport 53 accept
           ip daddr @local_networks reject
           ip daddr @lan4 reject
-          ip6 daddr { fc00::/7, fe80::/10, fec0::/10, ff00::/8 } reject
-          ip6 daddr @lan6 reject
           # SLAAC can add attached IPv6 prefixes without dispatcher events.
           meta nfproto ipv6 reject
           meta oif @connected_interfaces accept
@@ -94,7 +91,6 @@ write_files:
     permissions: '0700'
     content: |
       #!/usr/bin/python3
-      import fcntl
       import ipaddress
       import json
       import subprocess
@@ -102,34 +98,33 @@ write_files:
 
       if len(sys.argv) != 3 or not sys.argv[1].startswith(('eth', 'en')):
           sys.exit(0)
-      if sys.argv[2] not in ('pre-up', 'up', 'pre-down', 'down', 'dhcp4-change', 'dhcp6-change'):
+      if sys.argv[2] not in ('up', 'down', 'dhcp4-change', 'dhcp6-change'):
           sys.exit(0)
-      with open('/run/guaranine-firewall.lock', 'w') as lock:
-          fcntl.flock(lock, fcntl.LOCK_EX)
-          try:
-              links = json.loads(subprocess.check_output(['ip', '-j', 'address', 'show']))
-              sets = {'lan4': set(), 'lan6': set(), 'connected_interfaces': set()}
-              for link in links:
-                  name = link['ifname']
-                  if not name.startswith(('eth', 'en')) or 'UP' not in link['flags']:
-                      continue
-                  if name == sys.argv[1] and sys.argv[2] in ('pre-down', 'down'):
-                      continue
-                  addresses = link.get('addr_info', [])
-                  for address in addresses:
+      try:
+          links = json.loads(subprocess.check_output(['ip', '-j', 'address', 'show']))
+          sets = {'lan4': set(), 'connected_interfaces': set()}
+          for link in links:
+              name = link['ifname']
+              if not name.startswith(('eth', 'en')) or 'UP' not in link['flags']:
+                  continue
+              if name == sys.argv[1] and sys.argv[2] == 'down':
+                  continue
+              addresses = link.get('addr_info', [])
+              for address in addresses:
+                  if address['family'] == 'inet':
                       network = ipaddress.ip_network(f"{address['local']}/{address['prefixlen']}", strict=False)
-                      sets['lan4' if network.version == 4 else 'lan6'].add(str(network))
-                  if addresses:
-                      sets['connected_interfaces'].add(str(link['ifindex']))
-              commands = []
-              for name, values in sets.items():
-                  commands.append(f'flush set inet guaranine {name}')
-                  if values:
-                      commands.append(f'add element inet guaranine {name} {{ ' + ', '.join(sorted(values)) + ' }')
-              subprocess.run(['nft', '-f', '-'], input='\n'.join(commands) + '\n', text=True, check=True)
-          except Exception:
-              subprocess.run(['nft', 'flush', 'set', 'inet', 'guaranine', 'connected_interfaces'], check=True)
-              raise
+                      sets['lan4'].add(str(network))
+              if addresses:
+                  sets['connected_interfaces'].add(str(link['ifindex']))
+          commands = []
+          for name, values in sets.items():
+              commands.append(f'flush set inet guaranine {name}')
+              if values:
+                  commands.append(f'add element inet guaranine {name} {{ ' + ', '.join(sorted(values)) + ' }')
+          subprocess.run(['nft', '-f', '-'], input='\n'.join(commands) + '\n', text=True, check=True)
+      except Exception:
+          subprocess.run(['nft', 'flush', 'set', 'inet', 'guaranine', 'connected_interfaces'], check=True)
+          raise
   - path: /etc/systemd/system/tailscaled.service
     permissions: '0644'
     content: |
@@ -248,7 +243,14 @@ write_files:
   - path: /etc/chromium/policies/managed/guaranine.json
     permissions: '0644'
     content: |
-      {"BrowserSignin": 0, "SyncDisabled": true, "PasswordManagerEnabled": false, "MetricsReportingEnabled": false, "URLBlocklist": ["*"], "URLAllowlist": ["https://.monitoring.tail3a78b9.ts.net/"]}
+      {
+        "BrowserSignin": 0,
+        "SyncDisabled": true,
+        "PasswordManagerEnabled": false,
+        "MetricsReportingEnabled": false,
+        "URLBlocklist": ["*"],
+        "URLAllowlist": ["https://.monitoring.tail3a78b9.ts.net/"]
+      }
 runcmd:
   - [sh, -c, "printf '#cloud-config\\n' > /boot/firmware/user-data"]
   - [rm, -f, /etc/sudoers.d/010_pi-nopasswd, /etc/sudoers.d/010_wiz-nopasswd]

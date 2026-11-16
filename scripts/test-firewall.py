@@ -194,7 +194,7 @@ def exercise():
         with tempfile.TemporaryDirectory(prefix='guaranine-kiosk-firewall-') as temporary:
             dispatcher = Path(temporary) / 'dispatcher.py'
             dispatcher.write_text(files['/etc/NetworkManager/dispatcher.d/20-guaranine-firewall'])
-            run(sys.executable, str(dispatcher), 'eth0', 'pre-up')
+            run(sys.executable, str(dispatcher), 'eth0', 'up')
             for address in local:
                 check([], address, False)
                 for protocol in ('tcp', 'udp'):
@@ -216,7 +216,7 @@ def exercise():
             # Encrypted Tailscale sockets retain IPv4 and IPv6 transport access.
             for address in ('203.0.113.1', '2001:db8:3::1'):
                 check([], address, True, mark=0x80000)
-            run(sys.executable, str(dispatcher), 'eth0', 'pre-down')
+            run(sys.executable, str(dispatcher), 'eth0', 'down')
             check([], '198.51.100.1', False)
             run(sys.executable, str(dispatcher), 'eth0', 'up')
             check([], '198.51.100.1', True)

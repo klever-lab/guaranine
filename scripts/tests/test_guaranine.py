@@ -1348,8 +1348,6 @@ class KioskRecoveryTests(unittest.TestCase):
         environment = patch.dict(os.environ, GUARANINE_OPERATOR_DIR=str(self.root))
         environment.start()
         self.addCleanup(environment.stop)
-        previous_umask = os.umask(0o077)
-        self.addCleanup(os.umask, previous_umask)
 
     def test_kiosk_command_restores_saved_identity_without_cluster_or_enrollment_credentials(self):
         for flashed in (False, True):
@@ -1366,13 +1364,13 @@ class KioskRecoveryTests(unittest.TestCase):
 
     def test_missing_recovery_files_never_offer_flashing(self):
         for missing in (self.image, self.record):
-            saved = missing.read_bytes()
+            saved = missing.read_text()
             missing.unlink()
             with (self.subTest(missing=missing.name), patch.object(cli, 'flash_image') as flash,
                   self.assertRaisesRegex(ValueError, 'recovery backup')):
                 cli.prepare_kiosk(None)
             flash.assert_not_called()
-            cli.private_write(missing, saved.decode())
+            cli.private_write(missing, saved)
 
     def test_corruption_and_invalid_record_stop_before_drive_selection(self):
         original = json.loads(self.record.read_text())

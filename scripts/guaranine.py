@@ -282,7 +282,8 @@ def prepare_kiosk(_args):
                          'this command requires its prepared image and checksum record')
     image = protected(directory / 'grafana-pi.img')
     record = json.loads(protected(directory / 'prepared-image.json').read_text())
-    if (not isinstance(record, dict) or record.get('size') != image.stat().st_size or image.stat().st_size <= 0
+    image_size = image.stat().st_size
+    if (not isinstance(record, dict) or record.get('size') != image_size or image_size <= 0
             or not re.fullmatch(r'[0-9a-f]{64}', str(record.get('sha256', '')))):
         raise ValueError('Invalid kiosk recovery image size or checksum record; nothing was flashed')
     with progress('Verifying the saved Pi recovery image…'):
