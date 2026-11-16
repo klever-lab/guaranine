@@ -348,7 +348,7 @@ class WifiTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError): self.read(**kwargs)
 
 
-class InstallationTests(unittest.TestCase):
+class OperatorTestCase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -374,6 +374,8 @@ class InstallationTests(unittest.TestCase):
             wifi='update_config=0\nnetwork={\nssid=74657374\nkey_mgmt=NONE\n}\n')))
         return {'path': '/dev/vdb', 'size': 64 * 2**30, 'model': 'Fixture', 'serial': 'disk-b', 'tran': 'virtio'}
 
+
+class WorkerInstallationTests(OperatorTestCase):
     def test_worker_uses_secure_agent_token_and_native_install_after_confirmation(self):
         disk = self.worker_setup()
         token = 'K10' + 'ab' * 32 + '::agent:DISPOSABLE'
@@ -611,6 +613,45 @@ efibootmgr() {
         self.assertFalse((self.root / 'nodes/worker-one').exists())
         self.assertFalse(any('manual-install' in call.args[0][-1] for call in calls.call_args_list))
 
+    def test_disk_inventory_excludes_boot_usb_readonly_and_nested_mounts(self):
+        good = {'path': '/dev/vdb', 'type': 'disk', 'size': 64 * 2**30, 'ro': False, 'mountpoints': []}
+        bad = {**good, 'path': '/dev/vda', 'children': [{'mountpoints': ['/usr/local']}]}
+        with patch.object(cli, 'private_command', return_value=json.dumps({'blockdevices': [good, bad, {**good, 'ro': True}]})):
+            self.assertEqual([disk['path'] for disk in cli.read_disks(['ssh'], self.root)], ['/dev/vdb'])
+
+    def test_name_prompt_accepts_a_failed_name_after_forget_in_another_terminal(self):
+        disk = self.worker_setup()
+        node = cli.output_directory(self.root / 'nodes/worker-one')
+        cli.private_write(node / 'config.yaml', 'DISPOSABLE')
+        @contextlib.contextmanager
+        def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
+        replies = iter(['worker-one', 'worker-one', 'cancel'])
+        names = 0
+        def answer(prompt):
+            nonlocal names
+            if prompt.startswith('Laptop name'):
+                names += 1
+                if names == 2:
+                    cli.forget_worker('worker-one', ['ssh', 'PINNED'], self.root)
+            return next(replies)
+        output = io.StringIO()
+        with (patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
+              patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
+              patch.object(cli, 'private_command', side_effect=[
+                  'live', 'uefi', 'Inspiron 5558', '{"items":[]}', '{"items":[]}']) as command,
+              patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input', side_effect=answer), contextlib.redirect_stdout(output),
+              self.assertRaisesRegex(ValueError, 'Installation cancelled')):
+            select.return_value.unsafe_ask.return_value = disk
+            cli.install_worker(None)
+        self.assertIn('./guaranine worker', output.getvalue())
+        self.assertIn('Forget worker', output.getvalue())
+        self.assertEqual(names, 2)
+        self.assertFalse(node.exists())
+        archive, = (self.root / 'backups').iterdir()
+        self.assertEqual((archive / 'config.yaml').read_text(), 'DISPOSABLE')
+        self.assertFalse(any('manual-install' in call.args[0][-1] for call in command.call_args_list))
+
     def test_ready_check_can_resume_without_a_valid_installer_key(self):
         self.worker_setup()
         node = cli.output_directory(self.root / 'nodes/worker-one')
@@ -640,6 +681,8 @@ efibootmgr() {
               contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, '--wait worker-one')):
             cli.wait_for_worker('worker-one', ['ssh'], self.root)
 
+
+class WorkerManagementTests(OperatorTestCase):
     def forget_setup(self, name='worker-one'):
         cli.private_write(self.root / 'controlplane-known-hosts', 'DISPOSABLE')
         cli.private_write(self.root / 'operator.yaml', yaml.safe_dump({
@@ -900,39 +943,8 @@ efibootmgr() {
         self.assertEqual(error.exception.code, 2)
         install.assert_not_called()
 
-    def test_name_prompt_accepts_a_failed_name_after_forget_in_another_terminal(self):
-        disk = self.worker_setup()
-        node = cli.output_directory(self.root / 'nodes/worker-one')
-        cli.private_write(node / 'config.yaml', 'DISPOSABLE')
-        @contextlib.contextmanager
-        def verified(*_args): yield ['ssh', 'PINNED-WORKER'], None
-        replies = iter(['worker-one', 'worker-one', 'cancel'])
-        names = 0
-        def answer(prompt):
-            nonlocal names
-            if prompt.startswith('Laptop name'):
-                names += 1
-                if names == 2:
-                    cli.forget_worker('worker-one', ['ssh', 'PINNED'], self.root)
-            return next(replies)
-        output = io.StringIO()
-        with (patch.object(cli, 'choose_laptop', return_value='100.64.0.8'),
-              patch.object(cli, 'verified_connection', verified), patch.object(cli, 'read_disks', return_value=[disk]),
-              patch.object(cli, 'private_command', side_effect=[
-                  'live', 'uefi', 'Inspiron 5558', '{"items":[]}', '{"items":[]}']) as command,
-              patch.object(cli.questionary, 'select') as select,
-              patch('builtins.input', side_effect=answer), contextlib.redirect_stdout(output),
-              self.assertRaisesRegex(ValueError, 'Installation cancelled')):
-            select.return_value.unsafe_ask.return_value = disk
-            cli.install_worker(None)
-        self.assertIn('./guaranine worker', output.getvalue())
-        self.assertIn('Forget worker', output.getvalue())
-        self.assertEqual(names, 2)
-        self.assertFalse(node.exists())
-        archive, = (self.root / 'backups').iterdir()
-        self.assertEqual((archive / 'config.yaml').read_text(), 'DISPOSABLE')
-        self.assertFalse(any('manual-install' in call.args[0][-1] for call in command.call_args_list))
 
+class ISOPreparationTests(OperatorTestCase):
     def expired_iso_setup(self):
         self.worker_setup()
         installer = self.root / 'installer'
@@ -1182,6 +1194,27 @@ efibootmgr() {
         image.assert_not_called()
         self.assertFalse((self.root / 'installer').exists())
 
+    def test_reused_iso_only_prints_laptop_steps_after_usb_write(self):
+        self.worker_setup()
+        image = cli.output_directory(self.root / 'installer/image') / 'guaranine-kairos.iso'
+        cli.private_write(image, 'DISPOSABLE-ISO')
+        source = {'commit': 'a' * 40, 'sources_sha256': 'b' * 64}
+        cli.private_write(image.parent / 'source.json', json.dumps(source))
+        for flashed in (False, True):
+            output = io.StringIO()
+            with (self.subTest(flashed=flashed), patch.object(cli, 'flash_image', return_value=flashed),
+                  patch.object(cli, 'iso_source', return_value=source),
+                  patch.object(cli, 'build_base') as build, patch.object(cli, 'mint') as mint,
+                  contextlib.redirect_stdout(output)):
+                cli.prepare_iso(None)
+            build.assert_not_called()
+            mint.assert_not_called()
+            self.assertEqual('Boot the laptop from this USB.' in output.getvalue(), flashed)
+            self.assertEqual('./guaranine worker' in output.getvalue(), flashed)
+            self.assertEqual('USB not flashed.' in output.getvalue(), not flashed)
+
+
+class LaptopDiscoveryTests(OperatorTestCase):
     def test_laptop_discovery_waits_and_selects_only_online_tagged_live_peers(self):
         first = {'HostName': 'guaranine-live-aaaa', 'Online': True, 'Tags': ['tag:guaranine-worker'],
                  'TailscaleIPs': ['fd7a:115c:a1e0::8', '100.64.0.8']}
@@ -1235,25 +1268,8 @@ efibootmgr() {
         sleep.assert_not_called()
         prompt.assert_not_called()
 
-    def test_reused_iso_only_prints_laptop_steps_after_usb_write(self):
-        self.worker_setup()
-        image = cli.output_directory(self.root / 'installer/image') / 'guaranine-kairos.iso'
-        cli.private_write(image, 'DISPOSABLE-ISO')
-        source = {'commit': 'a' * 40, 'sources_sha256': 'b' * 64}
-        cli.private_write(image.parent / 'source.json', json.dumps(source))
-        for flashed in (False, True):
-            output = io.StringIO()
-            with (self.subTest(flashed=flashed), patch.object(cli, 'flash_image', return_value=flashed),
-                  patch.object(cli, 'iso_source', return_value=source),
-                  patch.object(cli, 'build_base') as build, patch.object(cli, 'mint') as mint,
-                  contextlib.redirect_stdout(output)):
-                cli.prepare_iso(None)
-            build.assert_not_called()
-            mint.assert_not_called()
-            self.assertEqual('Boot the laptop from this USB.' in output.getvalue(), flashed)
-            self.assertEqual('./guaranine worker' in output.getvalue(), flashed)
-            self.assertEqual('USB not flashed.' in output.getvalue(), not flashed)
 
+class SSHTrustTests(OperatorTestCase):
     def test_ssh_hostkey_displays_fingerprint_and_requires_confirmation_before_pinning(self):
         blob = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\x11' * 32
         raw = '100.64.0.8 ssh-ed25519 ' + base64.b64encode(blob).decode() + '\n'
@@ -1279,6 +1295,8 @@ efibootmgr() {
                   contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'identity not confirmed')):
                 with cli.verified_connection('100.64.0.8', self.root): self.fail('Unconfirmed SSH key accepted')
 
+
+class ControllerBootstrapTests(OperatorTestCase):
     def test_new_controller_requires_confirmation_before_activation(self):
         cli.private_write(self.root / 'server-token', 'DISPOSABLE-SERVER\n')
         cli.private_write(self.root / 'agent-token', 'DISPOSABLE-AGENT\n')
@@ -1314,12 +1332,6 @@ efibootmgr() {
             cli.initialize_controller(['ssh'], self.root)
         self.assertEqual(command.call_count, 1)
         prompt.assert_not_called()
-
-    def test_disk_inventory_excludes_boot_usb_readonly_and_nested_mounts(self):
-        good = {'path': '/dev/vdb', 'type': 'disk', 'size': 64 * 2**30, 'ro': False, 'mountpoints': []}
-        bad = {**good, 'path': '/dev/vda', 'children': [{'mountpoints': ['/usr/local']}]}
-        with patch.object(cli, 'private_command', return_value=json.dumps({'blockdevices': [good, bad, {**good, 'ro': True}]})):
-            self.assertEqual([disk['path'] for disk in cli.read_disks(['ssh'], self.root)], ['/dev/vdb'])
 
 
 class KioskRecoveryTests(unittest.TestCase):
