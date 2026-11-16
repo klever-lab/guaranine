@@ -5,7 +5,11 @@
     "tag:guaranine-monitoring": ["autogroup:admin"],
     "tag:guaranine-kiosk": ["autogroup:admin"],
     "tag:guaranine-app-gateway": ["autogroup:admin"],
-    "tag:guaranine-jellyfin": ["autogroup:admin"]
+    "tag:guaranine-jellyfin": ["autogroup:admin"],
+    "tag:guaranine-kobo": ["autogroup:admin"]
+  },
+  "hosts": {
+    "guaranine-books": "100.68.75.52"
   },
   "grants": [
     {
@@ -39,6 +43,11 @@
       "ip": ["tcp:9100"]
     },
     {
+      "src": ["tag:guaranine-kobo"],
+      "dst": ["guaranine-books"],
+      "ip": ["tcp:443"]
+    },
+    {
       "src": ["tag:guaranine-controlplane", "tag:guaranine-worker"],
       "dst": ["tag:guaranine-controlplane", "tag:guaranine-worker"],
       "ip": ["udp:8472"]
@@ -59,6 +68,12 @@
     }
   ],
   "tests": [
+    {
+      "src": "tag:guaranine-kobo",
+      "proto": "tcp",
+      "accept": ["guaranine-books:443"],
+      "deny": ["guaranine-books:22", "guaranine-books:8083", "100.105.155.56:443", "tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "tag:guaranine-jellyfin:443", "100.123.102.71:22"]
+    },
     {
       "src": "tag:guaranine-kiosk",
       "proto": "tcp",

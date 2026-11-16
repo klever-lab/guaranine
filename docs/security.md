@@ -27,6 +27,8 @@ Application gateways can use the admin-owned `tag:guaranine-app-gateway`, with n
 
 Jellyfin is the sole public-access exception. Its existing gateway uses the separate admin-owned `tag:guaranine-jellyfin`, which alone has Funnel permission and has no grants to administer other tailnet devices. Jellyfin's repository owns its HTTPS proxy and exact public source-IP allowlist. General application gateways, cluster nodes, monitoring and ordinary tailnet members have no Funnel permission.
 
+The reader uses the admin-owned `tag:guaranine-kobo`, with one grant to the Books gateway on TCP 443. The `guaranine-books` host alias pins that gateway's enrolled Tailscale address; update it deliberately if the identity is replaced. The reader cannot administer nodes or reach qBittorrent, monitoring or Jellyfin, and has no Funnel permission. Its installer and credentials belong to the application repositories and protected operator storage.
+
 Before applying it, back up the live policy outside the checkout. Use the standard [Access controls editor](https://console.tailscale.com/admin/acls); for API updates, validate first, use the live ETag with `If-Match` and read back the result. CI checks JSON syntax without credentials and never applies the live policy.
 
 The cluster nodes use Tailscale kernel networking and persistent identity, with subnet-route acceptance, Tailscale SSH and host DNS changes disabled. K3s uses Tailscale node addresses and binds Flannel to `tailscale0`; Flannel derives its MTU from that interface. Administration, API, kubelet and cross-node pod traffic use the tailnet. Cloud/LAN addresses are never cluster endpoints. Other operator VPNs must preserve the `100.64.0.0/10` routes.
