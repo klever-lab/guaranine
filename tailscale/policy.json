@@ -43,16 +43,7 @@
       "ip": ["udp:8472"]
     }
   ],
-  "nodeAttrs": [
-    {
-      "target": ["autogroup:member"],
-      "attr": ["funnel"]
-    },
-    {
-      "target": ["tag:guaranine-app-gateway"],
-      "attr": ["funnel"]
-    }
-  ],
+  "nodeAttrs": [],
   "ssh": [
     {
       "action": "check",
