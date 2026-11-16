@@ -411,56 +411,9 @@ data:
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
-          "id": 18, "type": "stat", "title": "",
-          "description": "Whether Prometheus can collect metrics from grafana-pi over Tailscale.",
-          "gridPos": {"x": 0, "y": 8, "w": 4, "h": 3},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "up{job=\"grafana-pi\"}"}],
-          "fieldConfig": {"defaults": {
-            "displayName": "Raspberry Pi status",
-            "noValue": "Unknown",
-            "mappings": [{"type": "value", "options": {"0": {"text": "Offline", "color": "red"}, "1": {"text": "Online", "color": "green"}}}]
-          }},
-          "options": {"colorMode": "value", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 14, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
-        },
-        {
-          "id": 19, "type": "stat", "title": "",
-          "gridPos": {"x": 4, "y": 8, "w": 4, "h": 3},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "(node_time_seconds{job=\"grafana-pi\"} - node_boot_time_seconds{job=\"grafana-pi\"}) and on(instance) (up{job=\"grafana-pi\"} == 1)"}],
-          "fieldConfig": {"defaults": {"displayName": "Raspberry Pi uptime", "unit": "s", "min": 0, "noValue": "Offline"}},
-          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 14, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
-        },
-        {
-          "id": 20, "type": "stat", "title": "",
-          "gridPos": {"x": 8, "y": 8, "w": 4, "h": 3},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "node_thermal_zone_temp{job=\"grafana-pi\",type=\"cpu-thermal\"} and on(instance) (up{job=\"grafana-pi\"} == 1)"}],
-          "fieldConfig": {"defaults": {"displayName": "Raspberry Pi temperature", "unit": "celsius", "decimals": 1, "noValue": "Unavailable"}},
-          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 14, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
-        },
-        {
-          "id": 21, "type": "stat", "title": "",
-          "description": "Used space on the Pi's root filesystem; excludes the separate boot partition.",
-          "gridPos": {"x": 12, "y": 8, "w": 4, "h": 3},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "(100 * (1 - node_filesystem_free_bytes{job=\"grafana-pi\",mountpoint=\"/\"} / node_filesystem_size_bytes{job=\"grafana-pi\",mountpoint=\"/\"})) and on(instance) (up{job=\"grafana-pi\"} == 1)"}],
-          "fieldConfig": {"defaults": {"displayName": "Raspberry Pi SD card used", "unit": "percent", "min": 0, "max": 100, "decimals": 1, "noValue": "Offline"}},
-          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 14, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
-        },
-        {
-          "id": 22, "type": "text", "title": "Services",
-          "description": "Private web applications available over Tailscale.",
-          "gridPos": {"x": 16, "y": 8, "w": 8, "h": 3},
-          "options": {
-            "mode": "markdown",
-            "content": "[Jellyfin](https://streams.tail3a78b9.ts.net) · [Calibre Web](https://books.tail3a78b9.ts.net) · [qBittorrent](https://qbittorrent.tail3a78b9.ts.net) · [Grafana](https://monitoring.tail3a78b9.ts.net)"
-          }
-        },
-        {
           "id": 7, "type": "timeseries", "title": "Pod CPU usage (%)",
           "description": "Each pod's five-minute average CPU usage as a percentage of its node's total CPU capacity.",
-          "gridPos": {"x": 0, "y": 11, "w": 12, "h": 8},
+          "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "expr": "100 * sum by(node,namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",pod!=\"\"}[5m])) / on(node) group_left max by(node) (kube_node_status_capacity{resource=\"cpu\",unit=\"core\"})", "legendFormat": "{{namespace}} / {{pod}}"}],
           "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}},
@@ -469,7 +422,7 @@ data:
         {
           "id": 8, "type": "timeseries", "title": "Pod memory working set (%)",
           "description": "Each pod's memory working set as a percentage of its node's total RAM.",
-          "gridPos": {"x": 12, "y": 11, "w": 12, "h": 8},
+          "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "expr": "100 * sum by(node,namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",pod!=\"\"}) / on(node) group_left max by(node) (kube_node_status_capacity{resource=\"memory\",unit=\"byte\"})", "legendFormat": "{{namespace}} / {{pod}}"}],
           "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}},
@@ -478,42 +431,42 @@ data:
         {
           "id": 16, "type": "stat", "title": "",
           "description": "All nodes registered in Kubernetes, including nodes that are not Ready.",
-          "gridPos": {"x": 0, "y": 19, "w": 3, "h": 3},
+          "gridPos": {"x": 0, "y": 16, "w": 2, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "count(kube_node_info)"}],
           "fieldConfig": {"defaults": {"displayName": "Total nodes", "unit": "short", "decimals": 0, "min": 0}},
-          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 14, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 12, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
         },
         {
           "id": 17, "type": "stat", "title": "",
           "description": "Nodes whose Kubernetes Ready condition is true.",
-          "gridPos": {"x": 3, "y": 19, "w": 3, "h": 3},
+          "gridPos": {"x": 2, "y": 16, "w": 2, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})"}],
           "fieldConfig": {"defaults": {"displayName": "Ready nodes", "unit": "short", "decimals": 0, "min": 0}},
-          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 14, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 12, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
         },
         {
           "id": 10, "type": "stat", "title": "",
           "description": "Namespaces with running pods, matching the service groups in the table.",
-          "gridPos": {"x": 6, "y": 19, "w": 3, "h": 3},
+          "gridPos": {"x": 4, "y": 16, "w": 2, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "count(count by(namespace) (kube_pod_status_phase{phase=\"Running\"} == 1))"}],
           "fieldConfig": {"defaults": {"displayName": "Services", "unit": "short", "decimals": 0, "min": 0}},
-          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 14, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 12, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
         },
         {
           "id": 11, "type": "stat", "title": "",
-          "gridPos": {"x": 9, "y": 19, "w": 3, "h": 3},
+          "gridPos": {"x": 6, "y": 16, "w": 2, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(kube_pod_status_phase{phase=\"Running\"} == 1)"}],
           "fieldConfig": {"defaults": {"displayName": "Running pods", "unit": "short", "decimals": 0, "min": 0}},
-          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 14, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 12, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
         },
         {
           "id": 12, "type": "stat", "title": "",
           "description": "Total CPU usage of running pods, in cores, averaged over five minutes.",
-          "gridPos": {"x": 12, "y": 19, "w": 3, "h": 3},
+          "gridPos": {"x": 8, "y": 16, "w": 3, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(sum by(namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",pod!=\"\"}[5m])) and on(namespace,pod) (kube_pod_status_phase{phase=\"Running\"} == 1))"}],
           "fieldConfig": {"defaults": {"displayName": "Pod CPU", "unit": "cores", "decimals": 4, "min": 0}},
@@ -522,7 +475,7 @@ data:
         {
           "id": 13, "type": "stat", "title": "",
           "description": "Total memory working set of running pods.",
-          "gridPos": {"x": 15, "y": 19, "w": 3, "h": 3},
+          "gridPos": {"x": 11, "y": 16, "w": 3, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(sum by(namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",pod!=\"\"}) and on(namespace,pod) (kube_pod_status_phase{phase=\"Running\"} == 1))"}],
           "fieldConfig": {"defaults": {"displayName": "Pod memory", "unit": "bytes", "decimals": 1, "min": 0}},
@@ -531,7 +484,7 @@ data:
         {
           "id": 14, "type": "stat", "title": "",
           "description": "Used space on mounted block filesystems across reporting nodes, including OS and workload data. Excludes RAM, overlays and loop-mounted OS images; this is not per-pod disk usage.",
-          "gridPos": {"x": 18, "y": 19, "w": 3, "h": 3},
+          "gridPos": {"x": 14, "y": 16, "w": 3, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(max by(node,device) (container_fs_usage_bytes{id=\"/\",device=~\"/dev/(sd|vd|nvme|mmcblk).*\"}))"}],
           "fieldConfig": {"defaults": {"displayName": "Disk used", "unit": "bytes", "decimals": 1, "min": 0}},
@@ -540,15 +493,23 @@ data:
         {
           "id": 15, "type": "stat", "title": "",
           "description": "Total capacity of the mounted block filesystems counted by Disk used. Unmounted partitions and disks are excluded.",
-          "gridPos": {"x": 21, "y": 19, "w": 3, "h": 3},
+          "gridPos": {"x": 17, "y": 16, "w": 3, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(max by(node,device) (container_fs_limit_bytes{id=\"/\",device=~\"/dev/(sd|vd|nvme|mmcblk).*\"}))"}],
           "fieldConfig": {"defaults": {"displayName": "Disk capacity", "unit": "bytes", "decimals": 1, "min": 0}},
           "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 14, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
         },
         {
+          "id": 22, "type": "text", "title": "Services",
+          "gridPos": {"x": 20, "y": 16, "w": 4, "h": 4},
+          "options": {
+            "mode": "markdown",
+            "content": "[Jellyfin](https://streams.tail3a78b9.ts.net) · [Calibre Web](https://books.tail3a78b9.ts.net) · [qBittorrent](https://qbittorrent.tail3a78b9.ts.net) · [Grafana](https://monitoring.tail3a78b9.ts.net)"
+          }
+        },
+        {
           "id": 9, "type": "table", "title": "Running pods by service",
-          "gridPos": {"x": 0, "y": 22, "w": 24, "h": 10},
+          "gridPos": {"x": 0, "y": 20, "w": 24, "h": 10},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
             {"refId": "A", "instant": true, "range": false, "format": "table", "expr": "label_join(max by(namespace,pod,node) (kube_pod_info * on(namespace,pod,uid) group_left() (kube_pod_status_phase{phase=\"Running\"} == 1)), \"pod_id\", \"/\", \"namespace\", \"pod\")"},
