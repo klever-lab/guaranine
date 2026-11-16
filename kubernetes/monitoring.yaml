@@ -458,19 +458,21 @@ data:
           }
         },
         {
-          "id": 7, "type": "timeseries", "title": "Pod CPU usage (cores)",
+          "id": 7, "type": "timeseries", "title": "Pod CPU usage (%)",
+          "description": "Each pod's five-minute average CPU usage as a percentage of its node's total CPU capacity.",
           "gridPos": {"x": 0, "y": 11, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "sum by(namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",pod!=\"\"}[5m]))", "legendFormat": "{{namespace}} / {{pod}}"}],
-          "fieldConfig": {"defaults": {"unit": "cores", "min": 0}},
+          "targets": [{"refId": "A", "expr": "100 * sum by(node,namespace,pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",pod!=\"\"}[5m])) / on(node) group_left max by(node) (kube_node_status_capacity{resource=\"cpu\",unit=\"core\"})", "legendFormat": "{{namespace}} / {{pod}}"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1}},
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
-          "id": 8, "type": "timeseries", "title": "Pod memory working set",
+          "id": 8, "type": "timeseries", "title": "Pod memory working set (%)",
+          "description": "Each pod's memory working set as a percentage of its node's total RAM.",
           "gridPos": {"x": 12, "y": 11, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "sum by(namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",pod!=\"\"})", "legendFormat": "{{namespace}} / {{pod}}"}],
-          "fieldConfig": {"defaults": {"unit": "bytes", "min": 0}},
+          "targets": [{"refId": "A", "expr": "100 * sum by(node,namespace,pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",pod!=\"\"}) / on(node) group_left max by(node) (kube_node_status_capacity{resource=\"memory\",unit=\"byte\"})", "legendFormat": "{{namespace}} / {{pod}}"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1}},
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
