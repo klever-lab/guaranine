@@ -10,7 +10,7 @@ Connect to Tailscale and open <https://monitoring.tail3a78b9.ts.net>. Log in as 
 cat "${GUARANINE_OPERATOR_DIR:-$HOME/.local/state/guaranine-kairos}/monitoring/admin-password"
 ```
 
-The **Services** panel at the top links to Jellyfin, Calibre Web, qBittorrent and Grafana. This directory is maintained manually in the manifest's `overview.json`; update its links when adding or retiring a web application.
+The **Services** panel shares the compact row with the four Raspberry Pi cards and links to Jellyfin, Calibre Web, qBittorrent and Grafana. This directory is maintained manually in the manifest's `overview.json`; update its links when adding or retiring a web application.
 
 Charts show host/pod CPU and memory. The host charts include Kubernetes nodes and the standalone `grafana-pi` display. Four Raspberry Pi cards below them show scrape status, uptime, CPU temperature and root SD-card filesystem usage, excluding its separate boot partition. The Pi remains outside Kubernetes and is excluded from cluster node counts and disk totals.
 
