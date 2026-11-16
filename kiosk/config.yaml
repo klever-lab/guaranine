@@ -227,9 +227,10 @@ write_files:
       xset -dpms
       xset s noblank
       xsetroot -solid black
-      openbox --sm-disable &
       systemctl --user import-environment DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
-      exec systemctl --user start --wait guaranine-kiosk.service
+      systemctl --user restart guaranine-kiosk.service
+      # Keep the desktop session alive across browser restarts.
+      exec openbox --sm-disable
   - path: /etc/systemd/user/guaranine-kiosk.service
     permissions: '0644'
     content: |
