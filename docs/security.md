@@ -2,7 +2,7 @@
 
 ## Tailnet policy
 
-[tailscale/policy.json](../tailscale/policy.json) owns the complete policy for this tailnet, including existing personal access. Funnel is disabled for all users and node tags; no services are published to the internet through it. Only admins own the Guaranine node tags. Node grants permit:
+[tailscale/policy.json](../tailscale/policy.json) owns the complete policy for this tailnet, including existing personal access. Only admins own the Guaranine node tags. Node grants permit:
 
 | Source | Destination | Port | Purpose |
 | --- | --- | --- | --- |
@@ -24,6 +24,8 @@ The display has the admin-owned `tag:guaranine-kiosk`. It can reach Grafana but 
 NetworkManager runs [ordinary dispatcher scripts serially](https://manpages.debian.org/trixie/network-manager/NetworkManager-dispatcher.8.en.html). The Pi's up/down and DHCP hooks refresh its attached IPv4 subnet and active-interface sets from current kernel state; physical egress stays blocked until those sets are populated. The Pi permits tailnet SSH and metrics, network setup and DNS, and encrypted Tailscale transport. Ordinary physical internet egress uses IPv4; physical IPv6 is restricted to network setup, DNS and marked Tailscale transport. Direct LAN traffic remains blocked, including attached public subnets and later SLAAC prefixes.
 
 Application gateways can use the admin-owned `tag:guaranine-app-gateway`, with no grants to reach other tailnet devices. Each application repository owns its private Serve deployment and client access restrictions. The tag has no Funnel permission, and application gateways must keep `AllowFunnel` disabled.
+
+Jellyfin is the sole public-access exception. Its existing gateway uses the separate admin-owned `tag:guaranine-jellyfin`, which alone has Funnel permission and has no grants to administer other tailnet devices. Jellyfin's repository owns its HTTPS proxy and exact public source-IP allowlist. General application gateways, cluster nodes, monitoring and ordinary tailnet members have no Funnel permission.
 
 Before applying it, back up the live policy outside the checkout. Use the standard [Access controls editor](https://console.tailscale.com/admin/acls); for API updates, validate first, use the live ETag with `If-Match` and read back the result. CI checks JSON syntax without credentials and never applies the live policy.
 

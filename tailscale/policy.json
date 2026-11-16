@@ -4,7 +4,8 @@
     "tag:guaranine-worker": ["autogroup:admin"],
     "tag:guaranine-monitoring": ["autogroup:admin"],
     "tag:guaranine-kiosk": ["autogroup:admin"],
-    "tag:guaranine-app-gateway": ["autogroup:admin"]
+    "tag:guaranine-app-gateway": ["autogroup:admin"],
+    "tag:guaranine-jellyfin": ["autogroup:admin"]
   },
   "grants": [
     {
@@ -43,7 +44,12 @@
       "ip": ["udp:8472"]
     }
   ],
-  "nodeAttrs": [],
+  "nodeAttrs": [
+    {
+      "target": ["tag:guaranine-jellyfin"],
+      "attr": ["funnel"]
+    }
+  ],
   "ssh": [
     {
       "action": "check",
@@ -71,9 +77,14 @@
       "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "100.123.102.71:22"]
     },
     {
+      "src": "tag:guaranine-jellyfin",
+      "proto": "tcp",
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "100.123.102.71:22"]
+    },
+    {
       "src": "user@example.com",
       "proto": "tcp",
-      "deny": ["tag:guaranine-app-gateway:443"]
+      "deny": ["tag:guaranine-app-gateway:443", "tag:guaranine-jellyfin:443"]
     },
     {
       "src": "kianbahasadri@gmail.com",
