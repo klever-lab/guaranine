@@ -15,7 +15,7 @@
 | Kiosk | Monitoring proxy | TCP 443 | Private dashboard display |
 | Worker | Kiosk | TCP 9100 | Prometheus host metrics |
 
-Nodes cannot administer peers. The policy retains the operator's broader personal access; the table describes cluster traffic, not a replacement for the complete policy.
+Nodes cannot administer peers. The policy retains the operator's broader personal access, except for the reader restriction below; the table describes cluster traffic, not a replacement for the complete policy.
 
 The monitoring proxy has its own admin-owned tag, with no grants to reach other tailnet devices. Cluster node tags and unrelated users cannot connect to it. Its Serve configuration disables Funnel. The [monitoring guide](monitoring.md) owns its Kubernetes permissions and traffic.
 
@@ -28,6 +28,19 @@ Application gateways can use the admin-owned `tag:guaranine-app-gateway`, with n
 Jellyfin is the sole public-access exception. Its existing gateway uses the separate admin-owned `tag:guaranine-jellyfin`, which alone has Funnel permission and has no grants to administer other tailnet devices. Jellyfin's repository owns its HTTPS proxy and exact public source-IP allowlist. General application gateways, cluster nodes, monitoring and ordinary tailnet members have no Funnel permission.
 
 The reader uses the admin-owned `tag:guaranine-kobo`, with one grant to the Books gateway on TCP 443. The `guaranine-books` host alias pins that gateway's enrolled Tailscale address; update it deliberately if the identity is replaced. The reader cannot administer nodes or reach qBittorrent, monitoring or Jellyfin, and has no Funnel permission. Its installer and credentials belong to the application repositories and protected operator storage.
+
+Direct reader maintenance permits only TCP 22 from the enrolled operator laptop.
+The `operator-laptop` and `kobo-clara-bw` host aliases, with their `-v6` counterparts,
+pin both identities' addresses. The `operator-without-kobo` IP set excludes both
+reader addresses from the broader operator grant; adding a narrow grant alone
+would not restrict the existing wildcard grant. Other operator devices, unrelated
+users and application/cluster tags cannot reach reader SSH. Update the aliases
+deliberately if either identity is replaced. SSH authorization additionally permits
+only the operator identity as `root`, with a browser check every 12 hours. Network
+tests include both address families and denial from another enrolled operator device;
+SSH tests cover the allowed user and rejection of other users and worker tags.
+The application repository owns the reader's opt-in enable/disable controls;
+no Kubernetes resources or public listeners are added for maintenance.
 
 Before applying it, back up the live policy outside the checkout. Use the standard [Access controls editor](https://console.tailscale.com/admin/acls); for API updates, validate first, use the live ETag with `If-Match` and read back the result. CI checks JSON syntax without credentials and never applies the live policy.
 

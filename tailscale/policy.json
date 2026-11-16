@@ -9,13 +9,22 @@
     "tag:guaranine-kobo": ["autogroup:admin"]
   },
   "hosts": {
-    "guaranine-books": "100.68.75.52"
+    "guaranine-books": "100.68.75.52",
+    "operator-laptop": "100.123.102.71",
+    "operator-laptop-v6": "fd7a:115c:a1e0::ee34:6647",
+    "kobo-clara-bw": "100.101.223.74",
+    "kobo-clara-bw-v6": "fd7a:115c:a1e0::7b2d:df4b"
   },
   "grants": [
     {
       "src": ["kianbahasadri@gmail.com"],
-      "dst": ["*"],
+      "dst": ["ipset:operator-without-kobo"],
       "ip": ["*"]
+    },
+    {
+      "src": ["operator-laptop", "operator-laptop-v6"],
+      "dst": ["tag:guaranine-kobo"],
+      "ip": ["tcp:22"]
     },
     {
       "src": ["tag:guaranine-worker"],
@@ -65,6 +74,13 @@
       "src": ["autogroup:member"],
       "dst": ["autogroup:self"],
       "users": ["autogroup:nonroot", "root"]
+    },
+    {
+      "action": "check",
+      "src": ["kianbahasadri@gmail.com"],
+      "dst": ["tag:guaranine-kobo"],
+      "users": ["root"],
+      "checkPeriod": "12h"
     }
   ],
   "tests": [
@@ -72,34 +88,34 @@
       "src": "tag:guaranine-kobo",
       "proto": "tcp",
       "accept": ["guaranine-books:443"],
-      "deny": ["guaranine-books:22", "guaranine-books:8083", "100.105.155.56:443", "tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "tag:guaranine-jellyfin:443", "100.123.102.71:22"]
+      "deny": ["guaranine-books:22", "guaranine-books:8083", "100.105.155.56:443", "tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "tag:guaranine-jellyfin:443", "100.123.102.71:22", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "tag:guaranine-kiosk",
       "proto": "tcp",
       "accept": ["tag:guaranine-monitoring:443"],
-      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "100.123.102.71:22"]
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "100.123.102.71:22", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "tag:guaranine-worker",
       "proto": "tcp",
       "accept": ["tag:guaranine-kiosk:9100"],
-      "deny": ["tag:guaranine-kiosk:22"]
+      "deny": ["tag:guaranine-kiosk:22", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "tag:guaranine-app-gateway",
       "proto": "tcp",
-      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "100.123.102.71:22"]
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "100.123.102.71:22", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "tag:guaranine-jellyfin",
       "proto": "tcp",
-      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "100.123.102.71:22"]
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "100.123.102.71:22", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "user@example.com",
       "proto": "tcp",
-      "deny": ["tag:guaranine-app-gateway:443", "tag:guaranine-jellyfin:443"]
+      "deny": ["tag:guaranine-app-gateway:443", "tag:guaranine-jellyfin:443", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "kianbahasadri@gmail.com",
@@ -107,7 +123,7 @@
     },
     {
       "src": "user@example.com",
-      "deny": ["100.123.102.71:22", "100.123.102.71:9876"]
+      "deny": ["100.123.102.71:22", "100.123.102.71:9876", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "kianbahasadri@gmail.com",
@@ -118,40 +134,95 @@
       "src": "tag:guaranine-worker",
       "proto": "tcp",
       "accept": ["tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:10250"],
-      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:8472", "tag:guaranine-worker:22", "tag:guaranine-worker:6443", "100.123.102.71:22", "100.123.102.71:9876", "tag:guaranine-monitoring:443"]
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:8472", "tag:guaranine-worker:22", "tag:guaranine-worker:6443", "100.123.102.71:22", "100.123.102.71:9876", "tag:guaranine-monitoring:443", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "tag:guaranine-controlplane",
       "proto": "tcp",
       "accept": ["tag:guaranine-worker:10250"],
-      "deny": ["tag:guaranine-worker:22", "tag:guaranine-worker:8472", "tag:guaranine-worker:6443", "100.123.102.71:22", "100.123.102.71:9876", "tag:guaranine-monitoring:443"]
+      "deny": ["tag:guaranine-worker:22", "tag:guaranine-worker:8472", "tag:guaranine-worker:6443", "100.123.102.71:22", "100.123.102.71:9876", "tag:guaranine-monitoring:443", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "tag:guaranine-worker",
       "proto": "udp",
       "accept": ["tag:guaranine-controlplane:8472", "tag:guaranine-worker:8472"],
-      "deny": ["tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:10250", "100.123.102.71:8472"]
+      "deny": ["tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:10250", "100.123.102.71:8472", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "tag:guaranine-controlplane",
       "proto": "udp",
       "accept": ["tag:guaranine-controlplane:8472", "tag:guaranine-worker:8472"],
-      "deny": ["tag:guaranine-controlplane:6443", "tag:guaranine-worker:6443", "tag:guaranine-worker:10250", "100.123.102.71:8472"]
+      "deny": ["tag:guaranine-controlplane:6443", "tag:guaranine-worker:6443", "tag:guaranine-worker:10250", "100.123.102.71:8472", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "tag:guaranine-monitoring",
       "proto": "tcp",
-      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "100.123.102.71:22", "100.123.102.71:9876"]
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "100.123.102.71:22", "100.123.102.71:9876", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "user@example.com",
       "proto": "tcp",
-      "deny": ["tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:10250", "tag:guaranine-controlplane:22", "tag:guaranine-worker:22", "tag:guaranine-monitoring:443"]
+      "deny": ["tag:guaranine-controlplane:6443", "tag:guaranine-controlplane:10250", "tag:guaranine-worker:10250", "tag:guaranine-controlplane:22", "tag:guaranine-worker:22", "tag:guaranine-monitoring:443", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "user@example.com",
       "proto": "udp",
-      "deny": ["tag:guaranine-controlplane:8472", "tag:guaranine-worker:8472"]
+      "deny": ["tag:guaranine-controlplane:8472", "tag:guaranine-worker:8472", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
+    },
+    {
+      "src": "operator-laptop",
+      "proto": "tcp",
+      "accept": ["kobo-clara-bw:22"],
+      "deny": ["kobo-clara-bw:80", "kobo-clara-bw:443", "kobo-clara-bw:8083", "kobo-clara-bw:2222"]
+    },
+    {
+      "src": "operator-laptop",
+      "proto": "udp",
+      "deny": ["kobo-clara-bw:22"]
+    },
+    {
+      "src": "operator-laptop-v6",
+      "proto": "tcp",
+      "accept": ["kobo-clara-bw-v6:22"],
+      "deny": ["kobo-clara-bw-v6:443", "kobo-clara-bw-v6:2222"]
+    },
+    {
+      "src": "operator-laptop-v6",
+      "proto": "udp",
+      "deny": ["kobo-clara-bw-v6:22"]
+    },
+    {
+      "src": "100.94.58.124",
+      "proto": "tcp",
+      "accept": ["guaranine-books:443", "100.123.102.71:22"],
+      "deny": ["kobo-clara-bw:22", "kobo-clara-bw:443"]
+    },
+    {
+      "src": "fd7a:115c:a1e0::9a34:3a7c",
+      "proto": "tcp",
+      "accept": ["operator-laptop-v6:22"],
+      "deny": ["kobo-clara-bw-v6:22", "kobo-clara-bw-v6:443"]
+    }
+  ],
+  "ipsets": {
+    "ipset:operator-without-kobo": ["add 0.0.0.0-255.255.255.255", "add ::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "remove host:kobo-clara-bw", "remove host:kobo-clara-bw-v6"]
+  },
+  "sshTests": [
+    {
+      "src": "operator-laptop",
+      "dst": ["tag:guaranine-kobo"],
+      "check": ["root"],
+      "deny": ["admin", "kian"]
+    },
+    {
+      "src": "user@example.com",
+      "dst": ["tag:guaranine-kobo"],
+      "deny": ["root"]
+    },
+    {
+      "src": "tag:guaranine-worker",
+      "dst": ["tag:guaranine-kobo"],
+      "deny": ["root"]
     }
   ]
 }
