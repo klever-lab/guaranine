@@ -55,9 +55,10 @@ run "seed_mock_state" {
       openstack_images_image_v2.controller.min_ram_mb == 2000 &&
       openstack_images_image_v2.controller.min_disk_gb == 25 &&
       openstack_compute_instance_v2.controller.user_data == null &&
+      openstack_compute_instance_v2.controller.metadata["ovh-monthly-instance"] == "1" &&
       openstack_compute_instance_v2.controller.flavor_id == data.openstack_compute_flavor_v2.controller.id
     )
-    error_message = "Boot the exact d2-2 from a private UEFI image without placing private configuration in user_data."
+    error_message = "Boot the exact d2-2 on monthly billing from a private UEFI image without placing private configuration in user_data."
   }
 
   assert {

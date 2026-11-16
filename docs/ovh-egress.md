@@ -2,7 +2,7 @@
 
 This note records the 2026-11-15 evaluation of removing the public IPv4 address from the `BHS5` control-plane VM (`guaranine-controlplane`) to eliminate its ~CA$3.15/mo (`CA$0.00432/hr`) line item in [the OVH Cloud dashboard](../kubernetes/monitoring.yaml) while retaining outbound internet egress.
 
-**Conclusion:** On OVH Public Cloud, putting the controller behind a managed NAT increases network cost, and switching to IPv6-only egress introduces registry breakages, DNS risks, DERP-only relaying for IPv4-only laptops, and unverified `BHS5` OpenStack/billing behavior. Switching `d2-2` compute from hourly to monthly billing saves almost the same amount (~CA$3.05/mo) with no networking changes.
+**Conclusion:** On OVH Public Cloud, putting the controller behind a managed NAT increases network cost, and switching to IPv6-only egress introduces registry breakages, DNS risks, DERP-only relaying for IPv4-only laptops, and unverified `BHS5` OpenStack/billing behavior. Monthly compute billing provides similar savings without networking changes.
 
 ## Why the controller only needs egress
 
@@ -61,7 +61,12 @@ OVH's Basic IP documentation states that a Basic IP on `Ext-Net` pairs one IPv4 
 5. **NAT64/DNS64 workarounds add external trust or complexity.**
    Reaching `ghcr.io` or `public.ecr.aws` from an IPv6-only controller requires DNS64 + NAT64 (which OVH does not supply on `Ext-Net`) or a dual-stack proxy/exit node, trading Guaranine's minimal architecture for external gateway dependencies to save CA$3.15/mo.
 
-## Practical cost-reduction alternatives
+## Compute billing
 
-* **Switch `d2-2` to monthly billing:** Changing compute billing in the OVH Control Panel cuts compute from ~CA$12.19/mo (730h at `CA$0.0167/hr`) to CA$9.14/mo—saving ~CA$3.05/mo with zero config or Terraform changes, as noted in [SETUP.md](../SETUP.md#cloud-preflight) and [the OVH Cloud dashboard](../kubernetes/monitoring.yaml). Verify on the next OVH invoice whether the `Ext-Net` IPv4 line (`CA$3.15/mo`) stays separate.
+The [Terraform root](../infra/ovh/main.tf) enables monthly compute billing with `ovh-monthly-instance = "1"` in the controller's metadata. OVH [documents this as a one-way change for an existing instance](https://docs.ovhcloud.com/en/guides/account-and-service-management/managing-billing-payments-and-services/changing-hourly-monthly-billing): conversion charges a prorated amount for the current month, and returning to hourly billing requires replacing the VM. Use the [restore procedure](operations.md#restore-on-another-cloud-vm) for any future replacement.
+
+At the recorded catalog rates, monthly compute is CA$9.14 versus ~CA$12.19 for 730 hours at `CA$0.0167/hr`, saving ~CA$3.05 per full month before tax. Public IPv4 and storage remain separate charges; verify their amounts on the next OVH invoice. The [OVH dashboard](../kubernetes/monitoring.yaml) compares static catalog rates, rather than reading invoices.
+
+## Further cost reduction
+
 * **Migrate to a cheaper cloud VM:** Reducing total monthly cost substantially below ~CA$12/mo CAD requires migrating via [the VM restore procedure](operations.md#restore-on-another-cloud-vm) to a provider whose base plans bundle or cheaply price IPv4 (for example Hetzner Cloud in Ashburn, Virginia, where shared-x86 `CX`/`CPX` plans price primary IPv4 around €0.50/mo and include free cloud firewalls, at the tradeoff of slightly higher distance from Montreal and no direct Glance QCOW2 upload).

@@ -155,8 +155,7 @@ resource "openstack_networking_port_v2" "controller" {
   admin_state_up     = true
 }
 
-# OpenStack-created instances start on hourly billing. Monthly billing is a
-# separate follow-up; booting this image does not start the restored K3s server.
+# Booting this image does not start the restored K3s server.
 resource "openstack_compute_instance_v2" "controller" {
   region              = var.region
   name                = "guaranine-controlplane"
@@ -170,8 +169,9 @@ resource "openstack_compute_instance_v2" "controller" {
   }
 
   metadata = {
-    project    = "guaranine"
-    managed_by = "terraform"
+    project                = "guaranine"
+    managed_by             = "terraform"
+    "ovh-monthly-instance" = "1"
   }
 
   lifecycle {
