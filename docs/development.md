@@ -27,7 +27,7 @@ Install `iproute2`, `nftables`, `iputils-ping` and the ordinary Linux namespace 
 uv run --no-project --with-requirements requirements.txt python scripts/test-firewall.py
 ```
 
-[test-firewall.py](../scripts/test-firewall.py) loads the actual Kairos and standalone kiosk nftables rules into disposable namespaces. It checks host/pod LAN isolation over IPv4/IPv6, attached public subnets, denied physical ingress, permitted internet/Tailscale paths, DNS identity restrictions, subnet changes and blocked unconfigured egress. Kiosk checks also exercise the real NetworkManager dispatcher, a late IPv6 prefix without a dispatcher event, and marked IPv4/IPv6 Tailscale transport. It proves fixture connectivity so a broken fixture cannot silently count as isolation. CI runs it with sudo.
+[test-firewall.py](../scripts/test-firewall.py) loads the actual Kairos and standalone kiosk nftables rules into disposable namespaces. It checks host/pod LAN isolation over IPv4/IPv6, attached public subnets, denied physical ingress, permitted internet/Tailscale paths, DNS identity restrictions, subnet changes and blocked unconfigured egress. It also loads the optional public VPN profile with simulated kube-proxy DNAT, allowing only its public UDP NodePort while rejecting LAN sources, other ports and direct Pod access. Kiosk checks exercise the real NetworkManager dispatcher, a late IPv6 prefix without a dispatcher event, and marked IPv4/IPv6 Tailscale transport. It proves fixture connectivity so a broken fixture cannot silently count as isolation. CI runs it with sudo.
 
 ## Disposable image checks
 

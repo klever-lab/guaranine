@@ -37,7 +37,7 @@ def serve():
     for port, kind in ((18080, socket.SOCK_STREAM), (53, socket.SOCK_STREAM),
                        (53, socket.SOCK_DGRAM), (22, socket.SOCK_STREAM),
                        (6443, socket.SOCK_STREAM), (9100, socket.SOCK_STREAM),
-                       (10250, socket.SOCK_STREAM)):
+                       (10250, socket.SOCK_STREAM), (51820, socket.SOCK_DGRAM)):
         listener = socket.socket(socket.AF_INET6, kind)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
@@ -48,10 +48,12 @@ def serve():
         thread.start()
 
 
-def probe(address, port, protocol, uid, mark):
+def probe(address, port, protocol, uid, mark, source=''):
     kind = socket.SOCK_DGRAM if protocol == 'udp' else socket.SOCK_STREAM
     os.setuid(int(uid))
     with socket.socket(socket.AF_INET6 if ':' in address else socket.AF_INET, kind) as stream:
+        if source:
+            stream.bind((source, 0))
         if int(mark):
             stream.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, int(mark))
         stream.settimeout(0.5)
@@ -109,9 +111,9 @@ def exercise():
             run(*prefix, 'ip', family, 'route', 'add', destination, 'via', gateway)
         serve()
 
-        def check(prefix, address, allowed, port=18080, protocol='tcp', uid=0, mark=0):
+        def check(prefix, address, allowed, port=18080, protocol='tcp', uid=0, mark=0, source=''):
             output = run(*prefix, sys.executable, str(SCRIPT), '--probe', address, str(port), protocol,
-                         str(uid), str(mark))
+                         str(uid), str(mark), source)
             if json.loads(output) != allowed:
                 raise AssertionError(f'{address}:{port}/{protocol} uid={uid} expected allowed={allowed}')
 
@@ -178,6 +180,29 @@ def exercise():
             check(pod, target, False)
             run('nft', 'delete', 'element', 'inet', 'guaranine', name, '{ ' + prefix + ' }')
             check([], target, True)
+        # Model kube-proxy DNAT on a public controller. The optional rule must
+        # allow only public clients of the single WireGuard NodePort.
+        run('nft', '-f', '-', input='''table ip vpn_fixture {
+          chain prerouting {
+            type nat hook prerouting priority dstnat;
+            iifname "lan0" ip daddr 203.0.113.2 udp dport { 31820, 31821 } dnat to 10.42.0.2:51820
+          }
+        }''')
+        check(lan, '203.0.113.2', False, port=31820, protocol='udp', source='198.51.100.1')
+        vpn_profile = yaml.safe_load((SCRIPT.parents[1] / 'kairos/public-vpn.yaml').read_text())
+        vpn_rules = next(file['content'] for stage in vpn_profile['stages']['initramfs']
+                         for file in stage.get('files', []) if file['path'].endswith('.nft'))
+        run('nft', '-f', '-', input=vpn_rules)
+        check(lan, '203.0.113.2', True, port=31820, protocol='udp', source='198.51.100.1')
+        for source in ('203.0.113.1', '192.168.50.1'):
+            check(lan, '203.0.113.2', False, port=31820, protocol='udp', source=source)
+        check(lan, '203.0.113.2', False, port=31821, protocol='udp', source='198.51.100.1')
+        check(lan, '203.0.113.2', False, port=51820, protocol='udp', source='198.51.100.1')
+        check(lan, '10.42.0.2', False, port=51820, protocol='udp', source='198.51.100.1')
+        for port in (22, 6443, 10250):
+            check(lan, '203.0.113.2', False, port=port, source='198.51.100.1')
+        print('Public VPN packet checks passed: one DNATed UDP port, no LAN/host/direct-Pod access')
+        run('nft', 'delete', 'table', 'ip', 'vpn_fixture')
         run('nft', 'flush', 'set', 'inet', 'guaranine', 'connected_interfaces')
         check([], '198.51.100.1', False)
         check(pod, '198.51.100.1', False)

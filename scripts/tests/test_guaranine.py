@@ -26,6 +26,25 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import guaranine as cli
 
 
+class PublicVPNTests(unittest.TestCase):
+    def test_public_ingress_uses_only_the_pinned_controller_and_fixed_profile(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            with (patch.object(cli, 'operator_directory', return_value=directory),
+                  patch.object(cli, 'operator_settings', return_value={'endpoint': 'https://100.107.54.67:6443'}),
+                  patch.object(cli, 'ssh_command', return_value=['pinned-ssh']) as ssh,
+                  patch.object(cli, 'private_command') as command,
+                  contextlib.redirect_stdout(io.StringIO())):
+                cli.public_vpn(None)
+            ssh.assert_called_once_with('100.107.54.67', directory / 'controlplane-known-hosts')
+            self.assertEqual(command.call_args.args, (['pinned-ssh', 'sh -se'], directory))
+            script = command.call_args.kwargs['data']
+            self.assertIn('/oem/91_guaranine-public-vpn.yaml', script)
+            self.assertIn('ct original proto-dst 31820', script)
+            self.assertIn('10-controlplane.yaml', script)
+            subprocess.run(['sh', '-n'], input=script, text=True, check=True)
+
+
 class ImageHarnessTests(unittest.TestCase):
     def test_controller_seed_snapshots_do_not_hide_writes_to_the_unrelated_data_disk(self):
         spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')

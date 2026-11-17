@@ -206,6 +206,25 @@ kubectl get storageclass
 
 See [application storage](docs/storage.md) for the PVC workflow, permissions, local disk limits and existing-volume handling.
 
+## Public WireGuard ingress
+
+The separate [self-hosted Friends VPN](https://github.com/klever-lab/self-hosted/blob/main/SETUP.md#public-friends-vpn)
+owns the authenticated VPN workload and its fixed UDP NodePort. After deploying
+that application, opt in on the cloud controller:
+
+```bash
+./guaranine public-vpn
+```
+
+This uses the existing pinned Tailscale SSH connection to validate, persist and
+activate only [kairos/public-vpn.yaml](kairos/public-vpn.yaml). It opens public
+IPv4 UDP `31820` only when Kubernetes DNATs it to a VPN Pod on UDP `51820`.
+It does not restart K3s, reboot a node, run an application on the controller or
+change worker firewalls. The cloud network must also permit UDP `31820`.
+Verify a public client handshake and internet traffic through the application's
+Windscribe tunnel. [Security](docs/security.md#public-vpn-ingress) owns the
+exception's constraints and removal procedure.
+
 ## Optional monitoring
 
 For private Grafana and cluster metrics, prepare the worker directories described in [monitoring storage](docs/monitoring.md#storage-and-reapplication). Apply the current [tailnet policy](docs/security.md#tailnet-policy) and host firewall from this repository before collecting kubelet metrics; updating files in the checkout does not update an installed OS.

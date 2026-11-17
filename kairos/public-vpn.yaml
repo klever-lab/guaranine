@@ -1,0 +1,37 @@
+#cloud-config
+name: Guaranine public WireGuard ingress
+stages:
+  initramfs:
+    - name: Configure the controller's public VPN ingress
+      if: test -f /etc/rancher/k3s/config.yaml.d/10-controlplane.yaml
+      files:
+        - path: /etc/guaranine/public-vpn.nft
+          permissions: 0600
+          content: |
+            # Only a public IPv4 client, DNATed from UDP 31820 to the VPN Pod.
+            # Private/LAN sources, direct Pod access, host services and other ports
+            # continue through the normal deny rules. Workers never load this file.
+            insert rule inet guaranine forward meta iif @connected_interfaces ip saddr != @local_networks ip saddr != @lan4 ct status dnat ct original proto-dst 31820 ip daddr 10.42.0.0/16 udp dport 51820 oifname { "cni0", "flannel.1" } counter accept comment "guaranine-public-vpn"
+        - path: /etc/guaranine/public-vpn-start
+          permissions: 0700
+          content: |
+            #!/bin/sh
+            set -eu
+            test -f /etc/rancher/k3s/config.yaml.d/10-controlplane.yaml
+            nft() {
+              /usr/lib/guaranine-network/ld-musl-x86_64.so.1 --library-path /usr/lib/guaranine-network /usr/lib/guaranine-network/nft "$@"
+            }
+            if ! nft list chain inet guaranine forward | grep -q 'comment "guaranine-public-vpn"'; then
+              nft -f /etc/guaranine/public-vpn.nft
+            fi
+        - path: /etc/systemd/system/guaranine-firewall.service.d/public-vpn.conf
+          permissions: 0644
+          content: |
+            [Service]
+            ExecStartPost=/bin/sh /etc/guaranine/public-vpn-start
+  boot:
+    - name: Activate public VPN ingress on the controller
+      if: test -f /etc/rancher/k3s/config.yaml.d/10-controlplane.yaml
+      commands:
+        - systemctl daemon-reload
+        - /bin/sh /etc/guaranine/public-vpn-start

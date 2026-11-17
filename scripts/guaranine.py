@@ -1082,6 +1082,18 @@ printf 'Applied configuration successfully\\n'
 '''
 
 
+def public_vpn(_args):
+    """Activate only the reviewed public VPN exception on the pinned controller."""
+    directory = operator_directory()
+    settings = operator_settings()
+    address = urllib.parse.urlsplit(endpoint(settings['endpoint'])).hostname
+    connection = ssh_command(address, directory / 'controlplane-known-hosts')
+    contents = (ROOT / 'kairos/public-vpn.yaml').read_text()
+    script = rollout_script(contents, '/oem/91_guaranine-public-vpn.yaml', host_root='/')
+    private_command([*connection, 'sh -se'], directory, data=script, timeout=60)
+    print('Controller public WireGuard ingress active on UDP 31820.')
+
+
 def rollout_config(args):
     """Submit one native Kairos configuration through the upstream NodeOp controller."""
     path = Path(args.config).resolve()
@@ -1394,6 +1406,7 @@ def main(argv=None):
     commands.add_parser('controlplane', help='Build or reuse the staged controller QCOW2').set_defaults(action=prepare_controlplane)
     commands.add_parser('deploy', help='Build and provision the OVH controller through GitHub Actions').set_defaults(action=deploy_controller)
     commands.add_parser('bootstrap', help='Start the cloud controller and save its kubeconfig').set_defaults(action=bootstrap)
+    commands.add_parser('public-vpn', help='Enable the controller\'s public WireGuard ingress').set_defaults(action=public_vpn)
     worker = commands.add_parser('worker', help='Add or forget a worker')
     worker.add_argument('--wait', metavar='NAME', help='Wait for Ready without reinstalling')
     worker.set_defaults(action=manage_workers)

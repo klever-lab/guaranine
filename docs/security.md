@@ -25,7 +25,7 @@ NetworkManager runs [ordinary dispatcher scripts serially](https://manpages.debi
 
 Application gateways can use the admin-owned `tag:guaranine-app-gateway`, with no grants to reach other tailnet devices. Each application repository owns its private Serve deployment and client access restrictions. The tag has no Funnel permission, and application gateways must keep `AllowFunnel` disabled.
 
-Jellyfin is the sole public-access exception. Its existing gateway uses the separate admin-owned `tag:guaranine-jellyfin`, which alone has Funnel permission and has no grants to administer other tailnet devices. Jellyfin's repository owns its HTTPS proxy and exact public source-IP allowlist. General application gateways, cluster nodes, monitoring and ordinary tailnet members have no Funnel permission.
+Jellyfin's public HTTPS gateway uses the separate admin-owned `tag:guaranine-jellyfin`, which alone has Funnel permission and has no grants to administer other tailnet devices. Jellyfin's repository owns its HTTPS proxy and exact public source-IP allowlist. General application gateways, cluster nodes, monitoring and ordinary tailnet members have no Funnel permission. The separate [public VPN ingress](#public-vpn-ingress) uses native UDP instead of Funnel.
 
 The reader uses the admin-owned `tag:guaranine-kobo`, with one grant to the Books gateway on TCP 443. The `guaranine-books` host alias pins that gateway's enrolled Tailscale address; update it deliberately if the identity is replaced. The reader cannot administer nodes or reach qBittorrent, monitoring or Jellyfin, and has no Funnel permission. Its installer and credentials belong to the application repositories and protected operator storage.
 
@@ -46,13 +46,44 @@ Before applying it, back up the live policy outside the checkout. Use the standa
 
 The cluster nodes use Tailscale kernel networking and persistent identity, with subnet-route acceptance, Tailscale SSH and host DNS changes disabled. K3s uses Tailscale node addresses and binds Flannel to `tailscale0`; Flannel derives its MTU from that interface. Administration, API, kubelet and cross-node pod traffic use the tailnet. Cloud/LAN addresses are never cluster endpoints. Other operator VPNs must preserve the `100.64.0.0/10` routes.
 
-This BHS5 project has zero quota for custom security groups and rules, so the VM uses OVH's default group. The native host firewall restricts physical ingress to encrypted Tailscale transport on UDP 41641 and rejects direct private/LAN traffic. SSH and the Kubernetes API are reachable only over the tailnet. The VM's public interface supplies internet access for Tailscale/DERP and downloads. Real direct/relayed paths, reconnects and temporary WAN outages still need live-network verification.
+This BHS5 project has zero quota for custom security groups and rules, so the VM uses OVH's default group. By default, the native host firewall restricts physical ingress to encrypted Tailscale transport on UDP 41641 and rejects direct private/LAN traffic. The controller can opt in to the [public VPN exception](#public-vpn-ingress). SSH and the Kubernetes API are reachable only over the tailnet. The VM's public interface supplies internet access for Tailscale/DERP and downloads. Real direct/relayed paths, reconnects and temporary WAN outages still need live-network verification.
+
+### Public VPN ingress
+
+The optional [Kairos profile](../kairos/public-vpn.yaml) adds one controller-only
+rule before the ordinary physical-forwarding denial. It permits IPv4 UDP from
+an active physical interface only when connection tracking records DNAT from
+original port `31820` to a `10.42.0.0/16` Pod on port `51820`, via `cni0` or
+`flannel.1`. Private, CGNAT, link-local and attached-subnet sources are excluded.
+Other physical traffic retains the default denial. Host input rules stay intact.
+
+The profile checks the control-plane role file, persists under OEM configuration,
+and installs an idempotent firewall-service post-start hook. No worker receives
+this profile. K3s's NodePort and Flannel forward encrypted application traffic
+over Tailscale to the worker; the controller remains dedicated to platform work.
+The application repository owns WireGuard authentication, peer revocation and
+Windscribe-only egress. There is no new Tailscale grant or Funnel permission.
+
+Use the [setup command](../SETUP.md#public-wireguard-ingress) to activate it. To
+remove public access, first stop/remove the application's NodePort Service, then
+use the pinned controller SSH connection to remove
+`/oem/91_guaranine-public-vpn.yaml`,
+`/etc/systemd/system/guaranine-firewall.service.d/public-vpn.conf`, and
+`/etc/guaranine/public-vpn-start` / `public-vpn.nft`. Delete the live nftables rule
+whose comment is `guaranine-public-vpn` using its handle from `nft -a list chain
+inet guaranine forward`, then run `systemctl daemon-reload`. Do not flush the
+table: that would lose the live DHCP-maintained network sets.
+
+The [packet harness](development.md#firewall-packet-checks) exercises the real
+profile with simulated NodePort DNAT, requiring the permitted public UDP path
+and denial of LAN sources, direct Pod traffic, other NodePorts, SSH and API
+ports. A public WireGuard handshake still needs a live application check.
 
 ## LAN isolation
 
 Wi-Fi client isolation is useful but never assumed. The host nftables rules in [kairos/config.yaml](../kairos/config.yaml) block direct LAN traffic from hosts and pods, including attached subnets using public addresses. Systemd-networkd updates those subnet sets as addresses change. Ordinary physical egress stays blocked until the network service registers the interface.
 
-Exceptions allow network-service DHCP, system-resolver DNS, required IPv6 link control and encrypted Tailscale transport. Cluster pod interfaces permit TCP 6443 and 10250 to the host for the authenticated API and kubelet; application network policies and Kubernetes authorization still apply. Unsolicited physical traffic cannot reach host services or pods; internet replies remain allowed. SSH and networking start after the firewall. [Packet tests](development.md#firewall-packet-checks) exercise the actual rules without relying on access-point isolation.
+Exceptions allow network-service DHCP, system-resolver DNS, required IPv6 link control and encrypted Tailscale transport, plus the controller's explicitly enabled [public VPN ingress](#public-vpn-ingress). Cluster pod interfaces permit TCP 6443 and 10250 to the host for the authenticated API and kubelet; application network policies and Kubernetes authorization still apply. Other unsolicited physical traffic cannot reach host services or pods; internet replies remain allowed. SSH and networking start after the firewall. [Packet tests](development.md#firewall-packet-checks) exercise the actual rules without relying on access-point isolation.
 
 ## Workload restrictions
 
