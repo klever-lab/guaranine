@@ -96,10 +96,35 @@ connected() {
     sleep 1
   done
 }
-trap 'result=$?; if test "$result" -ne 0; then journalctl -b -u wpa_supplicant@wlan0.service --no-pager -n 60; tool iw dev; tool ip address; fi; exit "$result"' EXIT
+trap 'result=$?; if test "$result" -ne 0; then journalctl -b -u wpa_supplicant@wlan0.service -u systemd-rfkill.service --no-pager -n 60; rfkill list; tool iw dev; tool ip address; fi; exit "$result"' EXIT
+radio_stage=live
+radio_state=/var/lib/systemd/rfkill/guaranine-fixture-wifi:wlan
+radio_stage_file=/var/lib/systemd/rfkill/fixture-stage
+if ! test -f /run/cos/live_mode; then
+  mountpoint -q /var/lib/systemd/rfkill
+  radio_stage=first
+  if test -f "$radio_stage_file"; then radio_stage=$(cat "$radio_stage_file"); fi
+  case "$radio_stage" in first|blocked|unblocked) ;; *) exit 1;; esac
+  mkdir -p /run/udev/rules.d
+  printf '%s\\n' 'ACTION=="add", SUBSYSTEM=="rfkill", ATTR{name}=="phy0", ENV{ID_PATH}="guaranine-fixture-wifi"' \
+    > /run/udev/rules.d/98-guaranine-fixture-rfkill.rules
+  udevadm control --reload-rules
+fi
 tool ip netns add fixture-wifi
 modprobe mac80211_hwsim radios=2
 udevadm settle
+if test "$radio_stage" != live; then
+  expected_radio=0
+  if test "$radio_stage" = blocked; then expected_radio=1; fi
+  attempts=0
+  until test "$(cat /sys/class/ieee80211/phy0/rfkill*/soft)" = "$expected_radio"; do
+    attempts=$((attempts + 1)); test "$attempts" -lt 15
+    sleep 1
+  done
+  printf 'GUARANINE_RFKILL_RESTORED_%s\\n' "$radio_stage" > /dev/ttyS0
+  # Only the disposable fixture enables its radio to exercise Wi-Fi below.
+  rfkill unblock wlan
+fi
 systemctl stop wpa_supplicant@wlan1.service
 tool iw phy phy1 set netns name fixture-wifi
 ap ip link set lo up
@@ -120,6 +145,22 @@ while tool iw dev wlan0 link | grep -q 'Connected to'; do
 done
 ap hostapd -B -P /run/fixture-hostapd.pid /run/fixture-hostapd.conf
 connected
+if test "$radio_stage" != live; then
+  next_radio=0
+  next_stage=unblocked
+  if test "$radio_stage" = first; then
+    rfkill block wlan
+    next_radio=1
+    next_stage=blocked
+  fi
+  attempts=0
+  until test "$(cat "$radio_state")" = "$next_radio"; do
+    attempts=$((attempts + 1)); test "$attempts" -lt 15
+    sleep 1
+  done
+  printf '%s\\n' "$next_stage" > "$radio_stage_file"
+  sync -f /var/lib/systemd/rfkill
+fi
 touch /run/fixture-wifi-ok
 echo GUARANINE_WIFI_OK > /dev/ttyS0
 '''
@@ -285,7 +326,7 @@ def fixture(role=None):
     return config
 
 
-def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=False, firmware=None):
+def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=False, firmware=None, radio_stage=None):
     started = time.monotonic()
     acceleration = ['-accel', 'kvm', '-cpu', 'host'] if os.access('/dev/kvm', os.R_OK | os.W_OK) else ['-accel', 'tcg', '-cpu', 'max']
     if legacy_cpu:
@@ -352,6 +393,8 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
                     if re.search(r'^GUARANINE_INITRD_DIAGNOSTICS_DONE\r?$', text, re.M):
                         raise ValueError(f'Kairos entered initramfs emergency mode; protected diagnostics: {log}')
                     if not install and re.search(r'^GUARANINE_BOOT_OK\r?$', text, re.M):
+                        if radio_stage and not re.search(r'^GUARANINE_RFKILL_RESTORED_' + radio_stage + r'\r?$', text, re.M):
+                            raise ValueError('The selected radio state did not survive the installed boot')
                         fingerprints = re.findall(r'256 (SHA256:[A-Za-z0-9+/]+)', text)
                         if fingerprints:
                             print(f'Fixture {number}: boot assertions passed', flush=True)
@@ -417,17 +460,21 @@ def main():
                     install_iso = cli.build_image(installer, 'iso', directory / 'install', source)
                 if suite in ('all', 'worker-bios'):
                     worker = boot(install_iso, directory, 5, install=True)
-                    identity = boot(worker, directory, 6)
-                    if boot(worker, directory, 9) != identity:
+                    identity = boot(worker, directory, 6, radio_stage='first')
+                    if boot(worker, directory, 9, radio_stage='blocked') != identity:
                         raise ValueError('BIOS worker changed SSH identity across reboots')
-                    print('BIOS worker suite passed: configuration and SSH identity survived two installed boots.', flush=True)
+                    if boot(worker, directory, 13, radio_stage='unblocked') != identity:
+                        raise ValueError('BIOS worker changed SSH identity across reboots')
+                    print('BIOS worker suite passed: radio selections, configuration and SSH identity survived three installed boots.', flush=True)
                 if suite in ('all', 'worker-uefi'):
                     firmware = directory / 'worker-uefi.fd'
                     worker = boot(install_iso, directory, 7, install=True, uefi=True, firmware=firmware)
-                    identity = boot(worker, directory, 8, uefi=True, firmware=firmware)
-                    if boot(worker, directory, 10, uefi=True, firmware=firmware) != identity:
+                    identity = boot(worker, directory, 8, uefi=True, firmware=firmware, radio_stage='first')
+                    if boot(worker, directory, 10, uefi=True, firmware=firmware, radio_stage='blocked') != identity:
                         raise ValueError('UEFI worker changed SSH identity across reboots')
-                    print('UEFI worker suite passed: boot priority, configuration and SSH identity survived two installed boots.', flush=True)
+                    if boot(worker, directory, 14, uefi=True, firmware=firmware, radio_stage='unblocked') != identity:
+                        raise ValueError('UEFI worker changed SSH identity across reboots')
+                    print('UEFI worker suite passed: radio selections, boot priority, configuration and SSH identity survived three installed boots.', flush=True)
                 install_iso.unlink()
         except Exception:
             # This harness creates disposable credentials only. Keep failed CI diagnosable.

@@ -93,6 +93,7 @@ class ImageHarnessTests(unittest.TestCase):
         assertions = next(step for step in config['stages']['boot'] if step['name'] == 'Disposable boot assertions')
         self.assertIn('unshare --pid --fork --mount-proc', assertions['commands'][0])
         subprocess.run(['sh', '-n'], input=assertions['commands'][0], text=True, check=True)
+        subprocess.run(['sh', '-n'], input=harness.WIFI_CHECK, text=True, check=True)
         activation = next(file['content'] for file in assertions['files'] if file['path'] == '/run/fixture-config-rollout')
         subprocess.run(['sh', '-n'], input=activation, text=True, check=True)
 

@@ -67,7 +67,7 @@ Secure Boot, TPM-bound enrollment and YubiKey boot authorization require separat
 
 ## Lenovo Wi-Fi investigation
 
-Status on 2026-11-17 UTC: a manual WLAN unblock restored association, DHCP and an HTTPS request explicitly bound to Wi-Fi on the physical L340-15API (DMI product `81LW`). The source of its initial software block remains under investigation. Automatic unblocking is not part of the ISO or installed-worker configuration. Keep subsequent findings here, distinguishing direct observations, hypotheses and confirmed causes.
+Status on 2026-11-17 UTC: manual WLAN unblocking restores Wi-Fi on the physical L340-15API (DMI product `81LW`), now installed as `kate`. A controlled test reproduced the block when `ideapad_laptop` registered, with Linux saved-state restoration stopped. Why its firmware reports Wi-Fi off even while Wi-Fi works remains under investigation. Automatic unblocking is not part of the ISO or installed-worker configuration. Keep subsequent findings here, distinguishing direct observations, hypotheses and confirmed causes.
 
 ### Observations and recovery
 
@@ -79,21 +79,48 @@ Status on 2026-11-17 UTC: a manual WLAN unblock restored association, DHCP and a
 - At 14:04:59 UTC, after explicit authorization, `rfkill unblock wlan` cleared both WLAN software blocks. The existing Wi-Fi service connected and obtained DHCP by 14:05:04 UTC, without a service restart or driver change. Bluetooth remained blocked. This establishes the immediate connection blocker and a manual recovery, not its original cause.
 - A subsequent `curl --interface wlp1s0` HTTPS request to Tailscale's login endpoint returned HTTP 302, verifying internet connectivity through Wi-Fi while Ethernet remained attached.
 - The embedded-controller status still reported Wi-Fi **off** after Wi-Fi was connected. That discrepancy is an important lead: the reported firmware flag may be stale or ineffective on this model. It does not yet establish whether a firmware or kernel-driver defect created the original block.
+- The operator subsequently installed and restarted the laptop. It returned as Kubernetes worker `kate` and was Ready at 14:14 UTC. The operator confirmed the new target's identity without a visual fingerprint comparison; its new SSH key was pinned for diagnostics. Both WLAN radios were software blocked again on the installed boot, and Ethernet still had carrier. Ready therefore did not establish Wi-Fi connectivity.
+- On the installed system, `/var/lib/systemd/rfkill` was in the temporary `/var` overlay; its state files were born during the installed boot. The actual `PERSISTENT_STATE_PATHS` omitted that directory. The earlier manual choice was therefore not retained through Kairos's native persistent state paths.
 
 ### Current interpretation and open checks
 
 The [upstream IdeaPad driver](https://github.com/torvalds/linux/blob/master/drivers/platform/x86/lenovo/ideapad-laptop.c) initializes its platform software block from the embedded controller's per-radio value in `ideapad_register_rfkill()`. Read-only disassembly of the actual `7.3.0-hadron` module copied from this laptop confirmed the same sequence inside `ideapad_acpi_add()`: read the EC value, turn zero into a blocked boolean, call `rfkill_init_sw_state()`, then register the radio. This is a concrete Lenovo-specific initialization path; no blacklist or module reload was used to inspect it.
 
-The copied rfkill core module also contains a registration path calling `__rfkill_switch_all()`, consistent with the [upstream legacy input handling](https://github.com/torvalds/linux/blob/master/net/rfkill/core.c). That provides a possible path from the platform block to the adapter's block despite the enabled kernel default. Whether that branch executed during this boot has not been traced.
+The copied rfkill core module also contains a registration path calling `__rfkill_switch_all()`, consistent with the [upstream legacy input handling](https://github.com/torvalds/linux/blob/master/net/rfkill/core.c). The controlled test below reproduced a platform registration blocking the existing adapter despite the enabled kernel default.
 
-[systemd-rfkill](https://www.freedesktop.org/software/systemd/man/latest/systemd-rfkill.service.html) saves and restores Linux radio state. The empty read-only state directory, enabled kernel default, confirmed driver initialization and inconsistent controller readback point toward the Lenovo platform/firmware path. The original EC value at registration was not traced, so these findings do not prove what first disabled Wi-Fi or distinguish a retained setting from an ineffective firmware interface.
+[systemd-rfkill](https://www.freedesktop.org/software/systemd/man/latest/systemd-rfkill.service.html) saves and restores Linux radio state. The controlled test identifies platform-driver registration as a sufficient trigger without saved-state restoration. The original boot's EC read was not traced, but the same driver/firmware path reproduces its failure. Whether the firmware's per-radio value is a retained setting, an ineffective legacy interface or a firmware/driver defect remains unresolved.
 
 Still unresolved:
 
-- Whether the initial platform block comes from retained firmware state, an ineffective ACPI interface on this model, a driver interaction or a userspace writer during boot.
-- Whether the readback remains zero independently of actual radio state, and whether the platform block propagates to the adapter through the kernel's legacy rfkill input handling.
-- Whether the block returns on a live-USB reboot, installed boot, suspend or power cycle. These disruptive checks have not been performed during the working session.
+- Why the EC readback remains zero in both blocked and working states, and whether the legacy ACPI interface is meaningful on this model.
+- Whether preserving the operator-selected rfkill state with Kairos's native persistence can restore that choice across installed boots. The native profile below has been staged, but physical state-restoration verification is pending.
+- Whether the block returns after another installed reboot with saved state preserved, suspend or a cold power cycle. The initial installed boot already reproduced the block; those additional cases remain untested.
 - Whether Tailscale remains reachable after physically disconnecting Ethernet; association and DHCP alone do not prove the remaining traffic uses Wi-Fi.
+
+### Controlled registration test
+
+At 14:18 UTC, with additional tests authorized and Ethernet confirmed connected, the prepared `registration-test.sh` was executed over pinned SSH. WLAN was first manually unblocked and both saved WLAN state files were confirmed to contain `0`. The test then stopped both `systemd-rfkill` units to exclude state restoration, removed and re-registered only `ideapad_laptop`, and captured the following states:
+
+| Phase | Platform WLAN software block | Adapter `phy0` software block |
+| --- | --- | --- |
+| Before removal, state restoration stopped | Unblocked | Unblocked |
+| Platform driver removed | Platform radio absent | Unblocked |
+| Same platform driver registered again | Blocked | Blocked |
+| Manual recovery and state-saving socket restored | Unblocked | Unblocked |
+
+The EC continued to report master radio on and Wi-Fi off throughout. The real Wi-Fi driver was not removed. The exit trap manually unblocked WLAN and restored the state-saving socket; Wi-Fi re-associated, acquired DHCP and passed the interface-bound HTTPS check afterward. Bluetooth remained blocked. This reproduced the connection failure without a reboot, image change, stale blocked state file or Linux state-restoration writer. The causal trigger is platform registration; the reason for the firmware's inconsistent per-radio value is still open.
+
+### Selected-state persistence trial
+
+At 14:28 UTC, a native `rootfs` step was added to `kate`'s installed OEM profile and its private operator configuration. It writes `CUSTOM_BIND_MOUNTS: /var/lib/systemd/rfkill` to `/run/cos/custom-layout.env`, following [Kairos's documented post-install bind mounts](https://kairos.io/docs/advanced/customizing/#bind-mounts). The same proposed step is in `kairos/worker.yaml`. It preserves whichever radio state the operator chooses; it contains no unblock command and is excluded from live-media boots.
+
+The existing OEM and operator profiles were backed up privately. Native Kairos validation passed. Both `systemd-rfkill` units were briefly stopped while the current selections were copied to `/usr/local/.state/var/lib/systemd/rfkill/`: both WLAN entries enabled (`0`), both Bluetooth entries blocked (`1`). The socket was restored, both filesystems were flushed, and a reboot was requested. Pinned SSH returned with a new boot ID at approximately 14:30 UTC, but radio and bind-mount verification was not captured before work paused.
+
+On resumption at 15:08 UTC, Tailscale reported `kate` offline since 15:00 UTC and Kubernetes reported NotReady. Its present power/cable state has been requested from the operator. This is not yet evidence that the persistence trial failed: the laptop returned after the test reboot and went offline later. Further radio tests and Wi-Fi-only reachability verification require it to be reachable again. Local validation of the proposed profile passed its 116 unit tests and native Kairos checks; remaining results will be recorded when complete.
+
+At 15:13 UTC, after the operator confirmed power and Ethernet, `kate` rejoined with another boot ID. Inspection confirmed the native bind was active on `/dev/sda5[/.state/var-lib-systemd-rfkill.bind]`, but WLAN was blocked and both saved WLAN files contained `1`. The initial seeding had used `/usr/local/.state/var/lib/systemd/rfkill/`, which is not the backing location Kairos uses for `CUSTOM_BIND_MOUNTS`. That first trial therefore did not test restoration of the intended enabled state. The current WLAN choice was manually enabled and allowed to save through the running service into the mounted directory, both saved WLAN values were verified as `0`, and another reboot was requested. No startup unblock hook was present.
+
+The disposable image harness has been extended to verify both selected states with the real systemd rfkill service across three installed boots per worker suite; [development](development.md#disposable-image-checks) owns the test procedure. These test additions are pending a full image run. Persistence alone does not change the Lenovo's initial live-USB state or a first installed boot with no saved selection. That limit remains relevant to enrollment; no automatic unblock or firmware change has been substituted for it.
 
 ### Changes and test history
 
@@ -101,4 +128,4 @@ Commit `c36aa92` proposed automatic WLAN unblocking before Wi-Fi service startup
 
 In the [first image-test attempt](https://github.com/klever-lab/guaranine/actions/runs/44096359976/attempts/1), the live BIOS guest failed before Wi-Fi startup: the kernel received no initrd and panicked while mounting the live root. Its cause is unresolved. A read-only local BIOS USB boot of the unchanged saved ISO, with guest networking disabled, reached Guaranine userspace in 37 seconds. The [single live-suite rerun](https://github.com/klever-lab/guaranine/actions/runs/44096359976/attempts/2) passed all three live boots; the resulting workflow had all four suites passing. That rerun does not explain or fix the initial failure.
 
-The automatic-unblock implementation and its dedicated regression additions were withdrawn at the user's request. No automatic workaround, driver blacklist, kernel argument, reboot or disk installation was applied to the Lenovo. The only radio change so far was the explicitly requested manual WLAN unblock. Private observations are saved under the operator directory's `diagnostics/lenovo-1794923077933573636/` (`initial.log`, `rfkill.log`, `block-origin.log`, `manual-unblock.log`, `wifi-internet.log`, copied driver modules, `driver-inspection.log` and CI/local boot logs); credentials and raw private logs stay outside Git.
+The automatic-unblock implementation and its dedicated regression additions were withdrawn in commit `e7cd8aa` at the user's request. Repository validation and all four image suites passed for that revision. No automatic workaround, driver blacklist, firmware update or kernel argument was applied. The operator performed installation and a restart; diagnostics subsequently performed the authorized temporary platform-driver reload and manual WLAN recovery. Private observations are saved under the operator directory's `diagnostics/lenovo-1794923077933573636/` (`initial.log`, `rfkill.log`, `block-origin.log`, live and installed recovery logs, copied driver modules, `driver-inspection.log`, `registration-test.log`, `registration-test-recovery.log` and CI/local boot logs); credentials and raw private logs stay outside Git.

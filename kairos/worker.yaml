@@ -11,6 +11,12 @@ users:
     groups: [admin]
     lock_passwd: true
 stages:
+  rootfs:
+    - name: Persist the selected radio state
+      if: '[ ! -f /run/cos/live_mode ]'
+      environment_file: /run/cos/custom-layout.env
+      environment:
+        CUSTOM_BIND_MOUNTS: /var/lib/systemd/rfkill
   after-install:
     - name: Register Kairos in the UEFI boot order
       if: '[ -d /sys/firmware/efi ]'
