@@ -665,45 +665,48 @@ data:
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
-          "id": 7, "type": "timeseries", "title": "d2-2 Memory Breakdown (2 GB RAM)",
+          "id": 7, "type": "timeseries", "title": "d2-2 Memory Breakdown (%)",
+          "description": "Each series is a percentage of the controller's reported RAM capacity.",
           "gridPos": {"x": 12, "y": 10, "w": 12, "h": 7},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
-            {"refId": "A", "expr": "max(kube_node_status_capacity{node=\"guaranine-controlplane\",resource=\"memory\",unit=\"byte\"})", "legendFormat": "Total RAM capacity"},
-            {"refId": "B", "expr": "sum(container_memory_working_set_bytes{node=\"guaranine-controlplane\",id=\"/\"})", "legendFormat": "Working set"},
-            {"refId": "C", "expr": "sum(container_memory_rss{node=\"guaranine-controlplane\",id=\"/\"})", "legendFormat": "Resident memory (RSS)"},
-            {"refId": "D", "expr": "sum(container_memory_cache{node=\"guaranine-controlplane\",id=\"/\"})", "legendFormat": "Page cache"}
+            {"refId": "A", "expr": "100 * (max(kube_node_status_capacity{node=\"guaranine-controlplane\",resource=\"memory\",unit=\"byte\"}) > bool 0)", "legendFormat": "Total RAM capacity"},
+            {"refId": "B", "expr": "100 * sum(container_memory_working_set_bytes{node=\"guaranine-controlplane\",id=\"/\"}) / max(kube_node_status_capacity{node=\"guaranine-controlplane\",resource=\"memory\",unit=\"byte\"})", "legendFormat": "Working set"},
+            {"refId": "C", "expr": "100 * sum(container_memory_rss{node=\"guaranine-controlplane\",id=\"/\"}) / max(kube_node_status_capacity{node=\"guaranine-controlplane\",resource=\"memory\",unit=\"byte\"})", "legendFormat": "Resident memory (RSS)"},
+            {"refId": "D", "expr": "100 * sum(container_memory_cache{node=\"guaranine-controlplane\",id=\"/\"}) / max(kube_node_status_capacity{node=\"guaranine-controlplane\",resource=\"memory\",unit=\"byte\"})", "legendFormat": "Page cache"}
           ],
-          "fieldConfig": {"defaults": {"unit": "bytes", "min": 0}},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}},
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
-          "id": 8, "type": "timeseries", "title": "OVH Network Traffic — Public ens3 vs Tailscale (B/s)",
+          "id": 8, "type": "timeseries", "title": "OVH Network Utilization (%)",
+          "description": "Five-minute receive and transmit rates relative to the advertised 100 Mbit/s public link. Traffic carried by Tailscale is also counted on the public interface.",
           "gridPos": {"x": 0, "y": 17, "w": 12, "h": 7},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
-            {"refId": "A", "expr": "sum(rate(container_network_receive_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"ens3\"}[5m]))", "legendFormat": "OVH Public (ens3) Rx"},
-            {"refId": "B", "expr": "sum(rate(container_network_transmit_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"ens3\"}[5m]))", "legendFormat": "OVH Public (ens3) Tx"},
-            {"refId": "C", "expr": "sum(rate(container_network_receive_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"tailscale0\"}[5m]))", "legendFormat": "Tailscale (tailscale0) Rx"},
-            {"refId": "D", "expr": "sum(rate(container_network_transmit_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"tailscale0\"}[5m]))", "legendFormat": "Tailscale (tailscale0) Tx"}
+            {"refId": "A", "expr": "100 * sum(rate(container_network_receive_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"ens3\"}[5m])) / 12500000", "legendFormat": "OVH Public (ens3) Rx"},
+            {"refId": "B", "expr": "100 * sum(rate(container_network_transmit_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"ens3\"}[5m])) / 12500000", "legendFormat": "OVH Public (ens3) Tx"},
+            {"refId": "C", "expr": "100 * sum(rate(container_network_receive_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"tailscale0\"}[5m])) / 12500000", "legendFormat": "Tailscale (tailscale0) Rx"},
+            {"refId": "D", "expr": "100 * sum(rate(container_network_transmit_bytes_total{node=\"guaranine-controlplane\",id=\"/\",interface=\"tailscale0\"}[5m])) / 12500000", "legendFormat": "Tailscale (tailscale0) Tx"}
           ],
-          "fieldConfig": {"defaults": {"unit": "Bps", "min": 0}},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0}},
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
-          "id": 9, "type": "timeseries", "title": "OVH Local Disk Usage & SQLite Write I/O",
+          "id": 9, "type": "timeseries", "title": "OVH Local Disk Usage & I/O Pressure (%)",
+          "description": "Disk use is a percentage of each filesystem's capacity. The right axis shows the share of time with at least one task waiting on I/O, averaged over five minutes.",
           "gridPos": {"x": 12, "y": 17, "w": 12, "h": 7},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
-            {"refId": "A", "expr": "max(container_fs_usage_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda5\"})", "legendFormat": "Persistent (/dev/vda5) used"},
-            {"refId": "B", "expr": "max(container_fs_usage_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda4\"})", "legendFormat": "Kairos state (/dev/vda4) used"},
-            {"refId": "C", "expr": "sum(rate(container_blkio_device_usage_total{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda\",operation=\"Write\"}[5m]))", "legendFormat": "Disk write rate (/dev/vda)"}
+            {"refId": "A", "expr": "100 * max(container_fs_usage_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda5\"}) / max(container_fs_limit_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda5\"})", "legendFormat": "Persistent (/dev/vda5) used"},
+            {"refId": "B", "expr": "100 * max(container_fs_usage_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda4\"}) / max(container_fs_limit_bytes{node=\"guaranine-controlplane\",id=\"/\",device=\"/dev/vda4\"})", "legendFormat": "Kairos state (/dev/vda4) used"},
+            {"refId": "C", "expr": "max(rate(container_pressure_io_waiting_seconds_total{node=\"guaranine-controlplane\",id=\"/\"}[5m]))", "legendFormat": "I/O stall time (PSI)"}
           ],
           "fieldConfig": {
-            "defaults": {"unit": "bytes", "min": 0},
+            "defaults": {"unit": "percent", "min": 0},
             "overrides": [
-              {"matcher": {"id": "byName", "options": "Disk write rate (/dev/vda)"}, "properties": [
-                {"id": "unit", "value": "Bps"},
+              {"matcher": {"id": "byName", "options": "I/O stall time (PSI)"}, "properties": [
+                {"id": "unit", "value": "percentunit"},
                 {"id": "custom.axisPlacement", "value": "right"}
               ]}
             ]
