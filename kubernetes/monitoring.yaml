@@ -441,22 +441,13 @@ data:
           "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
         },
         {
-          "id": 16, "type": "stat", "title": "",
-          "description": "All nodes registered in Kubernetes, including nodes that are not Ready.",
-          "gridPos": {"x": 0, "y": 16, "w": 2, "h": 4},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "count(kube_node_info)"}],
-          "fieldConfig": {"defaults": {"displayName": "Total nodes", "unit": "short", "decimals": 0, "min": 0}},
-          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 12, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
-        },
-        {
           "id": 17, "type": "stat", "title": "",
-          "description": "Nodes whose Kubernetes Ready condition is true.",
-          "gridPos": {"x": 2, "y": 16, "w": 2, "h": 4},
+          "description": "Nodes whose Kubernetes Ready condition is true out of all registered nodes.",
+          "gridPos": {"x": 0, "y": 16, "w": 4, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})"}],
-          "fieldConfig": {"defaults": {"displayName": "Ready nodes", "unit": "short", "decimals": 0, "min": 0}},
-          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 12, "valueSize": 20}, "reduceOptions": {"calcs": ["lastNotNull"]}}
+          "targets": [{"refId": "A", "instant": true, "range": false, "format": "table", "expr": "label_join(count_values(\"ready\", sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"}) or vector(0)) * on() group_left(total) count_values(\"total\", count(kube_node_info)), \"readiness\", \"/\", \"ready\", \"total\")"}],
+          "transformations": [{"id": "organize", "options": {"renameByName": {"readiness": "Ready nodes"}}}],
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value_and_name", "wideLayout": false, "justifyMode": "center", "text": {"titleSize": 12, "valueSize": 20}, "reduceOptions": {"fields": "/^Ready nodes$/", "calcs": ["lastNotNull"]}}
         },
         {
           "id": 10, "type": "stat", "title": "",
@@ -516,7 +507,7 @@ data:
           "gridPos": {"x": 20, "y": 16, "w": 4, "h": 4},
           "options": {
             "mode": "markdown",
-            "content": "[Jellyfin](https://streams.tail3a78b9.ts.net) · [Calibre Web](https://books.tail3a78b9.ts.net)  \n[qBittorrent](https://qbittorrent.tail3a78b9.ts.net) · [SABnzbd](https://usenet.tail3a78b9.ts.net)  \n[Friends VPN](https://vpn.bahasadri.com) · [Grafana](https://monitoring.tail3a78b9.ts.net)"
+            "content": "[Jellyfin](https://streams.tail3a78b9.ts.net) · [Calibre Web](https://books.tail3a78b9.ts.net)  \n[qBittorrent](https://qbittorrent.tail3a78b9.ts.net) · [NZB](https://usenet.tail3a78b9.ts.net)  \n[Friends VPN](https://vpn.bahasadri.com) · [Grafana](https://monitoring.tail3a78b9.ts.net)"
           }
         },
         {
