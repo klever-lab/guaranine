@@ -96,7 +96,7 @@ connected() {
     sleep 1
   done
 }
-trap 'result=$?; if test "$result" -ne 0; then journalctl -b -u wpa_supplicant@wlan0.service -u systemd-rfkill.service --no-pager -n 60; rfkill list; tool iw dev; tool ip address; fi; exit "$result"' EXIT
+trap 'result=$?; if test "$result" -ne 0; then journalctl -b -u wpa_supplicant@wlan0.service -u systemd-rfkill.service --no-pager -n 60; rfkill list; for file in /var/lib/systemd/rfkill/*; do test -f "$file" || continue; printf "%s=" "$file"; cat "$file"; done; tool iw dev; tool ip address; fi; exit "$result"' EXIT
 radio_stage=live
 radio_state=/var/lib/systemd/rfkill/guaranine-fixture-wifi:wlan
 radio_stage_file=/var/lib/systemd/rfkill/fixture-stage
@@ -106,7 +106,8 @@ if ! test -f /run/cos/live_mode; then
   if test -f "$radio_stage_file"; then radio_stage=$(cat "$radio_stage_file"); fi
   case "$radio_stage" in first|blocked|unblocked) ;; *) exit 1;; esac
   mkdir -p /run/udev/rules.d
-  printf '%s\\n' 'ACTION=="add", SUBSYSTEM=="rfkill", ATTR{name}=="phy0", ENV{ID_PATH}="guaranine-fixture-wifi"' \
+  # The AP is also named phy0 after moving namespaces; its rfkill index stays distinct.
+  printf '%s\\n' 'ACTION=="add", SUBSYSTEM=="rfkill", KERNEL=="rfkill0", ENV{ID_PATH}="guaranine-fixture-wifi"' \
     > /run/udev/rules.d/98-guaranine-fixture-rfkill.rules
   udevadm control --reload-rules
 fi
@@ -114,6 +115,7 @@ tool ip netns add fixture-wifi
 modprobe mac80211_hwsim radios=2
 udevadm settle
 if test "$radio_stage" != live; then
+  test "$(cat /sys/class/rfkill/rfkill0/name)" = phy0
   expected_radio=0
   if test "$radio_stage" = blocked; then expected_radio=1; fi
   attempts=0
@@ -149,7 +151,7 @@ if test "$radio_stage" != live; then
   next_radio=0
   next_stage=unblocked
   if test "$radio_stage" = first; then
-    rfkill block wlan
+    rfkill block 0
     next_radio=1
     next_stage=blocked
   fi

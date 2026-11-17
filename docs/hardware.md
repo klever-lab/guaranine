@@ -73,6 +73,7 @@ Status on 2026-11-17 UTC: manual WLAN unblocking restores Wi-Fi on the physical 
 
 - The live USB reached a local shell and printed its SSH fingerprint, but did not join Tailscale. Ethernet provided temporary connectivity for diagnosis over pinned Tailscale SSH.
 - The RTL8821CE PCI adapter loaded `rtw88_8821ce` and firmware version `24.11.0`. Its interface `wlp1s0` was `off (configuring)`, with no access point or address. The Wi-Fi service was active and reported `rfkill: WLAN soft blocked` without restarting.
+- The laptop reported BIOS `ARCN25WW`, dated 2019-01-24. No firmware update or BIOS setting change has been performed during this investigation.
 - Both `ideapad_wlan` and the actual Wi-Fi radio `phy0` had `soft=1`, `hard=0`. The platform and adapter Bluetooth radios were also software blocked. The separate missing `rtl_bt/rtl8821c_fw.bin` message concerned Bluetooth; the Wi-Fi firmware loaded successfully.
 - The kernel's `rfkill.default_state` was `1` (enabled), with no rfkill override in the boot command line. The read-only live root had no `/var/lib/systemd/rfkill` directory. The runtime state files were created during this boot, not loaded from an rfkill state directory baked into that root. `/var/lib/systemd/rfkill` was on the live RAM overlay.
 - Lenovo's embedded-controller status, read through `/sys/kernel/debug/ideapad/status`, reported the master radio **on**, but individual Wi-Fi and Bluetooth **off**. The `ideapad_laptop` module's `hw_rfkill_switch` parameter was `N`; no hard block was reported.
@@ -93,8 +94,7 @@ The copied rfkill core module also contains a registration path calling `__rfkil
 Still unresolved:
 
 - Why the EC readback remains zero in both blocked and working states, and whether the legacy ACPI interface is meaningful on this model.
-- Whether preserving the operator-selected rfkill state with Kairos's native persistence can restore that choice across installed boots. The native profile below has been staged, but physical state-restoration verification is pending.
-- Whether the block returns after another installed reboot with saved state preserved, suspend or a cold power cycle. The initial installed boot already reproduced the block; those additional cases remain untested.
+- Whether the firmware discrepancy changes after suspend or a cold power cycle. Installed reboot tests now demonstrate restoration of both selected states, as recorded below; those additional cases remain untested.
 - Whether Tailscale remains reachable after physically disconnecting Ethernet; association and DHCP alone do not prove the remaining traffic uses Wi-Fi.
 
 ### Controlled registration test
@@ -120,7 +120,15 @@ On resumption at 15:08 UTC, Tailscale reported `kate` offline since 15:00 UTC an
 
 At 15:13 UTC, after the operator confirmed power and Ethernet, `kate` rejoined with another boot ID. Inspection confirmed the native bind was active on `/dev/sda5[/.state/var-lib-systemd-rfkill.bind]`, but WLAN was blocked and both saved WLAN files contained `1`. The initial seeding had used `/usr/local/.state/var/lib/systemd/rfkill/`, which is not the backing location Kairos uses for `CUSTOM_BIND_MOUNTS`. That first trial therefore did not test restoration of the intended enabled state. The current WLAN choice was manually enabled and allowed to save through the running service into the mounted directory, both saved WLAN values were verified as `0`, and another reboot was requested. No startup unblock hook was present.
 
+That next reboot returned with both WLAN radios unblocked, both persisted values still `0` and Bluetooth still blocked. It demonstrated enabled-state restoration. Wi-Fi nevertheless remained without carrier because its correctly named supplicant was inactive. The boot log showed a start request for `wpa_supplicant@wlan0.service` followed by a dependency failure after the kernel renamed the adapter to `wlp1s0`. Manually starting `wpa_supplicant@wlp1s0.service` restored association, DHCP and interface-bound HTTPS, without changing the radio state. This is a separate startup naming race, not failure to restore the selected radio state.
+
+The shared host profile now proposes a native `boot.before` step to reload udev rules and wait up to 30 seconds for queued device events before the existing Wi-Fi scan. Reloading lets later hotplug events use the written rule; waiting keeps the initial scan from capturing an in-flight interface name. The same step was validated and staged in `kate`'s OEM and operator profiles for physical testing, without replacing its immutable OS image. This step contains no unblock command. Tests of saved blocked and enabled states across further reboots are in progress.
+
+At 15:24 UTC, the blocked-state reboot test passed: both WLAN entries and their persisted files remained blocked, Bluetooth remained blocked, and the supplicant started automatically on `wlp1s0`. At 15:25 UTC, after manually selecting WLAN enabled and saving it, the next reboot restored both WLAN entries to enabled, preserved Bluetooth blocked, started the correctly named supplicant and acquired DHCP automatically. An HTTPS request bound to `wlp1s0` succeeded. Neither boot used a startup unblock hook. These two tests qualify the selected-state persistence and naming preparation on this installed laptop; they do not establish the cause of the firmware's per-radio readback.
+
 The disposable image harness has been extended to verify both selected states with the real systemd rfkill service across three installed boots per worker suite; [development](development.md#disposable-image-checks) owns the test procedure. These test additions are pending a full image run. Persistence alone does not change the Lenovo's initial live-USB state or a first installed boot with no saved selection. That limit remains relevant to enrollment; no automatic unblock or firmware change has been substituted for it.
+
+The first persistence CI run, [commit `dabe16c`](https://github.com/klever-lab/guaranine/actions/runs/44112385530), passed repository, live-media and controller checks but failed both new worker fixtures before their first installed boot could finish. The AP radio was also named `phy0` after its namespace move, conflicting with the client's test identity. The fixture has been corrected to identify the first rfkill index explicitly, verify it belongs to `phy0`, and block only that client when saving its selected state. Failure diagnostics now include saved-state contents. This correction and the naming preparation await their combined image run.
 
 ### Changes and test history
 

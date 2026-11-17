@@ -271,6 +271,11 @@ stages:
       commands:
         - systemctl unmask getty@tty1.service
         - systemctl enable getty@tty1.service
+  boot.before:
+    - name: Load Wi-Fi device rules before starting networking
+      commands:
+        - udevadm control --reload-rules
+        - udevadm settle --timeout=30
   boot:
     - name: Start Guaranine networking and show the SSH fingerprint
       commands:
