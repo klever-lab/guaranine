@@ -1216,6 +1216,7 @@ class ISOPreparationTests(OperatorTestCase):
 
 class LaptopDiscoveryTests(OperatorTestCase):
     def test_laptop_discovery_waits_and_selects_only_online_tagged_live_peers(self):
+        server = ['ssh', 'PINNED-CONTROLLER']
         first = {'HostName': 'guaranine-live-aaaa', 'Online': True, 'Tags': ['tag:guaranine-worker'],
                  'TailscaleIPs': ['fd7a:115c:a1e0::8', '100.64.0.8']}
         second = {**first, 'HostName': 'guaranine-live-bbbb', 'TailscaleIPs': ['100.64.0.9']}
@@ -1227,14 +1228,16 @@ class LaptopDiscoveryTests(OperatorTestCase):
         output = io.StringIO()
         with (patch.object(cli, 'private_command', side_effect=[
                   json.dumps({'BackendState': 'Running', 'Peer': None}),
-                  json.dumps({'BackendState': 'Running', 'Peer': peers})]) as command,
+                  '{"items":[]}', json.dumps({'BackendState': 'Running', 'Peer': peers}),
+                  '{"items":[]}']) as command,
               patch.object(cli.time, 'sleep') as sleep, patch.object(cli.questionary, 'select') as select,
               patch('builtins.input') as prompt,
               contextlib.redirect_stdout(output)):
             select.return_value.unsafe_ask.return_value = '100.64.0.9'
-            self.assertEqual(cli.choose_laptop(self.root), '100.64.0.9')
+            self.assertEqual(cli.choose_laptop(self.root, server), '100.64.0.9')
         sleep.assert_called_once_with(2)
-        self.assertTrue(all(call.args[0] == ['tailscale', 'status', '--json'] for call in command.call_args_list))
+        self.assertEqual([call.args[0] for call in command.call_args_list],
+                         [['tailscale', 'status', '--json'], [*server, 'k3s kubectl get nodes -o json']] * 2)
         self.assertIn('Boot the laptop from the Guaranine USB', output.getvalue())
         choices = select.call_args.kwargs['choices']
         self.assertEqual([choice.value for choice in choices], [False, '100.64.0.8', '100.64.0.9'])
@@ -1243,14 +1246,78 @@ class LaptopDiscoveryTests(OperatorTestCase):
         prompt.assert_not_called()
         self.assertNotIn('worker-one', output.getvalue())
 
-    def test_laptop_selection_cancellation_never_contacts_a_node(self):
+    def test_laptop_selection_excludes_registered_nodes_by_name_or_address_regardless_of_readiness(self):
+        peer = {'HostName': 'guaranine-live-new', 'Online': True, 'Tags': ['tag:guaranine-worker'],
+                'TailscaleIPs': ['100.64.0.8']}
+        peers = {
+            'new': peer,
+            'second': {**peer, 'HostName': 'guaranine-live-second', 'TailscaleIPs': ['100.64.0.9']},
+            'name': {**peer, 'HostName': 'guaranine-live-by-name', 'TailscaleIPs': ['100.64.0.10']},
+            'ipv4': {**peer, 'HostName': 'guaranine-live-by-ipv4', 'TailscaleIPs': ['100.64.0.11']},
+            'ipv6': {**peer, 'HostName': 'guaranine-live-by-ipv6',
+                     'TailscaleIPs': ['fd7a:115c:a1e0::12', '100.64.0.12']},
+            'hostname': {**peer, 'HostName': 'guaranine-live-by-hostname', 'TailscaleIPs': ['100.64.0.13']},
+        }
+        for ready in ('True', 'False', 'Unknown'):
+            nodes = [{'metadata': {'name': name}, 'status': {
+                'conditions': [{'type': 'Ready', 'status': ready}], 'addresses': addresses}}
+                for name, addresses in [
+                    ('guaranine-live-by-name', []),
+                    ('renamed-worker', [{'type': 'InternalIP', 'address': '100.64.0.11'}]),
+                    ('ipv6-worker', [{'type': 'InternalIP', 'address': 'fd7a:115c:a1e0::12'}]),
+                    ('hostname-worker', [{'type': 'Hostname', 'address': 'guaranine-live-by-hostname'}]),
+                ]]
+            output = io.StringIO()
+            with (self.subTest(ready=ready), patch.object(cli, 'private_command', side_effect=[
+                      json.dumps({'BackendState': 'Running', 'Peer': peers}), json.dumps({'items': nodes})]),
+                  patch.object(cli.questionary, 'select') as select, contextlib.redirect_stdout(output)):
+                select.return_value.unsafe_ask.return_value = '100.64.0.8'
+                self.assertEqual(cli.choose_laptop(self.root, ['ssh', 'PINNED-CONTROLLER']), '100.64.0.8')
+            choices = select.call_args.kwargs['choices']
+            self.assertEqual([choice.value for choice in choices], [False, '100.64.0.8', '100.64.0.9'])
+            self.assertFalse(any('guaranine-live-by-' in choice.title for choice in choices))
+
+    def test_laptop_discovery_refreshes_registered_nodes_while_waiting(self):
+        existing = {'HostName': 'guaranine-live-existing', 'Online': True, 'Tags': ['tag:guaranine-worker'],
+                    'TailscaleIPs': ['100.64.0.8']}
+        joined = {**existing, 'HostName': 'guaranine-live-joined', 'TailscaleIPs': ['100.64.0.9']}
+        new = {**existing, 'HostName': 'guaranine-live-new', 'TailscaleIPs': ['100.64.0.10']}
+        nodes = [{'metadata': {'name': existing['HostName']}}]
+        with (patch.object(cli, 'private_command', side_effect=[
+                  json.dumps({'BackendState': 'Running', 'Peer': {'existing': existing}}),
+                  json.dumps({'items': nodes}),
+                  json.dumps({'BackendState': 'Running', 'Peer': {'existing': existing, 'joined': joined, 'new': new}}),
+                  json.dumps({'items': [*nodes, {'metadata': {'name': joined['HostName']}}]})]),
+              patch.object(cli.time, 'sleep') as sleep, patch.object(cli.questionary, 'select') as select,
+              contextlib.redirect_stdout(io.StringIO())):
+            self.assertEqual(cli.choose_laptop(self.root, ['ssh', 'PINNED-CONTROLLER']), '100.64.0.10')
+        sleep.assert_called_once_with(2)
+        select.assert_not_called()
+
+    def test_laptop_discovery_stops_before_selection_or_laptop_access_if_node_lookup_fails(self):
+        self.worker_setup()
+        peer = {'HostName': 'guaranine-live-aaaa', 'Online': True, 'Tags': ['tag:guaranine-worker'],
+                'TailscaleIPs': ['100.64.0.8']}
+        with (patch.object(cli, 'private_command', side_effect=[
+                  json.dumps({'BackendState': 'Running', 'Peer': {'laptop': peer}}),
+                  ValueError('Controller unavailable')]),
+              patch.object(cli, 'verified_connection') as connect, patch.object(cli.questionary, 'select') as select,
+              patch('builtins.input') as prompt, contextlib.redirect_stdout(io.StringIO()),
+              self.assertRaisesRegex(ValueError, 'Controller unavailable')):
+            cli.install_worker(None)
+        select.assert_not_called()
+        connect.assert_not_called()
+        prompt.assert_not_called()
+
+    def test_laptop_selection_cancellation_never_contacts_a_laptop(self):
         self.worker_setup()
         peer = {'HostName': 'guaranine-live-aaaa', 'Online': True, 'Tags': ['tag:guaranine-worker'],
                 'TailscaleIPs': ['100.64.0.8']}
         second = {**peer, 'HostName': 'guaranine-live-bbbb', 'TailscaleIPs': ['100.64.0.9']}
         status = json.dumps({'BackendState': 'Running', 'Peer': {'laptop': peer, 'second': second}})
         for answer in (False, None):
-            with (self.subTest(answer=answer), patch.object(cli, 'private_command', return_value=status) as command,
+            with (self.subTest(answer=answer),
+                  patch.object(cli, 'private_command', side_effect=[status, '{"items":[]}']) as command,
                   patch.object(cli, 'verified_connection') as connect, patch.object(cli.questionary, 'select') as select,
                   patch('builtins.input') as prompt,
                   contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'selection cancelled')):
@@ -1258,13 +1325,15 @@ class LaptopDiscoveryTests(OperatorTestCase):
                 cli.install_worker(None)
             connect.assert_not_called()
             prompt.assert_not_called()
-            self.assertEqual([call.args[0] for call in command.call_args_list], [['tailscale', 'status', '--json']])
+            self.assertEqual(command.call_count, 2)
+            self.assertEqual(command.call_args_list[0].args[0], ['tailscale', 'status', '--json'])
+            self.assertEqual(command.call_args_list[1].args[0][-1], 'k3s kubectl get nodes -o json')
 
     def test_laptop_discovery_explains_disconnected_operator(self):
         with (patch.object(cli, 'private_command', return_value='{"BackendState":"NeedsLogin"}'),
               patch.object(cli.time, 'sleep') as sleep, patch('builtins.input') as prompt,
               contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'Connect this computer')):
-            cli.choose_laptop(self.root)
+            cli.choose_laptop(self.root, ['ssh', 'PINNED-CONTROLLER'])
         sleep.assert_not_called()
         prompt.assert_not_called()
 

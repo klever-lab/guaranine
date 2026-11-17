@@ -823,18 +823,24 @@ def bootstrap(_args):
     print(f'K3s ready. Run: export KUBECONFIG={shlex.quote(str(directory / "kubeconfig"))}')
 
 
-def choose_laptop(directory):
+def choose_laptop(directory, server):
     print('Boot the laptop from the Guaranine USB and keep it on.', flush=True)
     print('Waiting for a laptop on Tailscale (Ctrl+C to cancel)…', flush=True)
     while True:
         status = json.loads(private_command(['tailscale', 'status', '--json'], directory, timeout=30))
         if status.get('BackendState') != 'Running':
             raise ValueError('Connect this computer to Tailscale, then rerun ./guaranine worker')
+        nodes = json.loads(private_command(
+            [*server, 'k3s kubectl get nodes -o json'], directory, timeout=30))['items']
+        registered = {node['metadata']['name'] for node in nodes}
+        registered.update(address['address'] for node in nodes
+                          for address in node.get('status', {}).get('addresses', []))
         laptops = []
         for peer in (status.get('Peer') or {}).values():
             name = peer.get('HostName') or ''
             if (not peer.get('Online') or not name.startswith('guaranine-live-')
-                    or 'tag:guaranine-worker' not in (peer.get('Tags') or [])):
+                    or 'tag:guaranine-worker' not in (peer.get('Tags') or [])
+                    or name in registered or registered.intersection(peer.get('TailscaleIPs') or [])):
                 continue
             address = next((ip for ip in (peer.get('TailscaleIPs') or []) if ':' not in ip), None)
             if address:
@@ -950,7 +956,7 @@ def install_worker(_args):
         return
     key = directory / 'installer/tailscale-key.json'
     auth_record(key, reusable=True)
-    address = choose_laptop(directory)
+    address = choose_laptop(directory, server)
     with verified_connection(address, directory) as (connection, _hosts):
         live = private_command([*connection, 'test -f /run/cos/live_mode && '
             'test -d /run/rootfsbase && printf live'], directory)
