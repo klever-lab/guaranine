@@ -320,7 +320,7 @@ def fixture(role=None):
             'commands': ['sh /run/fixture-wifi-check > /dev/ttyS0 2>&1']})
     config['stages']['boot'].append({'name': 'Disposable boot assertions', 'files': assertion_files, 'commands': [
         '{ set -x; ' + ' && '.join(checks) + ' && { ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub; '
-        'echo GUARANINE_BOOT_OK; }; } > /dev/ttyS0 2>&1']})
+        'sync && echo GUARANINE_BOOT_OK; }; } > /dev/ttyS0 2>&1']})
     return config
 
 
