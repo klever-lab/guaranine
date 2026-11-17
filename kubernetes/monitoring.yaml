@@ -302,6 +302,8 @@ data:
     domain = monitoring.tail3a78b9.ts.net
     root_url = https://monitoring.tail3a78b9.ts.net/
     enforce_domain = true
+    [database]
+    wal = true
     [security]
     admin_user = admin
     admin_password = $__file{/etc/grafana/secrets/admin-password}
@@ -812,10 +814,14 @@ spec:
             httpGet: {path: /api/health, port: http}
             periodSeconds: 5
             failureThreshold: 60
+            timeoutSeconds: 5
           readinessProbe:
             httpGet: {path: /api/health, port: http}
+            timeoutSeconds: 5
           livenessProbe:
             httpGet: {path: /api/health, port: http}
+            timeoutSeconds: 30
+            failureThreshold: 10
           volumeMounts:
             - {name: data, mountPath: /var/lib/grafana}
             - {name: tmp, mountPath: /tmp}
