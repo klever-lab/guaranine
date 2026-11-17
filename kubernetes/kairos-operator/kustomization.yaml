@@ -4,6 +4,7 @@ namespace: kairos-operator
 resources:
   # Upstream release asset SHA-256: 9eff2d162f3cc1ac8f5a13d54dc1530d503637b8b9f11c63377521c1e3453ad4
   - https://github.com/kairos-io/kairos-operator/releases/download/v0.3.0/install.yaml
+  - labeler-rbac.yaml
   - network-policy.yaml
 patches:
   # Metrics are disabled; their authentication and reader roles are unused.

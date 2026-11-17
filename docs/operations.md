@@ -116,11 +116,14 @@ ClusterRole/Binding creation needed for discovery. Build-only Secret, PVC and
 ConfigMap permissions remain absent; in-cluster OSArtifact builds are unsupported.
 This operator intentionally remains trusted to administer the hosts.
 
-For an existing installation, apply the guards first, reapply the repository's
-Kairos kustomization, then restart the generated labeler DaemonSet so its Pods
-receive the new admission settings:
+For an installation that predates this hardening, apply the admission guards
+first. Transfer ownership of the narrower labeler RBAC from the upstream
+operator, reapply the Kairos kustomization, then restart the generated labeler
+DaemonSet so its Pods receive the new admission settings.
 
 ```bash
+kubectl apply --server-side --force-conflicts -f kubernetes/kairos-operator/labeler-rbac.yaml
+kubectl apply --server-side -k kubernetes/kairos-operator
 kubectl delete clusterrolebinding operator-metrics-auth-rolebinding --ignore-not-found
 kubectl delete clusterrole operator-metrics-auth-role operator-metrics-reader --ignore-not-found
 kubectl -n kairos-operator rollout restart daemonset/kairos-node-labeler

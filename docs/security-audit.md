@@ -4,9 +4,9 @@ This audit began on 2026-11-17. Its question is whether code execution in one
 container can acquire authority over a host or other workloads. Losing that
 application's own data is outside this audit's main concern.
 
-The review uses repository definitions and pinned upstream source. It does not
-attempt exploitation or use production workloads as test fixtures. A change in
-Git does not protect an installed cluster until it has been applied.
+The review uses repository definitions and pinned upstream source. Tests use
+disposable environments. Production verification checks deployed settings and
+ordinary service health.
 
 ## Findings
 
@@ -45,13 +45,21 @@ The application's rendered admission templates and privilege-override rejections
 also passed a disposable API server.
 
 The packet fixture preserved incoming TCP and UDP source addresses, tunneled DNS
-and WebUI access. It checked initialization retries, endpoint outage/recovery and
-denied bypass traffic. It used generated keys and private network namespaces;
-no production traffic or credentials entered these fixtures.
+and WebUI access. It checked initialization retries, endpoint outage and recovery,
+and denied direct egress for new flows and an established UDP flow after a route
+change. The fixtures used generated keys and private network namespaces.
 
 Activation requires the [platform guard installation](../SETUP.md#platform-admission-guards),
 the component updates described in their owning guides, and the application's
 ordinary deployment. Existing application data, bound volumes and enrolled
 gateway identities must be preserved. Offline readers acquire runtime hardening
 when their Pods can be recreated; API restrictions apply to subsequent requests.
-Production exploitation, breakout attempts and live security probes are excluded.
+
+On 2026-11-17, the platform admission policies and narrower roles were activated.
+All seven node labeler Pods were Ready with the restricted runtime settings and
+two read-only host files. The OpenEBS and Kairos controllers were Ready. All 12
+existing claims retained their original identities and backing volumes.
+qBittorrent also rolled out successfully with the initializer completed and the
+application running without added capabilities. The live service showed active
+uploads and public incoming peers after the restart. See the
+[application verification record](https://github.com/klever-lab/self-hosted/blob/main/docs/seeding.md#live-initializer-verification-2026-11-17).
