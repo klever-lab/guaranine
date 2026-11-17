@@ -89,7 +89,8 @@ class ImageHarnessTests(unittest.TestCase):
                 def qemu(_arguments, **kwargs):
                     kwargs['stdout'].write(marker.encode())
                     kwargs['stdout'].flush()
-                    return SimpleNamespace(poll=lambda: 0, terminate=lambda: None, wait=lambda **_kwargs: 0)
+                    return SimpleNamespace(poll=lambda: 0, terminate=lambda: None, wait=lambda **_kwargs: 0,
+                                           stdin=io.BytesIO())
                 with (patch.object(harness.subprocess, 'Popen', side_effect=qemu),
                       contextlib.redirect_stdout(io.StringIO())):
                     if success:
@@ -98,6 +99,31 @@ class ImageHarnessTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(ValueError, 'boot assertions failed'):
                             harness.boot(directory / 'fixture.iso', directory, 1, install=True)
+
+    def test_image_boot_collects_initramfs_emergency_diagnostics_and_fails_without_waiting(self):
+        spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            sent = []
+            def qemu(_arguments, **kwargs):
+                output = kwargs['stdout']
+                output.write(b'Entering emergency mode. Exit the shell to continue.\n')
+                output.flush()
+                def write(command):
+                    sent.append(command)
+                    output.write(b'Initramfs failure report\nGUARANINE_INITRD_DIAGNOSTICS_DONE\n')
+                    output.flush()
+                return SimpleNamespace(poll=lambda: None, terminate=lambda: None, wait=lambda **_kwargs: 0,
+                    stdin=SimpleNamespace(write=write, flush=lambda: None, close=lambda: None))
+            with (patch.object(harness.subprocess, 'Popen', side_effect=qemu),
+                  patch.object(harness.time, 'sleep'), contextlib.redirect_stdout(io.StringIO()),
+                  self.assertRaisesRegex(ValueError, 'initramfs emergency mode')):
+                harness.boot(directory / 'fixture.iso', directory, 1, install=True)
+            self.assertEqual(len(sent), 1)
+            self.assertIn(b'cat /run/initramfs/rdsosreport.txt', sent[0])
+            self.assertIn('Initramfs failure report', (directory / 'boot-1.log').read_text())
 
 
 class PrivateConfigTests(unittest.TestCase):

@@ -325,9 +325,10 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
     log = directory / f'boot-{number}.log'
     try:
         with log.open('xb') as output:
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT)
             try:
                 deadline = time.monotonic() + (600 if install or legacy_cpu else 240)
+                emergency_report = False
                 while time.monotonic() < deadline:
                     status = process.poll()
                     if status is not None:
@@ -339,6 +340,14 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
                             return disk
                         break
                     text = log.read_text(errors='replace')
+                    if 'Entering emergency mode' in text and not emergency_report:
+                        process.stdin.write(b"cat /run/initramfs/rdsosreport.txt; "
+                                            b"journalctl -b -p warning --no-pager; "
+                                            b"printf '\\nGUARANINE_INITRD_DIAGNOSTICS_DONE\\n'\n")
+                        process.stdin.flush()
+                        emergency_report = True
+                    if re.search(r'^GUARANINE_INITRD_DIAGNOSTICS_DONE\r?$', text, re.M):
+                        raise ValueError(f'Kairos entered initramfs emergency mode; protected diagnostics: {log}')
                     if not install and re.search(r'^GUARANINE_BOOT_OK\r?$', text, re.M):
                         fingerprints = re.findall(r'256 (SHA256:[A-Za-z0-9+/]+)', text)
                         if fingerprints:
@@ -352,6 +361,7 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+                process.stdin.close()
     finally:
         try:
             if not install and cli.digest(disk) != before:
