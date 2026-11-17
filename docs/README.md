@@ -8,6 +8,7 @@ Start with [SETUP.md](../SETUP.md) for first-time deployment. These guides own t
 - [Networking and security](security.md) — tailnet policy, LAN isolation, workload restrictions and private material.
 - [Privilege-escalation audit](security-audit.md) — findings, remediation and the remaining administrator trust boundary after pod compromise.
 - [Application storage](storage.md) — automatic PVC provisioning, local disk limits, retention and recovery.
+- [Storage portability discussion](storage-discussion.md) — worker placement audit, SQLite recovery tradeoffs and the proposed books workflow.
 - [Monitoring](monitoring.md) — private Grafana access, cluster metrics and monitoring storage.
 - [Operations](operations.md) — configuration rollouts, image batches, node retirement, backups, recovery, migration and OS updates.
 - [Development](development.md) — local checks, CI, disposable image tests and dependency pins.
