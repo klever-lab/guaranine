@@ -42,6 +42,7 @@ RUN cp -a /usr/local/lib/firmware/. /usr/lib/firmware/ && \
     rm /run/k3s && \
     /usr/lib/guaranine-network/ld-musl-x86_64.so.1 --library-path /usr/lib/guaranine-network \
       /usr/lib/guaranine-network/wpa_supplicant -v && \
+    rfkill --version && \
     efibootmgr --version && \
     rm /system/oem/00_datasource.yaml && \
     rm -f /etc/ssh/ssh_host_* /etc/machine-id /var/lib/dbus/machine-id && \

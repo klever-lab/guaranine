@@ -100,7 +100,11 @@ trap 'result=$?; if test "$result" -ne 0; then journalctl -b -u wpa_supplicant@w
 tool ip netns add fixture-wifi
 modprobe mac80211_hwsim radios=2
 udevadm settle
-systemctl stop wpa_supplicant@wlan1.service
+systemctl stop wpa_supplicant@wlan0.service wpa_supplicant@wlan1.service
+rfkill block wlan
+test "$(cat /sys/class/ieee80211/phy0/rfkill*/soft)" = 1
+systemctl start wpa_supplicant@wlan0.service
+test "$(cat /sys/class/ieee80211/phy0/rfkill*/soft)" = 0
 tool iw phy phy1 set netns name fixture-wifi
 ap ip link set lo up
 ap ip address add 192.0.2.1/24 dev wlan1

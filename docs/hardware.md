@@ -4,6 +4,8 @@
 
 Use a 2.4-GHz WPA2-Personal network with 802.11g clients enabled for this mixed fleet; its older single-band cards cannot join a 5-GHz-only SSID. Disable Secure Boot for this image. Built-in Wi-Fi must work from live boot through installation and normal operation, without Ethernet, adapters or external bridges.
 
+The Wi-Fi service runs `rfkill unblock wlan` before connecting, clearing software radio blocks while leaving Bluetooth and hardware blocks unchanged. On 2026-11-17, the physical Lenovo's RTL8821CE driver and firmware loaded, but both its platform and Wi-Fi radios were software blocked; `wpa_supplicant` reported `rfkill: WLAN soft blocked`. Ethernet allowed remote diagnosis. The image harness now starts its simulated Wi-Fi client with a software block and requires the production service to clear it before association and DHCP; physical verification of the fix is still pending.
+
 New laptop ISOs and installed workers enable `efi=debug` by default so EFI startup diagnostics can be photographed without editing GRUB. The native worker profile owns the value; AuroraBoot appends the same value to live boot entries. Updating an existing USB follows the [image rebuild procedure](operations.md#image-batches-and-retries).
 
 On UEFI workers, a native `after-install` hook registers **Kairos** for the installed disk's `\EFI\boot\bootx64.efi`, places it first in the firmware boot order and clears an overriding one-time boot choice. Existing entries are preserved. The hook verifies the partition GUID and loader path before allowing poweroff; `strict: true` makes hook errors fatal. BIOS workers keep the native BIOS bootloader path.
