@@ -562,7 +562,7 @@ class WorkerInstallationTests(OperatorTestCase):
         blob = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\x11' * 32
         key = '100.64.0.8 ssh-ed25519 ' + base64.b64encode(blob).decode() + '\n'
         prompts, sent = [], []
-        answers = iter(['yes', '', 'ERASE'])
+        answers = iter(['', 'ERASE'])
         confirmed = False
         def answer(prompt):
             nonlocal confirmed
@@ -603,7 +603,7 @@ class WorkerInstallationTests(OperatorTestCase):
               patch('builtins.input', side_effect=answer), contextlib.redirect_stdout(output)):
             select.return_value.unsafe_ask.side_effect = lambda: select.call_args.kwargs['choices'][1].value
             cli.install_worker(None)
-        self.assertEqual(len(prompts), 3)
+        self.assertEqual(len(prompts), 2)
         self.assertEqual(select.call_count, 1)
         self.assertEqual(len(sent), 1)
         self.assertIn('Found laptop', output.getvalue())
@@ -1449,7 +1449,7 @@ class LaptopDiscoveryTests(OperatorTestCase):
 
 
 class SSHTrustTests(OperatorTestCase):
-    def test_ssh_hostkey_displays_fingerprint_and_requires_confirmation_before_pinning(self):
+    def test_ssh_hostkey_is_pinned_without_a_confirmation_prompt(self):
         blob = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\x11' * 32
         raw = '100.64.0.8 ssh-ed25519 ' + base64.b64encode(blob).decode() + '\n'
         fingerprint = 'SHA256:' + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip('=')
@@ -1457,22 +1457,27 @@ class SSHTrustTests(OperatorTestCase):
         run = subprocess.run
         def key_command(arguments, **kwargs):
             return result if arguments[0] == 'ssh-keyscan' else run(arguments, **kwargs)
-        for answer in ('yes', 'Y'):
-            output = io.StringIO()
-            with (patch.object(cli.subprocess, 'run', side_effect=key_command), patch('builtins.input', return_value=answer),
-                  contextlib.redirect_stdout(output)):
-                with cli.verified_connection('100.64.0.8', self.root) as (command, hosts):
-                    self.assertIn('StrictHostKeyChecking=yes', command)
-                    self.assertIn('GlobalKnownHostsFile=/dev/null', command)
-                    self.assertEqual(hosts.read_text(), raw)
-                    self.assertEqual(hosts.stat().st_mode & 0o777, 0o600)
-                self.assertFalse(hosts.exists())
-            self.assertIn(fingerprint, output.getvalue())
-            self.assertIn('laptop screen or protected VM console', output.getvalue())
-        for answer in ('', 'no', 'SHA256:WRONG'):
-            with (patch.object(cli.subprocess, 'run', side_effect=key_command), patch('builtins.input', return_value=answer),
-                  contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'identity not confirmed')):
-                with cli.verified_connection('100.64.0.8', self.root): self.fail('Unconfirmed SSH key accepted')
+        output = io.StringIO()
+        with (patch.object(cli.subprocess, 'run', side_effect=key_command), patch('builtins.input') as prompt,
+              contextlib.redirect_stdout(output)):
+            with cli.verified_connection('100.64.0.8', self.root) as (command, hosts):
+                prompt.assert_not_called()
+                self.assertIn('StrictHostKeyChecking=yes', command)
+                self.assertIn('GlobalKnownHostsFile=/dev/null', command)
+                self.assertEqual(hosts.read_text(), raw)
+                self.assertEqual(hosts.stat().st_mode & 0o777, 0o600)
+            self.assertFalse(hosts.exists())
+        self.assertIn(fingerprint, output.getvalue())
+
+    def test_ssh_hostkey_rejects_a_different_address_or_algorithm(self):
+        for raw in ('100.64.0.9 ssh-ed25519 KEY\n', '100.64.0.8 ssh-rsa KEY\n'):
+            with (self.subTest(raw=raw),
+                  patch.object(cli.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout=raw)),
+                  patch('builtins.input') as prompt, contextlib.redirect_stdout(io.StringIO()),
+                  self.assertRaisesRegex(ValueError, 'Unexpected SSH keyscan response')):
+                with cli.verified_connection('100.64.0.8', self.root):
+                    self.fail('Unexpected SSH key accepted')
+            prompt.assert_not_called()
 
 
 class ControllerBootstrapTests(OperatorTestCase):

@@ -113,7 +113,7 @@ The command supplies `SSH_PUBLIC_KEY` and a fresh, single-use `TAILSCALE_AUTH_KE
 
 The command dispatches committed `main`, follows the run and saves a private infrastructure-state backup under its operator `deploy-*` directory. Check the printed `handoff` resource IDs. The workflow reuses the original private seed image on subsequent runs; publishing a new OS base does not upgrade the installed controller. Plans that delete resources or modify/recreate an existing controller stop for local review. For a later manual plan, download the managed private image and replace the bootstrap-only image path/hash in `ovh.tfvars` with its actual path and SHA-256.
 
-The new VM joins Tailscale with K3s stopped. Verify the console SSH fingerprint and persistent storage. If replacing the running controller, stop here and follow [migration and recovery](docs/operations.md#restore-on-another-cloud-vm) after approval for cutover. Do not initialize a new empty cluster.
+The new VM joins Tailscale with K3s stopped. Verify its Tailscale address and persistent storage. If replacing the running controller, stop here and follow [migration and recovery](docs/operations.md#restore-on-another-cloud-vm) after approval for cutover. Do not initialize a new empty cluster.
 
 ## Bootstrap the controller
 
@@ -123,7 +123,7 @@ After the VM registers with Tailscale, verify its tailnet IPv4 address and run:
 ./guaranine bootstrap
 ```
 
-Compare the displayed SSH fingerprint with the protected VM console and enter `yes` if they match. For a new deployment, type `INITIALIZE` to create a NEW EMPTY cluster on native Kairos persistent storage. For an existing cluster, follow the [restore procedure](docs/operations.md#restore-on-another-cloud-vm) first. Bootstrap refuses to overwrite an existing kubeconfig or pinned controller key; it is not the migration command.
+The first connection automatically pins the SSH host key at the selected Tailscale address; no screen fingerprint comparison is required. For a new deployment, type `INITIALIZE` to create a NEW EMPTY cluster on native Kairos persistent storage. For an existing cluster, follow the [restore procedure](docs/operations.md#restore-on-another-cloud-vm) first. Bootstrap refuses to overwrite an existing kubeconfig or pinned controller key; it is not the migration command.
 
 Bootstrap requires nonempty, distinct server and agent tokens and refuses an existing server datastore before changing credentials or activating K3s; use the approved restore procedure for an existing cluster. For a new cluster, it waits for Ready, saves the kubeconfig and pinned server host key, and records the Tailscale endpoint in `operator.yaml`.
 
@@ -154,7 +154,7 @@ Boot the USB. Wi-Fi connects automatically; the laptop stays live until you inst
 ./guaranine worker
 ```
 
-Choose **Add worker**. The command finds the laptop. If several are online, select the laptop to install. Compare the displayed SSH fingerprint with the one on the laptop screen and enter `yes` if they match. Remote commands use that pinned host key and the operator's SSH key.
+Choose **Add worker**. The command finds the laptop. If several are online, select the laptop to install. The first connection automatically pins its SSH host key, without a screen comparison. Remote commands use that pinned host key and the operator's SSH key.
 
 Press Enter to accept the suggested name, or type your own. Select an installation disk, checking its model, size and serial. It must be unmounted, writable and at least 16 GiB. Type `ERASE` to erase that disk and install. Cancelling before confirmation sends no installation configuration.
 

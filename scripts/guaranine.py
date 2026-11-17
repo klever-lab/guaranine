@@ -698,7 +698,7 @@ def ssh_command(address, hosts):
 
 @contextmanager
 def verified_connection(address, directory):
-    """Untrusted keyscan becomes trusted only after a physical fingerprint comparison."""
+    """Pin the SSH host key presented by the selected Tailscale peer."""
     address = tailnet_ip(address)
     deadline = time.monotonic() + 120
     with progress(f'Waiting for SSH on {address}…'):
@@ -721,11 +721,7 @@ def verified_connection(address, directory):
         raise ValueError('Unexpected SSH keyscan response')
     fingerprint = private_command(['ssh-keygen', '-lf', '-', '-E', 'sha256'], directory,
                                   data=lines[0] + '\n', timeout=30).split()[1]
-    print(f'\nSSH fingerprint for {address}:')
-    print(f'\n  {fingerprint}\n')
-    print('Compare with the fingerprint on the laptop screen or protected VM console.')
-    if input('Do they match? Type yes to continue (Enter to cancel): ').strip().lower() not in ('y', 'yes'):
-        raise ValueError('SSH identity not confirmed; no remote command was sent')
+    print(f'\nPinned SSH host key for {address}: {fingerprint}\n')
     with tempfile.TemporaryDirectory(prefix='ssh-', dir=directory) as scratch:
         hosts = Path(scratch) / 'known_hosts'
         private_write(hosts, lines[0] + '\n')

@@ -38,7 +38,7 @@ To free a name reserved by a failed installation, run `./guaranine worker`, choo
 
 The worker command reads the operator's local `tailscale status --json` and waits for an online peer with the `guaranine-live-` hostname prefix and `tag:guaranine-worker` tag. Each discovery poll reads all registered Kubernetes nodes over pinned controller SSH and excludes peers whose hostname or Tailscale addresses match a node name or reported node address, including NotReady nodes. If the node lookup fails, discovery stops without offering a laptop. It checks every two seconds until a candidate appears; Ctrl+C cancels the wait. A single candidate is selected automatically; several candidates produce a selection menu. It then waits up to two minutes for SSH startup. The operator must be connected to Tailscale. No LAN discovery or manual IP lookup is needed.
 
-These names and tags identify candidates; they do not replace the SSH fingerprint verification or live-media check in the [worker installation procedure](../SETUP.md#install-a-worker).
+These names and tags identify candidates. The first SSH connection pins the selected peer's host key automatically; the [worker installation procedure](../SETUP.md#install-a-worker) also checks that it is running live media before offering disks.
 
 Before erasing a worker disk, the CLI checks UEFI boot tools and firmware access. Old USBs missing the required tool stop with an update instruction. It also refuses installation if another attached device has partition names or filesystem labels used by Kairos: the native installer resolves those labels globally and could otherwise format the wrong device. The selected disk may already contain Kairos labels.
 
@@ -58,7 +58,7 @@ Back up operator configuration/keys, Terraform state and application volumes sep
 
 ## Restore on another cloud VM
 
-Boot the prepared Kairos base on a replacement cloud VM with its own Tailscale identity and fresh registration if required. The new controller joins the tailnet but its activation marker is absent, keeping K3s stopped. Verify native persistent storage and its console SSH fingerprint before transferring private state. Preserve the old server, its disks, Terraform state and operator endpoint during this preparation.
+Boot the prepared Kairos base on a replacement cloud VM with its own Tailscale identity and fresh registration if required. The new controller joins the tailnet but its activation marker is absent, keeping K3s stopped. Verify its Tailscale address and native persistent storage, and pin its SSH host key before transferring private state. Preserve the old server, its disks, Terraform state and operator endpoint during this preparation.
 
 Cutover interrupts the single-server control plane and requires explicit approval. Stop K3s on the old controller, disable its automatic restart and take the final consistent server-directory backup. Verify the export before changing anything else. Restore it under the new VM's `/var/lib/rancher/k3s` with K3s stopped, preserving the server token and restoring the original `/etc/rancher/node/password`. The Actions-built VM has no K3s tokens: install the original server/agent token inputs both under `/etc/rancher/k3s` and in a mode-0600 `/oem/99_guaranine-cluster.yaml` initramfs profile so they survive reboot. Do not create a new empty cluster. The OVH controller uses native Kairos persistence, with no extra disk to format.
 

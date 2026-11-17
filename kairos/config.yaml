@@ -249,7 +249,7 @@ stages:
             if test -f /run/cos/live_mode; then
               echo 'Guaranine live media. Wi-Fi connects to the network captured on the operator computer.'
               tailscale ip -4 2>/dev/null || true
-              echo 'SSH host fingerprint (compare on the operator computer):'
+              echo 'SSH host fingerprint:'
               ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
             fi
       commands:
