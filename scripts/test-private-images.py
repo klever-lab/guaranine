@@ -198,6 +198,9 @@ def fixture(role=None):
             'commands': ['printf "%s\\n%s\\n" "$IMMUCORE_MOUNT_FAILURE_STEP" "$IMMUCORE_MOUNT_FAILURE" '
                          '> /dev/ttyS0; journalctl -b -u immucore --no-pager > /dev/ttyS0; '
                          'lsblk -o NAME,SIZE,TYPE,LABEL,PARTLABEL > /dev/ttyS0; blkid > /dev/ttyS0; '
+                         'sfdisk --json /dev/vda > /dev/ttyS0 2>&1; '
+                         'partx --show /dev/vda > /dev/ttyS0 2>&1; '
+                         'journalctl -b -k --no-pager -n 120 > /dev/ttyS0; '
                          'cat /oem/01_layout.yaml > /dev/ttyS0'],
         }]
         checks += ['test "$(hostname)" = fixture-controlplane', 'mountpoint -q /var/lib/rancher',
@@ -314,7 +317,7 @@ def boot(image, directory, number, *, uefi=False, install=False, legacy_cpu=Fals
         command += ['-drive', f'if=pflash,format=raw,readonly=on,file={code}',
                     '-drive', f'if=pflash,format=raw,file={variables}']
     if image.suffix == '.qcow2':
-        command += ['-drive', f'file={image},format=qcow2,if=virtio']
+        command += ['-drive', f'file={image},format=qcow2,if=virtio,snapshot=on']
     elif image.suffix == '.iso':
         command += ['-device', 'ich9-usb-ehci1,id=usb',
                     '-drive', f'if=none,id=installer,file={image},format=raw,readonly=on',
@@ -396,7 +399,9 @@ def main():
             if suite in ('all', 'controller'):
                 with timed('Controller QCOW2 build'):
                     controller = cli.build_image(fixture('controlplane'), 'qcow2', directory / 'controller', source)
-                boot(controller, directory, 4, uefi=True)
+                # Each boot starts from the untouched seed; any failure stops the suite.
+                for number in (4, 11, 12):
+                    boot(controller, directory, number, uefi=True)
                 controller.unlink()
                 print('Controller suite passed: native persistent storage mounted; unactivated K3s stayed stopped.', flush=True)
             if suite in ('all', 'worker-bios', 'worker-uefi'):

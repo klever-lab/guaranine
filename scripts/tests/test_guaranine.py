@@ -27,6 +27,34 @@ import guaranine as cli
 
 
 class ImageHarnessTests(unittest.TestCase):
+    def test_controller_seed_snapshots_do_not_hide_writes_to_the_unrelated_data_disk(self):
+        spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            def sample_digest(path):
+                with path.open('rb') as stream:
+                    return hashlib.sha256(stream.read(512)).hexdigest()
+            def qemu(arguments, **kwargs):
+                drives = [arguments[index + 1] for index, arg in enumerate(arguments) if arg == '-drive']
+                seed, data = drives
+                self.assertIn('snapshot=on', seed)
+                self.assertNotIn('snapshot=', data)
+                self.assertNotIn('-snapshot', arguments)
+                path = Path(data.split('file=', 1)[1].split(',', 1)[0])
+                with path.open('r+b') as disk:
+                    disk.write(b'UNAUTHORIZED WRITE')
+                kwargs['stdout'].write(b'256 SHA256:DISPOSABLE\nGUARANINE_BOOT_OK\n')
+                kwargs['stdout'].flush()
+                return SimpleNamespace(poll=lambda: None, terminate=lambda: None, wait=lambda **_kwargs: 0,
+                                       stdin=io.BytesIO())
+            with (patch.object(harness.subprocess, 'Popen', side_effect=qemu),
+                  patch.object(harness.cli, 'digest', side_effect=sample_digest),
+                  contextlib.redirect_stdout(io.StringIO()),
+                  self.assertRaisesRegex(ValueError, 'modified an existing guest data disk')):
+                harness.boot(directory / 'controller.qcow2', directory, 4)
+
     def test_qcow2_is_published_only_after_conversion_finishes(self):
         for failure in (None, ValueError('conversion failed'),
                         subprocess.TimeoutExpired('qemu-img', 600), KeyboardInterrupt()):
