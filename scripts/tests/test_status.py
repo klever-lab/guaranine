@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -25,16 +26,37 @@ def node(name='worker', ready='True'):
 
 
 class StatusTests(unittest.TestCase):
-    def snapshot(self, resources=None, *, tailscale=None, api=None, health=None, environment=None):
+    def snapshot(self, resources=None, *, tailscale=None, api=None, health=None, environment=None,
+                 readers=True, battery='BAT0\t1\t82\tCharging\n'):
         if resources is None:
             resources = [node(), resource('Pod', 'app', spec={'nodeName': 'worker'}, status={
                 'phase': 'Running', 'conditions': [{'type': 'Ready', 'status': 'True'}]}),
                 resource('Deployment', 'app', status={'readyReplicas': 1, 'observedGeneration': 1})]
+        resources = list(resources)
+        if readers:
+            for item in list(resources):
+                if item['kind'] != 'Node' or any(key in item['metadata'].get('labels', {}) for key in (
+                        'node-role.kubernetes.io/control-plane', 'node-role.kubernetes.io/master')):
+                    continue
+                if not any(condition['type'] == 'Ready' and condition['status'] == 'True'
+                           for condition in item['status'].get('conditions', [])):
+                    continue
+                pod = resource('Pod', 'battery-status-' + item['metadata']['name'], namespace='monitoring',
+                               spec={'nodeName': item['metadata']['name']},
+                               status={'phase': 'Running', 'conditions': [{'type': 'Ready', 'status': 'True'}]})
+                pod['metadata']['labels'] = {'app': 'battery-status'}
+                resources.append(pod)
         responses = {
             'tailscale': {'BackendState': 'Running', 'Peer': {}} if tailscale is None else tailscale,
             'kubectl': {'items': resources} if api is None else api,
         }
         def command(arguments, **kwargs):
+            if arguments[0] == 'kubectl' and arguments[2] == 'exec':
+                if isinstance(battery, Exception):
+                    raise battery
+                if isinstance(battery, subprocess.CompletedProcess):
+                    return battery
+                return subprocess.CompletedProcess(arguments, 0, battery, '')
             response = responses[arguments[0]]
             self.assertLessEqual(kwargs['timeout'], 15)
             if isinstance(response, Exception):
@@ -66,13 +88,14 @@ class StatusTests(unittest.TestCase):
         code, output, run, probe = self.snapshot(resources, tailscale=tailscale)
         self.assertEqual(code, 0)
         self.assertIn('Overall: OK', output)
-        self.assertIn('0 ready, 1 completed, 0 need attention', output)
+        self.assertIn('1 ready, 1 completed, 0 need attention', output)
         self.assertIn('Inactive (desired 0)', output)
         self.assertIn('StatefulSet/database', output)
         self.assertIn('DaemonSet/agent', output)
         self.assertIn('sleeping-reader', output)
         self.assertNotIn('personal-phone', output)
-        self.assertEqual([call.args[0][0] for call in run.call_args_list], ['tailscale', 'kubectl'])
+        self.assertEqual([call.args[0][0] for call in run.call_args_list], ['tailscale', 'kubectl', 'kubectl'])
+        self.assertIn('BAT0: 82% Charging', output)
         kubectl = run.call_args_list[1].args[0]
         self.assertEqual(kubectl[2], 'get')
         self.assertNotIn('secrets', kubectl[3])
@@ -106,7 +129,7 @@ class StatusTests(unittest.TestCase):
         terminating['metadata']['deletionTimestamp'] = '2026-01-01T00:00:00Z'
         code, output, _, _ = self.snapshot([node(), crash, unready, terminating])
         self.assertEqual(code, 1)
-        self.assertIn('0 ready, 0 completed, 3 need attention', output)
+        self.assertIn('1 ready, 0 completed, 3 need attention', output)
         for message in ('CrashLoopBackOff', 'NotReady', 'Terminating'):
             self.assertIn(message, output)
         self.assertNotIn('Completed, CrashLoopBackOff', output)
@@ -175,6 +198,61 @@ class StatusTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(run.call_args_list[1].kwargs['env']['KUBECONFIG'],
                     '/tmp/guaranine-status-fixture/kubeconfig' if override else '/tmp/selected-context')
+                self.assertEqual(run.call_args_list[2].kwargs['env']['KUBECONFIG'],
+                    run.call_args_list[1].kwargs['env']['KUBECONFIG'])
+
+    def test_battery_read_failure_or_missing_reader_is_unknown_without_losing_other_checks(self):
+        cases = [{'readers': False}, {'battery': subprocess.TimeoutExpired('kubectl', 10)},
+                 {'battery': subprocess.CompletedProcess([], 1, 'PRIVATE ERROR', 'PRIVATE ERROR')},
+                 {'battery': 'not a battery reading'}]
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                code, output, _, probe = self.snapshot(**arguments)
+                self.assertEqual(code, 1)
+                self.assertIn('Unavailable', output)
+                self.assertIn('Grafana: HTTP 200', output)
+                self.assertNotIn('PRIVATE ERROR', output)
+                probe.assert_called_once()
+
+    def test_battery_absence_multiple_batteries_and_unknown_capacity(self):
+        cases = [('', 'No battery'), ('BAT0\t0\t?\tUnknown\n', 'BAT0: Not present'),
+                 ('BAT0\t1\t?\tUnknown\n', 'BAT0: ? Unknown'),
+                 ('BAT0\t1\tNaN\tUnknown\n', 'BAT0: ? Unknown'),
+                 ('BAT0\t1\t101\tUnknown\n', 'BAT0: ? Unknown'),
+                 ('BAT0\t1\t0\tDischarging\nBAT1\t1\t100\tFull\n',
+                  'BAT0: 0% Discharging; BAT1: 100% Full')]
+        for data, expected in cases:
+            with self.subTest(data=data):
+                code, output, _, _ = self.snapshot(battery=data)
+                self.assertEqual(code, 0)
+                self.assertIn(expected, output)
+
+    def test_offline_workers_and_controllers_do_not_trigger_battery_exec(self):
+        controller = node('controller')
+        controller['metadata']['labels'] = {'node-role.kubernetes.io/control-plane': 'true'}
+        _, output, run, _ = self.snapshot([node(ready='False'), controller])
+        self.assertIn('Unavailable (node offline)', output)
+        self.assertEqual(len(run.call_args_list), 2)
+
+    def test_actual_battery_shell_reads_sysfs_fields_and_ignores_peripherals(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, fields in {
+                'AC': {'type': 'Mains', 'online': '1'},
+                'BAT0': {'type': 'Battery', 'capacity': '57', 'present': '1', 'status': 'Not charging'},
+                'BAT1': {'type': 'Battery', 'present': '0'},
+                'mouse': {'type': 'Battery', 'scope': 'Device', 'capacity': '98'},
+            }.items():
+                directory = root / name
+                directory.mkdir()
+                for field, value in fields.items():
+                    (directory / field).write_text(value + '\n')
+            result = subprocess.run(['sh', '-ec', cli.BATTERY_READ.replace('/sys/class/power_supply', str(root))],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout, 'BAT0\t1\t57\tNot charging\nBAT1\t0\t?\tUnknown\n')
+            missing = subprocess.run(['sh', '-ec', cli.BATTERY_READ.replace(
+                '/sys/class/power_supply', str(root / 'missing'))], capture_output=True, text=True)
+            self.assertNotEqual(missing.returncode, 0)
 
 
 if __name__ == '__main__':

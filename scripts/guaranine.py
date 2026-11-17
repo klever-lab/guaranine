@@ -2,6 +2,7 @@
 """Prepare Guaranine machines, flash installation media and manage host configuration."""
 import argparse
 import configparser
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -1157,6 +1158,41 @@ def status_table(title, headers, rows):
         print('  ' + '  '.join(value.ljust(width) for value, width in zip(row, widths)).rstrip())
 
 
+BATTERY_READ = '''set -eu
+test -r /sys/class/power_supply
+test -x /sys/class/power_supply
+for battery in /sys/class/power_supply/*; do
+  test -r "$battery/type" || continue
+  test "$(cat "$battery/type")" = Battery || continue
+  if test -r "$battery/scope" && test "$(cat "$battery/scope")" = Device; then continue; fi
+  printf '%s\\t%s\\t%s\\t%s\\n' "${battery##*/}" \\
+    "$(cat "$battery/present" 2>/dev/null || printf '?')" \\
+    "$(cat "$battery/capacity" 2>/dev/null || printf '?')" \\
+    "$(cat "$battery/status" 2>/dev/null || printf Unknown)"
+done'''
+
+
+def battery_status(pod, environment):
+    """Read host power-supply sysfs through an existing, unprivileged reader Pod."""
+    try:
+        result = subprocess.run(['kubectl', '--request-timeout=5s', 'exec', '-n', 'monitoring',
+            pod['metadata']['name'], '-c', 'reader', '--', 'sh', '-ec', BATTERY_READ],
+            text=True, capture_output=True, timeout=10, env=environment)
+        if result.returncode:
+            return 'Unavailable'
+        batteries = []
+        for line in result.stdout.splitlines():
+            name, present, capacity, state = line.split('\t')
+            if present == '0':
+                batteries.append(f'{name}: Not present')
+                continue
+            level = f'{int(capacity)}%' if capacity.isascii() and capacity.isdecimal() and 0 <= int(capacity) <= 100 else '?'
+            batteries.append(f'{name}: {level} {state}')
+        return '; '.join(batteries) or 'No battery'
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 'Unavailable'
+
+
 def cluster_status(_args):
     """Read a bounded health snapshot without depending on the monitoring stack."""
     attention = False
@@ -1205,9 +1241,27 @@ def cluster_status(_args):
             condition['type'] == 'Ready' and condition['status'] == 'True'
             for condition in node.get('status', {}).get('conditions', []))}
         attention |= bool(unavailable) or not nodes
+        roles = {name: 'Controller' if any(key in node['metadata'].get('labels', {}) for key in (
+            'node-role.kubernetes.io/control-plane', 'node-role.kubernetes.io/master')) else 'Worker'
+            for name, node in nodes.items()}
+        readers = {pod.get('spec', {}).get('nodeName'): pod for pod in resources
+                   if pod['kind'] == 'Pod' and pod['metadata'].get('namespace') == 'monitoring'
+                   and pod['metadata'].get('labels', {}).get('app') == 'battery-status'
+                   and not pod['metadata'].get('deletionTimestamp')
+                   and pod.get('status', {}).get('phase') == 'Running'
+                   and any(condition['type'] == 'Ready' and condition['status'] == 'True'
+                           for condition in pod['status'].get('conditions', []))}
+        batteries = {name: ('-' if roles[name] == 'Controller' else
+                     'Unavailable (node offline)' if name in unavailable else 'Unavailable (reader missing)')
+                     for name in nodes}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            pending = {name: pool.submit(battery_status, readers[name], environment) for name in nodes
+                       if roles[name] == 'Worker' and name not in unavailable and name in readers}
+            for name, result in pending.items():
+                batteries[name] = result.result()
+        attention |= any(value.startswith('Unavailable') for value in batteries.values())
         rows = []
         for name, node in nodes.items():
-            labels = node['metadata'].get('labels', {})
             conditions = node.get('status', {}).get('conditions', [])
             ready = next((condition for condition in conditions if condition['type'] == 'Ready'), {})
             problems = [condition['type'] for condition in conditions if condition['status'] == 'True'
@@ -1217,11 +1271,10 @@ def cluster_status(_args):
             if node.get('spec', {}).get('unschedulable'):
                 problems.append('Cordoned')
             attention |= bool(problems)
-            role = 'Controller' if any(key in labels for key in (
-                'node-role.kubernetes.io/control-plane', 'node-role.kubernetes.io/master')) else 'Worker'
-            rows.append([name, role, 'NotReady' if name in unavailable else 'Ready', '; '.join(problems) or '-'])
+            rows.append([name, roles[name], 'NotReady' if name in unavailable else 'Ready',
+                         batteries[name], '; '.join(problems) or '-'])
         print('Kubernetes: reachable' if nodes else 'Kubernetes: no nodes registered')
-        status_table('Nodes', ['NODE', 'ROLE', 'STATUS', 'DETAIL'], rows)
+        status_table('Nodes', ['NODE', 'ROLE', 'STATUS', 'BATTERY', 'DETAIL'], rows)
 
         rows = []
         for item in resources:

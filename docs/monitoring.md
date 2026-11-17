@@ -1,6 +1,6 @@
 # Monitoring
 
-[kubernetes/monitoring.yaml](../kubernetes/monitoring.yaml) deploys Grafana, Prometheus, kube-state-metrics and one Tailscale Serve proxy. Apply it explicitly; node bootstrap only installs the default namespace policy. The manifest owns image versions and digests, resource limits, retention, provisioning, Serve configuration and workload permissions.
+[kubernetes/monitoring.yaml](../kubernetes/monitoring.yaml) deploys Grafana, Prometheus, kube-state-metrics, one Tailscale Serve proxy and the worker battery readers. Apply it explicitly; node bootstrap only installs the default namespace policy. The manifest owns image versions and digests, resource limits, retention, provisioning, Serve configuration and workload permissions.
 
 ## Terminal status
 
@@ -12,7 +12,11 @@ Run from the operator computer for a snapshot that works without Grafana or Prom
 
 The command shows Guaranine-tagged Tailscale devices, Kubernetes node readiness and pressure, Deployment/StatefulSet/DaemonSet readiness, unhealthy or terminating Pods with scheduling errors, and PVC bindings with their storage nodes. A bound local volume on an unavailable node is flagged explicitly. Completed Pods and workloads intentionally set to zero replicas are shown without being treated as failures. Peer presence is informational for sleeping readers and stopped application gateways; an offline display kiosk needs attention.
 
-It also checks Grafana's HTTPS health endpoint using the URL in the monitoring manifest. Each network check has a timeout, and unavailable checks leave the independent checks running. It returns exit code `0` when the checks pass or `1` for unhealthy or unknown status. It reads Kubernetes and local Tailscale state without changing the cluster or requiring a Tailscale API token, SSH access, or Grafana credentials. Normal kubectl context selection applies; an explicit `GUARANINE_OPERATOR_DIR` selects that directory's kubeconfig.
+The Nodes table includes each worker's battery percentage and charging state, for example `BAT0: 82% Charging`. Multiple batteries are listed separately; a removed battery, missing capacity value and no battery are distinguished. Peripheral batteries are excluded. Offline nodes, absent reader Pods, access errors and read timeouts show `Unavailable`, which makes the overall result need attention. The controller has no battery check. Readings are current snapshots, not cached values or battery-health estimates.
+
+The `battery-status` DaemonSet runs a pinned upstream BusyBox `sleep` on each Linux worker. `status` uses `kubectl exec` to read the kernel's power-supply sysfs through those existing Pods, with eight parallel reads at most and ten seconds per read. The reader has no service-account token, network port, host mount or privileged namespace, runs as non-root with a read-only root filesystem and dropped capabilities, and inherits the monitoring namespace's deny policies. No SSH key or battery daemon is installed on the host. The caller needs access to `pods/exec` in `monitoring`; the fixed command only reads battery files.
+
+It also checks Grafana's HTTPS health endpoint using the URL in the monitoring manifest. Each network check has a timeout, and unavailable checks leave the independent checks running. It returns exit code `0` when the checks pass or `1` for unhealthy or unknown status. It reads Kubernetes, battery files and local Tailscale state without changing workload configuration or requiring a Tailscale API token, SSH access, or Grafana credentials. Normal kubectl context selection applies; an explicit `GUARANINE_OPERATOR_DIR` selects that directory's kubeconfig.
 
 This is a current health snapshot, without the dashboard's historical CPU, memory or disk-usage charts. If the Kubernetes API is down, node, workload and storage health is reported as unknown while Tailscale presence and Grafana availability are still checked. Tailscale presence does not prove an application or the Pi's browser is working.
 
@@ -40,11 +44,11 @@ The proxy reads its native Serve JSON from a whole-directory ConfigMap mount usi
 
 ## Permissions and traffic
 
-The namespace enforces restricted Pod Security. All four containers run as non-root, drop capabilities, refuse privilege escalation and use read-only root filesystems. Grafana has no mounted Kubernetes token. Its admin password and encryption key come from a Kubernetes Secret, generated outside Git in protected operator storage.
+The namespace enforces restricted Pod Security. All containers run as non-root, drop capabilities, refuse privilege escalation and use read-only root filesystems. Grafana has no mounted Kubernetes token. Its admin password and encryption key come from a Kubernetes Secret, generated outside Git in protected operator storage.
 
 The proxy's ServiceAccount can only get, update and patch the precreated `monitoring-tailscale` Secret. It cannot create or list Secrets or read Grafana credentials. A one-use tagged auth key seeds that Secret during enrollment; Tailscale removes it after login and stores its persistent identity there. Recreating the proxy pod preserves its tailnet address and name. Retain this Secret with the controller's encrypted K3s backup. Losing it requires retiring the old tailnet device and enrolling a replacement. Local proxy volumes are disposable caches and sockets.
 
-NetworkPolicy denies ingress and egress by default. The exceptions are:
+NetworkPolicy denies ingress and egress by default. Battery readers have no network exceptions apart from the namespace's shared DNS rule. The other exceptions are:
 
 | Source | Destination | Access |
 | --- | --- | --- |

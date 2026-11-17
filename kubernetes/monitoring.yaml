@@ -47,6 +47,42 @@ apiVersion: v1
 kind: ServiceAccount
 metadata: {name: monitoring-proxy, namespace: monitoring}
 ---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: battery-status, namespace: monitoring}
+spec:
+  selector:
+    matchLabels: {app: battery-status}
+  template:
+    metadata:
+      labels: {app: battery-status}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/os: linux}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+                  - {key: node-role.kubernetes.io/master, operator: DoesNotExist}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: reader
+          image: public.ecr.aws/docker/library/busybox:1.37.0-musl@sha256:f6a95d611e0a8780fabdb2aec43e31275b2720dfefa3e41b16835bfc42454478
+          command: [sleep, infinity]
+          resources:
+            requests: {cpu: 1m, memory: 1Mi}
+            limits: {memory: 8Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
 # Tailscale owns the data; applying this declaration must preserve its identity.
 apiVersion: v1
 kind: Secret
