@@ -128,7 +128,6 @@ stages:
             Before=network-online.target
             ConditionPathExists=/etc/guaranine/wifi.conf
             [Service]
-            ExecStartPre=/usr/sbin/rfkill unblock wlan
             ExecStart=/usr/lib/guaranine-network/ld-musl-x86_64.so.1 --library-path /usr/lib/guaranine-network /usr/lib/guaranine-network/wpa_supplicant -Dnl80211 -i%I -c/etc/guaranine/wifi.conf
             Restart=on-failure
             RestartSec=5

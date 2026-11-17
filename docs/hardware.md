@@ -4,8 +4,6 @@
 
 Use a 2.4-GHz WPA2-Personal network with 802.11g clients enabled for this mixed fleet; its older single-band cards cannot join a 5-GHz-only SSID. Disable Secure Boot for this image. Built-in Wi-Fi must work from live boot through installation and normal operation, without Ethernet, adapters or external bridges.
 
-The Wi-Fi service runs `rfkill unblock wlan` before connecting, clearing software radio blocks while leaving Bluetooth and hardware blocks unchanged. On 2026-11-17, the physical Lenovo's RTL8821CE driver and firmware loaded, but both its platform and Wi-Fi radios were software blocked; `wpa_supplicant` reported `rfkill: WLAN soft blocked`. Ethernet allowed remote diagnosis. The image harness now starts its simulated Wi-Fi client with a software block and requires the production service to clear it before association and DHCP; physical verification of the fix is still pending.
-
 New laptop ISOs and installed workers enable `efi=debug` by default so EFI startup diagnostics can be photographed without editing GRUB. The native worker profile owns the value; AuroraBoot appends the same value to live boot entries. Updating an existing USB follows the [image rebuild procedure](operations.md#image-batches-and-retries).
 
 On UEFI workers, a native `after-install` hook registers **Kairos** for the installed disk's `\EFI\boot\bootx64.efi`, places it first in the firmware boot order and clears an overriding one-time boot choice. Existing entries are preserved. The hook verifies the partition GUID and loader path before allowing poweroff; `strict: true` makes hook errors fatal. BIOS workers keep the native BIOS bootloader path.
@@ -66,3 +64,41 @@ A physical Inspiron 5558 initially failed during UEFI startup with GRUB reportin
 The inventory above owns model names. There is no second model list or manual qualification flag in operator configuration. Before adding a model or changing the kernel, firmware or installer, verify its actual radio variants against the recipe's driver/alias/firmware checks, then rerun the relevant build and boot checks. Confirm physical boot, installation and post-install Wi-Fi on the target unit before extending a hardware compatibility claim.
 
 Secure Boot, TPM-bound enrollment and YubiKey boot authorization require separate qualification and are not implemented here. [Enrollment security](security.md#private-material-and-enrollment) describes the media's trust limits.
+
+## Lenovo Wi-Fi investigation
+
+Status on 2026-11-17 UTC: a manual WLAN unblock restored association, DHCP and an HTTPS request explicitly bound to Wi-Fi on the physical L340-15API (DMI product `81LW`). The source of its initial software block remains under investigation. Automatic unblocking is not part of the ISO or installed-worker configuration. Keep subsequent findings here, distinguishing direct observations, hypotheses and confirmed causes.
+
+### Observations and recovery
+
+- The live USB reached a local shell and printed its SSH fingerprint, but did not join Tailscale. Ethernet provided temporary connectivity for diagnosis over pinned Tailscale SSH.
+- The RTL8821CE PCI adapter loaded `rtw88_8821ce` and firmware version `24.11.0`. Its interface `wlp1s0` was `off (configuring)`, with no access point or address. The Wi-Fi service was active and reported `rfkill: WLAN soft blocked` without restarting.
+- Both `ideapad_wlan` and the actual Wi-Fi radio `phy0` had `soft=1`, `hard=0`. The platform and adapter Bluetooth radios were also software blocked. The separate missing `rtl_bt/rtl8821c_fw.bin` message concerned Bluetooth; the Wi-Fi firmware loaded successfully.
+- The kernel's `rfkill.default_state` was `1` (enabled), with no rfkill override in the boot command line. The read-only live root had no `/var/lib/systemd/rfkill` directory. The runtime state files were created during this boot, not loaded from an rfkill state directory baked into that root. `/var/lib/systemd/rfkill` was on the live RAM overlay.
+- Lenovo's embedded-controller status, read through `/sys/kernel/debug/ideapad/status`, reported the master radio **on**, but individual Wi-Fi and Bluetooth **off**. The `ideapad_laptop` module's `hw_rfkill_switch` parameter was `N`; no hard block was reported.
+- At 14:04:59 UTC, after explicit authorization, `rfkill unblock wlan` cleared both WLAN software blocks. The existing Wi-Fi service connected and obtained DHCP by 14:05:04 UTC, without a service restart or driver change. Bluetooth remained blocked. This establishes the immediate connection blocker and a manual recovery, not its original cause.
+- A subsequent `curl --interface wlp1s0` HTTPS request to Tailscale's login endpoint returned HTTP 302, verifying internet connectivity through Wi-Fi while Ethernet remained attached.
+- The embedded-controller status still reported Wi-Fi **off** after Wi-Fi was connected. That discrepancy is an important lead: the reported firmware flag may be stale or ineffective on this model. It does not yet establish whether a firmware or kernel-driver defect created the original block.
+
+### Current interpretation and open checks
+
+The [upstream IdeaPad driver](https://github.com/torvalds/linux/blob/master/drivers/platform/x86/lenovo/ideapad-laptop.c) initializes its platform software block from the embedded controller's per-radio value in `ideapad_register_rfkill()`. Read-only disassembly of the actual `7.3.0-hadron` module copied from this laptop confirmed the same sequence inside `ideapad_acpi_add()`: read the EC value, turn zero into a blocked boolean, call `rfkill_init_sw_state()`, then register the radio. This is a concrete Lenovo-specific initialization path; no blacklist or module reload was used to inspect it.
+
+The copied rfkill core module also contains a registration path calling `__rfkill_switch_all()`, consistent with the [upstream legacy input handling](https://github.com/torvalds/linux/blob/master/net/rfkill/core.c). That provides a possible path from the platform block to the adapter's block despite the enabled kernel default. Whether that branch executed during this boot has not been traced.
+
+[systemd-rfkill](https://www.freedesktop.org/software/systemd/man/latest/systemd-rfkill.service.html) saves and restores Linux radio state. The empty read-only state directory, enabled kernel default, confirmed driver initialization and inconsistent controller readback point toward the Lenovo platform/firmware path. The original EC value at registration was not traced, so these findings do not prove what first disabled Wi-Fi or distinguish a retained setting from an ineffective firmware interface.
+
+Still unresolved:
+
+- Whether the initial platform block comes from retained firmware state, an ineffective ACPI interface on this model, a driver interaction or a userspace writer during boot.
+- Whether the readback remains zero independently of actual radio state, and whether the platform block propagates to the adapter through the kernel's legacy rfkill input handling.
+- Whether the block returns on a live-USB reboot, installed boot, suspend or power cycle. These disruptive checks have not been performed during the working session.
+- Whether Tailscale remains reachable after physically disconnecting Ethernet; association and DHCP alone do not prove the remaining traffic uses Wi-Fi.
+
+### Changes and test history
+
+Commit `c36aa92` proposed automatic WLAN unblocking before Wi-Fi service startup, a build-time check for the existing `rfkill` tool and an image test starting with a software-blocked client. Local repository validation passed, including 116 unit tests and native Kairos/Terraform checks; CI repository validation and firewall packet checks also passed. The controller, BIOS worker and UEFI worker image suites passed. Those results demonstrate the proposed recovery in simulated radios, not the origin of the physical Lenovo's block.
+
+In the [first image-test attempt](https://github.com/klever-lab/guaranine/actions/runs/44096359976/attempts/1), the live BIOS guest failed before Wi-Fi startup: the kernel received no initrd and panicked while mounting the live root. Its cause is unresolved. A read-only local BIOS USB boot of the unchanged saved ISO, with guest networking disabled, reached Guaranine userspace in 37 seconds. The [single live-suite rerun](https://github.com/klever-lab/guaranine/actions/runs/44096359976/attempts/2) passed all three live boots; the resulting workflow had all four suites passing. That rerun does not explain or fix the initial failure.
+
+The automatic-unblock implementation and its dedicated regression additions were withdrawn at the user's request. No automatic workaround, driver blacklist, kernel argument, reboot or disk installation was applied to the Lenovo. The only radio change so far was the explicitly requested manual WLAN unblock. Private observations are saved under the operator directory's `diagnostics/lenovo-1794923077933573636/` (`initial.log`, `rfkill.log`, `block-origin.log`, `manual-unblock.log`, `wifi-internet.log`, copied driver modules, `driver-inspection.log` and CI/local boot logs); credentials and raw private logs stay outside Git.
