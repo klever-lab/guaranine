@@ -28,7 +28,7 @@ Connect to Tailscale and open <https://monitoring.tail3a78b9.ts.net>. Log in as 
 cat "${GUARANINE_OPERATOR_DIR:-$HOME/.local/state/guaranine-kairos}/monitoring/admin-password"
 ```
 
-The **Services** panel shares the compact cluster summary row above the running-pods table and links to Jellyfin, Calibre Web, qBittorrent and Grafana. This directory is maintained manually in the manifest's `overview.json`; update its links when adding or retiring a web application.
+The **Services** panel in the cluster summary row links to the cluster's web applications. Update its links in the `overview.json` section of the monitoring manifest when adding or retiring an application.
 
 Charts show host/pod CPU and memory. Percentage charts use automatic precision, showing whole percentages on their axes while retaining fractional readings in tooltips. The host charts include Kubernetes nodes and the standalone `grafana-pi` display. The Pi remains outside Kubernetes and is excluded from cluster node counts and disk totals.
 

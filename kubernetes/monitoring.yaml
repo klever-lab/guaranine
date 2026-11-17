@@ -516,7 +516,7 @@ data:
           "gridPos": {"x": 20, "y": 16, "w": 4, "h": 4},
           "options": {
             "mode": "markdown",
-            "content": "[Jellyfin](https://streams.tail3a78b9.ts.net) · [Calibre Web](https://books.tail3a78b9.ts.net) · [qBittorrent](https://qbittorrent.tail3a78b9.ts.net) · [Grafana](https://monitoring.tail3a78b9.ts.net)"
+            "content": "[Jellyfin](https://streams.tail3a78b9.ts.net) · [Calibre Web](https://books.tail3a78b9.ts.net)  \n[qBittorrent](https://qbittorrent.tail3a78b9.ts.net) · [SABnzbd](https://usenet.tail3a78b9.ts.net)  \n[Friends VPN](https://vpn.bahasadri.com) · [Grafana](https://monitoring.tail3a78b9.ts.net)"
           }
         },
         {
