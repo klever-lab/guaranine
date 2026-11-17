@@ -56,9 +56,14 @@ Observed on 2026-11-17 UTC:
 | `wild` | Custom 50% start / 55% stop, already selected before this change; persistent policy applied. Observed at 91% with charging stopped; the policy does not drain that charge. |
 | `kate` | Firmware `Long_Life` enabled through `charge_types`; persistent policy applied. Observed charging up to 60% and then reporting `Not charging` while still on AC. No numeric threshold interface is exposed. |
 | `gattina` | No charging-mode, threshold or charge-behaviour interface, with `dell_laptop` loaded. The profile is installed but cannot enforce a cap on this hardware through these Linux interfaces. |
-| `muller`, `vi` | Offline during the initial inspection; awaiting power-on and verification. |
+| `muller` | Returned online; policy installed. Battery present, 0%, not charging on AC. Thresholds read 50% start / 90% stop, but `charge_types` returns an I/O error even as root, so a 50–55% limit could not be verified or applied through this policy. |
+| `vi` | Returned online; policy installed. Battery present, no readable percentage, reported voltage 0 V and not charging on AC. No charging-mode, threshold or charge-behaviour interface is exposed with `toshiba_acpi` loaded. |
 
 `kate` and `demure` also passed a device-change test: a temporary mode/threshold change was reset to the requested policy by udev, with a bounded queue wait. The installed OEM files were checked; this was not a reboot test. A fleet-wide 50% claim would be incorrect while hardware lacks controls or remains unverified. Private observations are retained in the operator directory under `diagnostics/battery-1794932083371011174/`.
+
+After `muller` and `vi` returned, all six workers were Ready and their models appeared in `status`. `muller` reported full-charge capacity of about 14% of design capacity. Its kernel also reported an unsupported WMI SMBIOS userspace interface, while the Dell battery extension registered; that warning does not establish the cause of the charge-mode read failure. `vi`'s battery data was insufficient to calculate a charge percentage.
+
+These are firmware-reported observations, not a confirmed diagnosis of either pack. Local battery checks are needed; [Dell documents battery-health and diagnostic checks](https://www.dell.com/support/contents/en-us/article/product-support/self-support-knowledgebase/battery-and-power/battery) for `muller`. Applying the profile to both workers completed successfully but did not repair their readings or verify a cap. Host and post-rollout observations are retained privately in `muller-vi-inspection.log`, `muller-root-inspection.log`, `vi-root-inspection.log` and `muller-vi-post-rollout.log`. At this later check `wild` was discharging at 89%; reconnecting its charger around 50–55% allows its existing thresholds to hold the lower range.
 
 ## Laptop models
 
