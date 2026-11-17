@@ -93,7 +93,7 @@ def main():
         (directory / 'tokens.csv').write_text(token + ',fixture-admin,fixture-admin,"system:masters"\n')
         client, peer, api = port(), port(), port()
         etcd_url, peer_url = f'http://127.0.0.1:{client}', f'http://127.0.0.1:{peer}'
-        start(stack, [str(tools / 'etcd'), '--name=fixture', '--data-dir=' + str(directory / 'etcd'),
+        database = start(stack, [str(tools / 'etcd'), '--name=fixture', '--data-dir=' + str(directory / 'etcd-data'),
                       '--listen-client-urls=' + etcd_url, '--advertise-client-urls=' + etcd_url,
                       '--listen-peer-urls=' + peer_url, '--initial-advertise-peer-urls=' + peer_url,
                       '--initial-cluster=fixture=' + peer_url], directory / 'etcd.log')
@@ -131,8 +131,9 @@ def main():
                     break
             except (OSError, urllib.error.URLError):
                 pass
-            if server.poll() is not None or time.monotonic() > deadline:
-                raise RuntimeError((directory / 'apiserver.log').read_text()[-6000:])
+            if database.poll() is not None or server.poll() is not None or time.monotonic() > deadline:
+                raise RuntimeError((directory / 'etcd.log').read_text()[-2000:] +
+                                   (directory / 'apiserver.log').read_text()[-4000:])
             time.sleep(0.2)
 
         def create(obj, *, user=None, dry=False, denied_by=None):
