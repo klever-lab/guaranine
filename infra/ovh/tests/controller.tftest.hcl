@@ -1,4 +1,5 @@
 mock_provider "openstack" {
+  source = "./tests"
   mock_data "openstack_compute_flavor_v2" {
     defaults = {
       id    = "14c5fa3f-fdad-45c4-9cd1-14dd99c341ee"
@@ -76,11 +77,31 @@ run "unchanged_plan" {
   command = plan
 }
 
+run "same_image_different_path" {
+  command = plan
+  variables {
+    image_path = abspath("same.qcow2")
+  }
+}
+
 run "replace_image_keep_vm" {
   command = plan
+  variables {
+    image_path   = abspath("changed.qcow2")
+    image_sha256 = filesha256(abspath("changed.qcow2"))
+  }
   plan_options {
     replace = [openstack_images_image_v2.controller]
   }
+}
+
+run "reject_relabelled_image" {
+  command = plan
+  variables {
+    image_path   = abspath("changed.qcow2")
+    image_sha256 = filesha256(abspath("changed.qcow2"))
+  }
+  expect_failures = [openstack_images_image_v2.controller]
 }
 
 run "reject_changed_image_bytes" {

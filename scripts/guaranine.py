@@ -505,10 +505,11 @@ fi
             raise ValueError('The upstream builder must return exactly one nonempty regular image')
         images[0].chmod(0o600)
         if image_format == 'qcow2':
-            image = directory / 'guaranine-kairos.qcow2'
-            private_command(['qemu-img', 'convert', '-f', 'raw', '-O', 'qcow2', str(images[0]), str(image)],
+            converted = Path(scratch) / 'converted.qcow2'
+            private_command(['qemu-img', 'convert', '-f', 'raw', '-O', 'qcow2', str(images[0]), str(converted)],
                             directory, timeout=600)
-            image.chmod(0o600)
+            converted.chmod(0o600)
+            image = converted.rename(directory / 'guaranine-kairos.qcow2')
         else:
             image = images[0].rename(directory / ('guaranine-kairos' + suffix))
     return image
@@ -778,15 +779,21 @@ def check_install_labels(connection, directory, selected):
 
 
 def initialize_controller(connection, directory):
-    """Keep a staged controller stopped until new-cluster or restored-state activation."""
+    """Initialize only a new controller; restored state needs the recovery procedure."""
     existing = private_command([*connection, 'persistent=$(findmnt -nro MAJ:MIN --mountpoint /usr/local) && '
         'test -n "$persistent" && test "$(findmnt -nro MAJ:MIN --target /var/lib/rancher)" = "$persistent" && '
         'if test -s /var/lib/rancher/k3s/server/db/state.db; then printf restored; fi'], directory)
-    if existing != 'restored':
-        if input('Type INITIALIZE to create a NEW EMPTY cluster: ').strip() != 'INITIALIZE':
-            raise ValueError('Controller initialization cancelled; K3s remains stopped')
-    credentials = [config_file('/etc/rancher/k3s/token', protected(directory / 'server-token').read_text()),
-                   config_file('/etc/rancher/k3s/agent-token', protected(directory / 'agent-token').read_text())]
+    if existing == 'restored':
+        raise ValueError('Found an existing K3s datastore; follow the approved restore procedure. '
+                         'Bootstrap never changes an existing cluster\'s credentials or activation marker.')
+    server = protected(directory / 'server-token').read_text().strip()
+    agent = protected(directory / 'agent-token').read_text().strip()
+    if not server or not agent or server == agent:
+        raise ValueError('K3s server and agent tokens must be nonempty and distinct')
+    if input('Type INITIALIZE to create a NEW EMPTY cluster: ').strip() != 'INITIALIZE':
+        raise ValueError('Controller initialization cancelled; K3s remains stopped')
+    credentials = [config_file('/etc/rancher/k3s/token', server + '\n'),
+                   config_file('/etc/rancher/k3s/agent-token', agent + '\n')]
     profile = cloud_yaml({'stages': {'initramfs': [{'name': 'Restore Guaranine cluster credentials', 'files': credentials}]}})
     # OEM persists across boots; the Actions image contains no cluster tokens.
     private_command([*connection, 'install -m0600 /dev/stdin /oem/99_guaranine-cluster.yaml'], directory, data=profile)

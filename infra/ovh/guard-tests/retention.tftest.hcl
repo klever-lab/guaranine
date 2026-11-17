@@ -1,4 +1,6 @@
-mock_provider "openstack" {}
+mock_provider "openstack" {
+  source = "./tests"
+}
 mock_provider "aws" {}
 
 variables {

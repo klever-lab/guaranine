@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   base:
-    if: github.ref == 'refs/heads/main' && github.sha == inputs.commit
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
@@ -27,6 +27,14 @@ jobs:
     outputs:
       image: ${{ steps.publish.outputs.image }}
     steps:
+      - name: Verify the reviewed commit before publishing or provisioning
+        env:
+          DEPLOY_COMMIT: ${{ inputs.commit }}
+        run: |
+          if [ "$GITHUB_SHA" != "$DEPLOY_COMMIT" ]; then
+            echo 'main moved after dispatch; review the new commit before retrying' >&2
+            exit 1
+          fi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -47,7 +55,7 @@ jobs:
         run: sudo docker logout ghcr.io
   stage:
     needs: base
-    if: github.ref == 'refs/heads/main' && github.sha == inputs.commit
+    if: github.ref == 'refs/heads/main'
     environment: ovh
     runs-on: ubuntu-24.04
     timeout-minutes: 50

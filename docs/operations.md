@@ -26,7 +26,9 @@ The USB confirmation identifies the selected drive, asks for `ERASE` and explain
 
 Incomplete builds preserve outputs and protected logs. Inspect them before revoking the batch key, archiving outputs and retrying. Failed subprocesses can also leave protected `error-*.log` files. Do not put diagnostic contents in public issues or logs. The CLI does not automatically repeat key-creation POSTs after ambiguous transport failures; inspect the live Tailscale state before retrying.
 
-`./guaranine controlplane` reuses a completed QCOW2 under `controller/` while its registration key is valid. An incomplete controller image needs inspection before another build. `bootstrap` refuses to overwrite an existing kubeconfig or `controlplane-known-hosts`; inspect those files instead of treating it as a repeatable repair command.
+`./guaranine controlplane` reuses a completed QCOW2 under `controller/` while its registration key is valid. Conversion publishes the final image only after success, so a failed or interrupted conversion cannot be reused as a completed image. An incomplete controller image needs inspection before another build. `bootstrap` refuses to overwrite an existing kubeconfig or `controlplane-known-hosts`; inspect those files instead of treating it as a repeatable repair command.
+
+Controller deployment fails if `main` moves between review and workflow dispatch. Review the new commit before retrying. It also refuses a partial cloud state containing the seed image without its controller: that image's embedded enrollment key may have expired, even when the retry supplies a fresh key. Inspect the saved state and actual cloud resources locally before planning recovery; automatic retries do not replace that image or create a VM from it.
 
 For worker retries, follow the [installation boundaries](../SETUP.md#install-a-worker), including the check after an interrupted remote install. [Enrollment limits](security.md#private-material-and-enrollment) explain why ending a batch does not retire its devices.
 

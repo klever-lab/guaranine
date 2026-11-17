@@ -6,10 +6,13 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -21,6 +24,37 @@ spec.loader.exec_module(deployment)
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_moved_main_fails_the_first_workflow_step_instead_of_skipping_deployment(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/deploy.yml').read_text())
+        base = workflow['jobs']['base']
+        self.assertNotIn('inputs.commit', base['if'])
+        preflight = base['steps'][0]
+        self.assertEqual(preflight['env']['DEPLOY_COMMIT'], '${{ inputs.commit }}')
+        for actual, expected, success in [('a' * 40, 'a' * 40, True), ('b' * 40, 'a' * 40, False)]:
+            with self.subTest(actual=actual):
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', preflight['run']],
+                    env={**os.environ, 'GITHUB_SHA': actual, 'DEPLOY_COMMIT': expected},
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode == 0, success)
+
+    def test_image_only_state_refuses_retry_before_using_an_expired_seed_or_provisioning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            state = {'resources': [{'type': 'openstack_images_image_v2', 'name': 'controller',
+                'instances': [{'attributes': {'id': 'disposable-image'}}]}]}
+            environment = {'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': 'a' * 40,
+                'DEPLOY_COMMIT': 'a' * 40, 'OVH_STATE_BUCKET': 'fixture', 'OVH_STORAGE_REGION': 'bhs',
+                'OS_REGION_NAME': 'BHS5', 'ENROLLMENT_EXPIRES': '2020-01-01T00:00:00Z'}
+            with (patch.dict(os.environ, environment),
+                  patch.object(cli, 'private_command', side_effect=['', json.dumps(state)]) as command,
+                  patch.object(cli, 'build_image') as build,
+                  patch.object(deployment, 'ensure_terraform', return_value=directory / 'terraform'),
+                  self.assertRaisesRegex(ValueError, 'image.*without.*controller')):
+                deployment.stage_controller(directory)
+            build.assert_not_called()
+            self.assertEqual(command.call_count, 2)
+            self.assertFalse((directory / 'controller').exists())
+
     def test_plan_refuses_deletion_replacement_forgetting_and_live_controller_updates(self):
         for address, actions, had_controller in [
             ('openstack_images_image_v2.controller', ['delete'], False),

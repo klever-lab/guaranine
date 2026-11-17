@@ -62,6 +62,9 @@ def stage_controller(directory):
     image = directory / 'controller/image/guaranine-kairos.qcow2'
     saved_image = resources.get('openstack_images_image_v2.controller')
     if saved_image:
+        if not had_controller:
+            raise ValueError('Seed image exists without a controller; inspect the partial deployment locally '
+                             'before retrying. Its embedded enrollment key may have expired.')
         attributes = saved_image['instances'][0]['attributes']
         image.parent.mkdir(mode=0o700, parents=True)
         print('Reusing the existing private seed image; installed OS upgrades use Kairos.', flush=True)

@@ -136,6 +136,10 @@ resource "openstack_images_image_v2" "controller" {
       condition     = try(filesha256(var.image_path) == var.image_sha256, false)
       error_message = "The private image must exist and match its reviewed SHA-256."
     }
+    postcondition {
+      condition     = self.checksum == filemd5(var.image_path)
+      error_message = "The supplied bytes differ from the stored seed image. Review an explicit image replacement locally; changing its hash metadata does not upload new bytes."
+    }
   }
 }
 

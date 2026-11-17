@@ -77,14 +77,15 @@ def check_lifecycle_plans(events):
         for event in events
         if event["type"] == "test_plan"
     }
-    unchanged = plans.get("unchanged_plan", {})
-    changes = unchanged.get("resource_changes", [])
-    require(changes, "Missing unchanged-deployment plan evidence")
-    require(
-        all(change["change"]["actions"] == ["no-op"] for change in changes)
-        and all(change["actions"] == ["no-op"] for change in unchanged["output_changes"].values()),
-        "An unchanged ovh deployment must produce no resource or output changes",
-    )
+    for name in ("unchanged_plan", "same_image_different_path"):
+        unchanged = plans.get(name, {})
+        changes = unchanged.get("resource_changes", [])
+        require(changes, "Missing unchanged-deployment plan evidence: " + name)
+        require(
+            all(change["change"]["actions"] == ["no-op"] for change in changes)
+            and all(change["actions"] == ["no-op"] for change in unchanged["output_changes"].values()),
+            "An unchanged ovh deployment must produce no resource or output changes: " + name,
+        )
     replacement = {
         change["address"]: change["change"]["actions"]
         for change in plans.get("replace_image_keep_vm", {}).get("resource_changes", [])
@@ -94,7 +95,7 @@ def check_lifecycle_plans(events):
         and replacement.get("openstack_compute_instance_v2.controller") == ["no-op"],
         "Replacing the seed image must not rebuild or replace the installed OVH VM",
     )
-    print("  unchanged infrastructure: no changes; seed image replacement: VM unchanged", flush=True)
+    print("  unchanged bytes at either path: no changes; changed seed image replacement: VM unchanged", flush=True)
 
 
 def check_disk_guard(root, env):
@@ -147,6 +148,13 @@ def main():
         copy_configuration(REPOSITORY / "infra/ovh", root)
         image = scratch / "fixture.qcow2"
         image.write_bytes(b"DISPOSABLE IMAGE FOR MOCKED TERRAFORM TESTS")
+        (root / "same.qcow2").write_bytes(image.read_bytes())
+        (root / "changed.qcow2").write_bytes(b"CHANGED DISPOSABLE IMAGE FOR MOCKED TERRAFORM TESTS")
+        (root / "tests/image.tfmock.json").write_text(json.dumps({
+            "mock_resource": {"openstack_images_image_v2": {
+                "defaults": {"checksum": hashlib.md5(image.read_bytes()).hexdigest()},
+            }},
+        }))
         env["TF_VAR_image_path"] = str(image)
         env["TF_VAR_image_sha256"] = hashlib.sha256(image.read_bytes()).hexdigest()
         env["TF_VAR_state_bucket"] = "guaranine-disposable-state"

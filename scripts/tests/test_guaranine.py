@@ -27,6 +27,36 @@ import guaranine as cli
 
 
 class ImageHarnessTests(unittest.TestCase):
+    def test_qcow2_is_published_only_after_conversion_finishes(self):
+        for failure in (None, ValueError('conversion failed'),
+                        subprocess.TimeoutExpired('qemu-img', 600), KeyboardInterrupt()):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary) / 'image'
+                final = directory / 'guaranine-kairos.qcow2'
+                def container(arguments, **_kwargs):
+                    if 'run' in arguments:
+                        mount = next(arg for arg in arguments if arg.endswith(',target=/work'))
+                        scratch = Path(mount.split('source=', 1)[1].rsplit(',target=', 1)[0])
+                        (scratch / 'images').mkdir()
+                        (scratch / 'images/fixture.raw').write_bytes(b'DISPOSABLE RAW IMAGE')
+                    return subprocess.CompletedProcess(arguments, 0)
+                def convert(arguments, _directory, **_kwargs):
+                    Path(arguments[-1]).write_bytes(b'PARTIAL' if failure else b'COMPLETE QCOW2')
+                    if failure:
+                        raise failure
+                with (patch.object(cli.subprocess, 'run', side_effect=container),
+                      patch.object(cli, 'private_command', side_effect=convert),
+                      contextlib.redirect_stdout(io.StringIO())):
+                    if failure:
+                        with self.assertRaises(type(failure)):
+                            cli.build_image({}, 'qcow2', directory, 'PUBLIC-BASE')
+                        self.assertFalse(final.exists(), 'A failed conversion must never look ready on retry')
+                    else:
+                        self.assertEqual(cli.build_image({}, 'qcow2', directory, 'PUBLIC-BASE'), final)
+                        self.assertEqual(final.read_bytes(), b'COMPLETE QCOW2')
+                        self.assertEqual(final.stat().st_mode & 0o777, 0o600)
+                self.assertFalse(list(directory.glob('build-*')))
+
     def test_worker_fixture_rollout_shell_parses_before_building_an_image(self):
         spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')
         harness = importlib.util.module_from_spec(spec)
@@ -1397,6 +1427,21 @@ class SSHTrustTests(OperatorTestCase):
 
 
 class ControllerBootstrapTests(OperatorTestCase):
+    def test_invalid_cluster_tokens_prevent_prompt_writes_and_activation(self):
+        for server, agent in [('', 'AGENT'), ('SERVER', '\n'), ('SAME', 'SAME'), (' SAME\n', 'SAME ')]:
+            with self.subTest(server=server, agent=agent):
+                for name, value in [('server-token', server), ('agent-token', agent)]:
+                    path = self.root / name
+                    if path.exists():
+                        path.unlink()
+                    cli.private_write(path, value)
+                with (patch.object(cli, 'private_command', return_value='') as command,
+                      patch('builtins.input', return_value='INITIALIZE') as prompt,
+                      self.assertRaisesRegex(ValueError, 'nonempty.*distinct')):
+                    cli.initialize_controller(['ssh'], self.root)
+                prompt.assert_not_called()
+                self.assertEqual(command.call_count, 1)
+
     def test_new_controller_requires_confirmation_before_activation(self):
         cli.private_write(self.root / 'server-token', 'DISPOSABLE-SERVER\n')
         cli.private_write(self.root / 'agent-token', 'DISPOSABLE-AGENT\n')
@@ -1410,21 +1455,23 @@ class ControllerBootstrapTests(OperatorTestCase):
                         cli.initialize_controller(['ssh'], self.root)
             self.assertEqual(command.call_count, 5 if answer == 'INITIALIZE' else 1)
             self.assertFalse(any('mkfs' in str(call) for call in command.call_args_list))
+            if answer == 'INITIALIZE':
+                self.assertIn('/oem/99_guaranine-cluster.yaml', command.call_args_list[1].args[0][-1])
+                profile = yaml.safe_load(command.call_args_list[1].kwargs['data'])
+                self.assertEqual([file['content'] for file in profile['stages']['initramfs'][0]['files']],
+                                 ['DISPOSABLE-SERVER\n', 'DISPOSABLE-AGENT\n'])
+                self.assertIn('.guaranine-ready', command.call_args_list[-1].args[0][-1])
 
-    def test_restored_controller_activates_without_creating_a_new_cluster(self):
+    def test_existing_controller_datastore_prevents_credential_changes_or_activation(self):
         cli.private_write(self.root / 'server-token', 'DISPOSABLE-SERVER\n')
         cli.private_write(self.root / 'agent-token', 'DISPOSABLE-AGENT\n')
         with (patch.object(cli, 'private_command', return_value='restored') as command,
-              patch('builtins.input') as prompt):
+              patch('builtins.input') as prompt,
+              self.assertRaisesRegex(ValueError, 'existing.*datastore')):
             cli.initialize_controller(['ssh'], self.root)
         prompt.assert_not_called()
+        self.assertEqual(command.call_count, 1)
         self.assertIn('server/db/state.db', command.call_args_list[0].args[0][-1])
-        self.assertIn('.guaranine-ready', command.call_args_list[-1].args[0][-1])
-        self.assertIn('/oem/99_guaranine-cluster.yaml', command.call_args_list[1].args[0][-1])
-        profile = yaml.safe_load(command.call_args_list[1].kwargs['data'])
-        self.assertEqual([file['content'] for file in profile['stages']['initramfs'][0]['files']],
-                         ['DISPOSABLE-SERVER\n', 'DISPOSABLE-AGENT\n'])
-        self.assertFalse(any('mkfs' in str(call) or 'rm ' in str(call) for call in command.call_args_list))
 
     def test_controller_persistence_failure_prevents_activation(self):
         with (patch.object(cli, 'private_command', side_effect=ValueError('Persistence not mounted')) as command,

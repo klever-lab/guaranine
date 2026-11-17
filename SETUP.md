@@ -125,7 +125,7 @@ After the VM registers with Tailscale, verify its tailnet IPv4 address and run:
 
 Compare the displayed SSH fingerprint with the protected VM console and enter `yes` if they match. For a new deployment, type `INITIALIZE` to create a NEW EMPTY cluster on native Kairos persistent storage. For an existing cluster, follow the [restore procedure](docs/operations.md#restore-on-another-cloud-vm) first. Bootstrap refuses to overwrite an existing kubeconfig or pinned controller key; it is not the migration command.
 
-Bootstrap waits for Ready, saves the kubeconfig and pinned server host key, and records the Tailscale endpoint in `operator.yaml`.
+Bootstrap requires nonempty, distinct server and agent tokens and refuses an existing server datastore before changing credentials or activating K3s; use the approved restore procedure for an existing cluster. For a new cluster, it waits for Ready, saves the kubeconfig and pinned server host key, and records the Tailscale endpoint in `operator.yaml`.
 
 ```bash
 export KUBECONFIG="$GUARANINE_OPERATOR_DIR/kubeconfig"
