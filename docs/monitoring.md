@@ -64,20 +64,21 @@ Prometheus discovers nodes and reads `nodes/metrics`. It does not receive `nodes
 
 ## Storage and reapplication
 
-Both retained local volumes use the persistent Kairos filesystem on the worker pinned in [the monitoring manifest](../kubernetes/monitoring.yaml):
+Grafana's retained local volume uses the persistent Kairos filesystem on the worker pinned in [the monitoring manifest](../kubernetes/monitoring.yaml):
 
 | Directory on pinned worker | Owner UID:GID | Volume |
 | --- | --- | --- |
 | `/usr/local/guaranine-monitoring/grafana` | `472:472` | Grafana database, users and saved dashboards |
-| `/usr/local/guaranine-monitoring/prometheus` | `65534:65534` | Prometheus metrics |
 
-The directories must exist before applying the manifest. Create them on the worker over pinned Tailscale SSH with `install -d -m 0700 -o 472 -g 472 /usr/local/guaranine-monitoring/grafana` and the corresponding command using `65534` for `prometheus`. Do not use `/var`'s temporary overlay. These existing static local PVs stay explicitly bound and satisfy the restricted workload policy. New applications can use [automatic storage provisioning](storage.md); installing it does not migrate monitoring data.
+The directory must exist before applying the manifest. Create it on the worker over pinned Tailscale SSH with `install -d -m 0700 -o 472 -g 472 /usr/local/guaranine-monitoring/grafana`. Do not use `/var`'s temporary overlay. Its static local PV stays explicitly bound and satisfies the restricted workload policy. New applications can use [automatic storage provisioning](storage.md); installing it does not migrate monitoring data.
+
+Prometheus uses a disk-backed `emptyDir` limited to 10 GiB. It can restart on another worker without a PVC; replacing its pod starts a new metrics history. Its age/size retention limits still apply while the pod exists. The former `prometheus` PVC and `monitoring-prometheus` PV are no longer declared or consumed. Applying without pruning leaves existing copies and their old history intact for recovery; do not remove them as part of this update.
 
 Follow [Optional monitoring](../SETUP.md#optional-monitoring) for a fresh deployment. Reapply public configuration with `kubectl apply -f kubernetes/monitoring.yaml`; the state Secret declaration preserves Tailscale-managed data. Grafana's file mounts and Prometheus do not automatically reload ConfigMaps: restart the affected deployment after changing them. Serve watches its own configuration. Keep the proxy at one replica with the `Recreate` strategy so two pods never share its identity concurrently. Its readiness probe checks for a tailnet address; liveness checks the local listener so a WAN outage does not trigger restarts. The admin-password file seeds a new database only; changing it does not reset an existing Grafana account. Preserve `secret-key` with the database.
 
-Local volumes stay pinned to that single worker; monitoring is unavailable while that laptop is offline. Volume capacities are scheduling declarations, not filesystem quotas. Prometheus prunes by its configured age or size, whichever comes first, and needs free disk space for its WAL and temporary blocks. Back up the private files and Grafana data separately from the controller's K3s backup; stop Grafana briefly for a consistent database copy. Metrics are local history and are not an off-machine backup.
+Grafana stays pinned by its local volume and is unavailable while that laptop is offline. Its volume capacity is a scheduling declaration, not a filesystem quota. Prometheus prunes by its configured age or size, whichever comes first, and needs free disk space for its WAL and temporary blocks. Back up the private files and Grafana data separately from the controller's K3s backup; stop Grafana briefly for a consistent database copy. Temporary metrics are not a backup.
 
-To move the volumes, stop their deployments and fence an unreachable old worker first. Copy their directories with ownership preserved to the replacement's persistent filesystem, then replace the static PV definitions with that worker's hostname and rebind the PVCs. Their `Retain` policy preserves data when claims are deleted. Do not delete the monitoring namespace as an update procedure. Controller replacement uses the normal [cloud restore procedure](operations.md#restore-on-another-cloud-vm).
+To move Grafana's volume, stop its deployment and fence an unreachable old worker first. Copy its directory with ownership preserved to the replacement's persistent filesystem, then replace the static PV definition with that worker's hostname and rebind the PVC. Its `Retain` policy preserves data when the claim is deleted. Do not delete the monitoring namespace as an update procedure. Controller replacement uses the normal [cloud restore procedure](operations.md#restore-on-another-cloud-vm).
 
 ## Check collection
 

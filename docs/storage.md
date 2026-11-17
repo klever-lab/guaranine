@@ -68,7 +68,7 @@ Requested PVC sizes are declarations, not enforced filesystem quotas or reserved
 
 ## Existing volumes and cleanup
 
-Existing static PVs and claims continue to work. In particular, monitoring explicitly sets `storageClassName: ""` and binds named volumes; adding this default does not change those claims or move their data. [Monitoring](monitoring.md#storage-and-reapplication) owns their paths and recovery procedure. Reapplying the storage manifest does not recreate or migrate application volumes.
+Existing static PVs and claims continue to work. In particular, Grafana explicitly sets `storageClassName: ""` and binds its named volume; adding this default does not change that claim or move its data. [Monitoring](monitoring.md#storage-and-reapplication) owns monitoring persistence and recovery. Reapplying the storage manifest does not recreate or migrate application volumes.
 
 Adopt automatic provisioning when deploying a new application. For an existing application that needs migration, back up its data, stop all writers, create a new claim and restricted copy pod on the existing worker, and copy into the new volume with ownership preserved. Verify the application's data before retiring the old claim and retained volume. Do not delete a claim or edit its bound `volumeName`/storage class as an in-place migration technique.
 

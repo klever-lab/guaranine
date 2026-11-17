@@ -27,23 +27,6 @@ spec:
             - {key: kubernetes.io/hostname, operator: In, values: [demure]}
 ---
 apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: monitoring-prometheus
-spec:
-  capacity: {storage: 10Gi}
-  accessModes: [ReadWriteOnce]
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: ""
-  claimRef: {namespace: monitoring, name: prometheus}
-  local: {path: /usr/local/guaranine-monitoring/prometheus}
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - {key: kubernetes.io/hostname, operator: In, values: [demure]}
----
-apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: {name: grafana, namespace: monitoring}
 spec:
@@ -51,15 +34,6 @@ spec:
   storageClassName: ""
   volumeName: monitoring-grafana
   resources: {requests: {storage: 2Gi}}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata: {name: prometheus, namespace: monitoring}
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: ""
-  volumeName: monitoring-prometheus
-  resources: {requests: {storage: 10Gi}}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -912,7 +886,7 @@ spec:
             - {name: config, mountPath: /etc/prometheus, readOnly: true}
       volumes:
         - name: data
-          persistentVolumeClaim: {claimName: prometheus}
+          emptyDir: {sizeLimit: 10Gi}
         - name: config
           configMap: {name: prometheus}
 ---
