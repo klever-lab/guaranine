@@ -49,6 +49,7 @@ RUN cp -a /usr/local/lib/firmware/. /usr/lib/firmware/ && \
 
 COPY config.yaml /system/oem/90_guaranine.yaml
 COPY lid.yaml /system/oem/91_guaranine-lid.yaml
+COPY battery.yaml /system/oem/91_guaranine-battery.yaml
 
 # Require the documented laptop radios and the paths requested by their kernel drivers.
 RUN set -eu; \

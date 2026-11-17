@@ -97,17 +97,18 @@ class ImageHarnessTests(unittest.TestCase):
         activation = next(file['content'] for file in assertions['files'] if file['path'] == '/run/fixture-config-rollout')
         subprocess.run(['sh', '-n'], input=activation, text=True, check=True)
 
-    def test_base_image_tag_changes_when_the_lid_profile_changes(self):
+    def test_base_image_tag_changes_when_a_hardware_policy_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / 'kairos').mkdir()
-            for name in ('Dockerfile', 'config.yaml', 'lid.yaml'):
+            for name in ('Dockerfile', 'config.yaml', 'lid.yaml', 'battery.yaml'):
                 (root / 'kairos' / name).write_text('fixture source')
             with (patch.object(cli, 'ROOT', root), patch.object(cli, 'private_command'),
                   contextlib.redirect_stdout(io.StringIO())):
-                before = cli.build_base(root)
-                (root / 'kairos/lid.yaml').write_text('changed policy')
-                self.assertNotEqual(cli.build_base(root), before)
+                for name in ('lid.yaml', 'battery.yaml'):
+                    before = cli.build_base(root)
+                    (root / 'kairos' / name).write_text('changed policy')
+                    self.assertNotEqual(cli.build_base(root), before)
 
     def test_wifi_tools_reuse_the_production_build_stage_without_pulling_a_second_base(self):
         spec = importlib.util.spec_from_file_location('image_harness', ROOT / 'scripts/test-private-images.py')

@@ -1,0 +1,30 @@
+#cloud-config
+name: Guaranine battery charge limits
+stages:
+  initramfs:
+    - name: Keep supported batteries near half charge
+      files:
+        - path: /etc/udev/rules.d/80-guaranine-battery.rules
+          permissions: 0644
+          content: |
+            ACTION!="add|change", GOTO="guaranine_battery_end"
+            SUBSYSTEM!="power_supply", GOTO="guaranine_battery_end"
+            ATTR{type}!="Battery", GOTO="guaranine_battery_end"
+            ATTR{scope}=="Device", GOTO="guaranine_battery_end"
+
+            ATTR{charge_types}=="*Custom*", TEST=="charge_control_start_threshold", TEST=="charge_control_end_threshold", GOTO="guaranine_battery_custom"
+            ATTR{charge_types}=="*Long_Life*", ATTR{charge_types}!="*[[]Long_Life[]]*", ATTR{charge_types}="Long_Life"
+            GOTO="guaranine_battery_end"
+
+            LABEL="guaranine_battery_custom"
+            ATTR{charge_control_start_threshold}!="50", ATTR{charge_control_start_threshold}="50"
+            ATTR{charge_control_end_threshold}!="55", ATTR{charge_control_end_threshold}="55"
+            ATTR{charge_types}!="*[[]Custom[]]*", ATTR{charge_types}="Custom"
+            LABEL="guaranine_battery_end"
+  boot:
+    - name: Apply charge limits to existing batteries
+      commands:
+        - udevadm verify /etc/udev/rules.d/80-guaranine-battery.rules
+        - udevadm control --reload-rules
+        - udevadm trigger --action=change --subsystem-match=power_supply
+        - udevadm settle --timeout=30

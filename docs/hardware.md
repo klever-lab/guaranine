@@ -34,6 +34,32 @@ Every line should report `s "ignore"`. Then watch `kubectl get nodes -w` from th
 
 The image harness checks all three active D-Bus properties on live media and installed BIOS/UEFI worker boots. Those checks verify policy loading, while the physical lid test verifies the actual laptop. The settings follow [systemd's logind configuration](https://www.freedesktop.org/software/systemd/man/latest/logind.conf.html).
 
+## Battery charge limits
+
+The native [battery profile](../kairos/battery.yaml) installs udev rules for the kernel's [power-supply charging controls](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-class-power). It selects custom charging from 50% to 55% when both thresholds and `Custom` mode are available. The [Dell driver](https://kernel.googlesource.com/pub/scm/linux/kernel/git/sudeep.holla/linux/+/fae4078c289a2f24229c0de652249948b1cd6bdb/drivers/platform/x86/dell/dell-laptop.c) enforces a minimum 50% start, 55% stop and five-point gap, so these workers cannot use an exact 50% stop.
+
+Where only `Long_Life` is available, the policy enables the firmware's fixed conservation mode. It does not set an arbitrary percentage: [Lenovo documents approximately 55–60%](https://support.lenovo.com/ie/en/solutions/ht103159/) for affected IdeaPads. Devices without either interface are left unchanged. Peripheral batteries are excluded. There is no polling daemon, forced discharge or charger switching; a battery already above its limit can stay there until it discharges naturally or is used on battery power.
+
+New images include this public profile. On installed workers, use the existing [configuration rollout](operations.md#configuration-rollouts):
+
+```bash
+./guaranine rollout kairos/battery.yaml --node NAME
+```
+
+The persistent OEM profile recreates the rules at boot. Its activation validates and reloads the rules, triggers existing power supplies and waits for the event queue. Battery add/change events also reapply the policy, including after driver registration. Attribute writes are conditional on a different value to avoid repeated firmware writes and self-generated event loops. Neither a source update nor a completed rollout proves that unsupported hardware gained charge control.
+
+Observed on 2026-11-17 UTC:
+
+| Worker | Charge-control result |
+| --- | --- |
+| `demure` | Custom 50% start / 55% stop, already selected before this change; persistent policy applied. |
+| `wild` | Custom 50% start / 55% stop, already selected before this change; persistent policy applied. Observed at 91% with charging stopped; the policy does not drain that charge. |
+| `kate` | Firmware `Long_Life` enabled through `charge_types`; persistent policy applied. No numeric threshold interface is exposed. |
+| `gattina` | No charging-mode, threshold or charge-behaviour interface, with `dell_laptop` loaded. The profile is installed but cannot enforce a cap on this hardware through these Linux interfaces. |
+| `muller`, `vi` | Offline during the initial inspection; awaiting power-on and verification. |
+
+`kate` and `demure` also passed a device-change test: a temporary mode/threshold change was reset to the requested policy by udev, with a bounded queue wait. The installed OEM files were checked; this was not a reboot test. A fleet-wide 50% claim would be incorrect while hardware lacks controls or remains unverified. Private observations are retained in the operator directory under `diagnostics/battery-1794932083371011174/`.
+
 ## Laptop models
 
 These model names are confirmed by the operator. Coverage targets their factory Wi-Fi options, including variants that cannot be identified while the laptops are powered off.

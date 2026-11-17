@@ -27,7 +27,7 @@ def node(name='worker', ready='True'):
 
 class StatusTests(unittest.TestCase):
     def snapshot(self, resources=None, *, tailscale=None, api=None, health=None, environment=None,
-                 readers=True, battery='BAT0\t1\t82\tCharging\n'):
+                 readers=True, battery='BAT0\t1\t82\tCharging\n', model='Inspiron 5558'):
         if resources is None:
             resources = [node(), resource('Pod', 'app', spec={'nodeName': 'worker'}, status={
                 'phase': 'Running', 'conditions': [{'type': 'Ready', 'status': 'True'}]}),
@@ -56,7 +56,7 @@ class StatusTests(unittest.TestCase):
                     raise battery
                 if isinstance(battery, subprocess.CompletedProcess):
                     return battery
-                return subprocess.CompletedProcess(arguments, 0, battery, '')
+                return subprocess.CompletedProcess(arguments, 0, model + '\n' + battery, '')
             response = responses[arguments[0]]
             self.assertLessEqual(kwargs['timeout'], 15)
             if isinstance(response, Exception):
@@ -96,6 +96,9 @@ class StatusTests(unittest.TestCase):
         self.assertNotIn('personal-phone', output)
         self.assertEqual([call.args[0][0] for call in run.call_args_list], ['tailscale', 'kubectl', 'kubectl'])
         self.assertIn('BAT0: 82% Charging', output)
+        self.assertIn('Inspiron 5558', output)
+        columns = output.split('\nNodes\n', 1)[1].splitlines()[0].split()
+        self.assertEqual(columns, ['NODE', 'MODEL', 'ROLE', 'STATUS', 'BATTERY'])
         kubectl = run.call_args_list[1].args[0]
         self.assertEqual(kubectl[2], 'get')
         self.assertNotIn('secrets', kubectl[3])
@@ -234,7 +237,7 @@ class StatusTests(unittest.TestCase):
         self.assertIn('Unavailable (node offline)', output)
         self.assertEqual(len(run.call_args_list), 2)
 
-    def test_actual_battery_shell_reads_sysfs_fields_and_ignores_peripherals(self):
+    def test_actual_worker_shell_reads_model_batteries_and_ignores_peripherals(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for name, fields in {
@@ -247,10 +250,25 @@ class StatusTests(unittest.TestCase):
                 directory.mkdir()
                 for field, value in fields.items():
                     (directory / field).write_text(value + '\n')
-            result = subprocess.run(['sh', '-ec', cli.BATTERY_READ.replace('/sys/class/power_supply', str(root))],
+            dmi = root / 'dmi'
+            dmi.mkdir()
+            for field, value in {'sys_vendor': 'LENOVO', 'product_name': '81LW',
+                                 'product_version': 'Lenovo IdeaPad L340-15API'}.items():
+                (dmi / field).write_text(value + '\n')
+            script = cli.WORKER_READ.replace('/sys/class/power_supply', str(root)).replace(
+                '/sys/class/dmi/id', str(dmi))
+            result = subprocess.run(['sh', '-ec', script],
                                     capture_output=True, text=True, check=True)
-            self.assertEqual(result.stdout, 'BAT0\t1\t57\tNot charging\nBAT1\t0\t?\tUnknown\n')
-            missing = subprocess.run(['sh', '-ec', cli.BATTERY_READ.replace(
+            self.assertEqual(result.stdout,
+                'Lenovo IdeaPad L340-15API\nBAT0\t1\t57\tNot charging\nBAT1\t0\t?\tUnknown\n')
+            (dmi / 'sys_vendor').write_text('Dell Inc.\n')
+            (dmi / 'product_name').write_text('Inspiron 5558   \n')
+            result = subprocess.run(['sh', '-ec', script], capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout.splitlines()[0].strip(), 'Inspiron 5558')
+            (dmi / 'product_name').unlink()
+            result = subprocess.run(['sh', '-ec', script], capture_output=True, text=True, check=True)
+            self.assertTrue(result.stdout.startswith('Unknown\nBAT0\t'))
+            missing = subprocess.run(['sh', '-ec', cli.WORKER_READ.replace(
                 '/sys/class/power_supply', str(root / 'missing'))], capture_output=True, text=True)
             self.assertNotEqual(missing.returncode, 0)
 

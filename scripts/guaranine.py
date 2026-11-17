@@ -450,7 +450,8 @@ def build_base(directory):
     identity = hashlib.sha256(json.dumps(PINS, sort_keys=True).encode()
                              + (ROOT / 'kairos/Dockerfile').read_bytes()
                              + (ROOT / 'kairos/config.yaml').read_bytes()
-                             + (ROOT / 'kairos/lid.yaml').read_bytes()).hexdigest()[:16]
+                             + (ROOT / 'kairos/lid.yaml').read_bytes()
+                             + (ROOT / 'kairos/battery.yaml').read_bytes()).hexdigest()[:16]
     image = 'guaranine-kairos:' + identity
     args = {'K3S_VERSION': PINS['k3s'], 'K3S_SHA256': PINS['k3s_sha256']}
     command = ['sudo', '--', 'docker', 'build', '--platform', 'linux/amd64', '--tag', image]
@@ -1158,9 +1159,15 @@ def status_table(title, headers, rows):
         print('  ' + '  '.join(value.ljust(width) for value, width in zip(row, widths)).rstrip())
 
 
-BATTERY_READ = '''set -eu
+WORKER_READ = '''set -eu
 test -r /sys/class/power_supply
 test -x /sys/class/power_supply
+model=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
+if test "$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)" = LENOVO; then
+  version=$(cat /sys/class/dmi/id/product_version 2>/dev/null || true)
+  if test -n "$version"; then model=$version; fi
+fi
+printf '%s\\n' "${model:-Unknown}"
 for battery in /sys/class/power_supply/*; do
   test -r "$battery/type" || continue
   test "$(cat "$battery/type")" = Battery || continue
@@ -1172,25 +1179,26 @@ for battery in /sys/class/power_supply/*; do
 done'''
 
 
-def battery_status(pod, environment):
-    """Read host power-supply sysfs through an existing, unprivileged reader Pod."""
+def worker_hardware(pod, environment):
+    """Read host model and battery sysfs through an existing, unprivileged reader Pod."""
     try:
         result = subprocess.run(['kubectl', '--request-timeout=5s', 'exec', '-n', 'monitoring',
-            pod['metadata']['name'], '-c', 'reader', '--', 'sh', '-ec', BATTERY_READ],
+            pod['metadata']['name'], '-c', 'reader', '--', 'sh', '-ec', WORKER_READ],
             text=True, capture_output=True, timeout=10, env=environment)
         if result.returncode:
-            return 'Unavailable'
+            return 'Unavailable', 'Unavailable'
+        model, *lines = result.stdout.splitlines()
         batteries = []
-        for line in result.stdout.splitlines():
+        for line in lines:
             name, present, capacity, state = line.split('\t')
             if present == '0':
                 batteries.append(f'{name}: Not present')
                 continue
             level = f'{int(capacity)}%' if capacity.isascii() and capacity.isdecimal() and 0 <= int(capacity) <= 100 else '?'
             batteries.append(f'{name}: {level} {state}')
-        return '; '.join(batteries) or 'No battery'
+        return model.strip() or 'Unknown', '; '.join(batteries) or 'No battery'
     except (OSError, ValueError, subprocess.SubprocessError):
-        return 'Unavailable'
+        return 'Unavailable', 'Unavailable'
 
 
 def cluster_status(_args):
@@ -1254,13 +1262,14 @@ def cluster_status(_args):
         batteries = {name: ('-' if roles[name] == 'Controller' else
                      'Unavailable (node offline)' if name in unavailable else 'Unavailable (reader missing)')
                      for name in nodes}
+        models = {name: '-' if roles[name] == 'Controller' else 'Unavailable' for name in nodes}
         with ThreadPoolExecutor(max_workers=8) as pool:
-            pending = {name: pool.submit(battery_status, readers[name], environment) for name in nodes
+            pending = {name: pool.submit(worker_hardware, readers[name], environment) for name in nodes
                        if roles[name] == 'Worker' and name not in unavailable and name in readers}
             for name, result in pending.items():
-                batteries[name] = result.result()
+                models[name], batteries[name] = result.result()
         attention |= any(value.startswith('Unavailable') for value in batteries.values())
-        rows = []
+        rows, details = [], []
         for name, node in nodes.items():
             conditions = node.get('status', {}).get('conditions', [])
             ready = next((condition for condition in conditions if condition['type'] == 'Ready'), {})
@@ -1271,10 +1280,13 @@ def cluster_status(_args):
             if node.get('spec', {}).get('unschedulable'):
                 problems.append('Cordoned')
             attention |= bool(problems)
-            rows.append([name, roles[name], 'NotReady' if name in unavailable else 'Ready',
-                         batteries[name], '; '.join(problems) or '-'])
+            rows.append([name, models[name], roles[name], 'NotReady' if name in unavailable else 'Ready', batteries[name]])
+            if problems:
+                details.append(f'{name}: ' + '; '.join(problems))
         print('Kubernetes: reachable' if nodes else 'Kubernetes: no nodes registered')
-        status_table('Nodes', ['NODE', 'ROLE', 'STATUS', 'BATTERY', 'DETAIL'], rows)
+        status_table('Nodes', ['NODE', 'MODEL', 'ROLE', 'STATUS', 'BATTERY'], rows)
+        for detail in details:
+            print(textwrap.fill(detail, width=100, initial_indent='  ', subsequent_indent='    '))
 
         rows = []
         for item in resources:
