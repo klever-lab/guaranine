@@ -1,6 +1,5 @@
 #cloud-config
 name: Guaranine host configuration
-hostname: guaranine-live-{{ trunc 8 .MachineID }}
 install:
   auto: false
 stages:
@@ -20,6 +19,9 @@ stages:
         VOLUMES: ""
         PERSISTENT_STATE_PATHS: ""
   initramfs:
+    - name: Name live USB media
+      if: '[ -f /run/cos/live_mode ]'
+      hostname: guaranine-live-{{ trunc 8 .MachineID }}
     - name: Use a temporary Tailscale identity on live USB media
       if: '[ -f /run/cos/live_mode ]'
       files:

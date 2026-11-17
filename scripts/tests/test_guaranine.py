@@ -199,7 +199,10 @@ class PrivateConfigTests(unittest.TestCase):
         wifi = 'update_config=0\nnetwork={\n ssid=74657374\n key_mgmt=NONE\n}\n'
         live = cli.machine_config('tskey-auth-LIVE', 'ssh-ed25519 PUBLIC', wifi=wifi)
         self.assertEqual(base['install'], {'auto': False})
-        self.assertTrue(base['hostname'].startswith('guaranine-live-'))
+        self.assertNotIn('hostname', base)
+        live_hostname = next(step for step in base['stages']['initramfs'] if 'hostname' in step)
+        self.assertTrue(live_hostname['hostname'].startswith('guaranine-live-'))
+        self.assertEqual(live_hostname['if'], '[ -f /run/cos/live_mode ]')
         self.assertEqual(live['ssh_authorized_keys'], ['ssh-ed25519 PUBLIC'])
         self.assertNotIn('k3s', cli.cloud_yaml(live))
         self.assertNotIn('device:', cli.cloud_yaml(live))
@@ -207,7 +210,8 @@ class PrivateConfigTests(unittest.TestCase):
                              for step in base['stages']['initramfs']))
         worker = cli.machine_config('tskey-auth-WORKER', 'ssh-ed25519 PUBLIC', name='worker-one',
             role='worker', cluster_endpoint='https://100.64.0.1:6443', token='AGENT-ONLY', wifi=wifi)
-        self.assertEqual(worker['hostname'], 'worker-one')
+        self.assertNotIn('hostname', worker)
+        self.assertEqual(worker['stages']['initramfs'][0]['hostname'], 'worker-one')
         self.assertTrue(worker['install']['poweroff'])
         self.assertEqual(worker['install']['grub_options']['extra_cmdline'], 'efi=debug')
         self.assertEqual(worker['users'][0]['groups'], ['admin'])
@@ -222,7 +226,8 @@ class PrivateConfigTests(unittest.TestCase):
         self.assertEqual(join, {'server': 'https://100.64.0.1:6443'})
         server = cli.machine_config('tskey-auth-SERVER', 'ssh-ed25519 PUBLIC',
             role='controlplane', token='SERVER-SECRET', agent_token='AGENT-ONLY')
-        self.assertEqual(server['hostname'], cli.role_config('controlplane')['hostname'])
+        self.assertNotIn('hostname', server)
+        self.assertEqual(server['stages']['initramfs'][0]['hostname'], cli.role_config('controlplane')['hostname'])
         text = cli.cloud_yaml(server)
         self.assertNotIn('GUARANINE_DATA', text)
         self.assertIn('ConditionPathExists=/var/lib/rancher/k3s/.guaranine-ready', text)
@@ -257,7 +262,7 @@ class PrivateConfigTests(unittest.TestCase):
         cli.check_name('ab')
         worker = cli.machine_config('tskey-auth-WORKER', 'ssh-ed25519 PUBLIC', name='ab',
             role='worker', cluster_endpoint='https://100.64.0.1:6443', token='AGENT-ONLY')
-        self.assertEqual(worker['hostname'], 'ab')
+        self.assertEqual(worker['stages']['initramfs'][0]['hostname'], 'ab')
         for name in ('a', 'a-', 'AB', '1a', 'a' * 64):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 cli.check_name(name)
@@ -479,7 +484,7 @@ class WorkerInstallationTests(OperatorTestCase):
                 self.assertTrue(confirmed)
                 sent.append(remote)
                 config = yaml.safe_load(kwargs['data'])
-                self.assertEqual(config['hostname'], 'inspiron-5558-3')
+                self.assertEqual(config['stages']['initramfs'][0]['hostname'], 'inspiron-5558-3')
                 self.assertEqual(config['install']['grub_options']['extra_cmdline'], 'efi=debug')
                 return ''
             if remote.startswith('timeout 600'):

@@ -200,7 +200,7 @@ def fixture(role=None):
                          'lsblk -o NAME,SIZE,TYPE,LABEL,PARTLABEL > /dev/ttyS0; blkid > /dev/ttyS0; '
                          'cat /oem/01_layout.yaml > /dev/ttyS0'],
         }]
-        checks += ['mountpoint -q /var/lib/rancher',
+        checks += ['test "$(hostname)" = fixture-controlplane', 'mountpoint -q /var/lib/rancher',
                    'test "$(findmnt -nro MAJ:MIN --mountpoint /var/lib/rancher)" = '
                    '"$(findmnt -nro MAJ:MIN --mountpoint /usr/local)"',
                    '! test -e /etc/rancher/k3s/token',
@@ -248,10 +248,20 @@ def fixture(role=None):
             '! mountpoint -q /run/fixture-host',
             'test ! -e /run/fixture-unrelated-stage-ran',
             'rm /oem/00_rollout-tripwire.yaml',
+            'test "$(hostname)" = fixture-worker',
         ]
         checks += lid_checks
+        # After a normal first boot, reproduce the maintenance edit that broke
+        # Demure. The second installed boot must keep its name without this header.
+        checks += ['if test -f /oem/.fixture-header-removed; then '
+                   'test "$(head -n 1 /oem/90_custom.yaml)" != "#cloud-config"; '
+                   'else test "$(head -n 1 /oem/90_custom.yaml)" = "#cloud-config" && '
+                   "sed -i '/^#cloud-config$/d' /oem/90_custom.yaml && "
+                   'touch /oem/.fixture-header-removed && sync -f /oem; fi']
     else:
-        checks += ['test -f /run/cos/live_mode', 'test -f /etc/guaranine/wifi.conf',
+        checks += ['test -f /run/cos/live_mode',
+                   'case "$(hostname)" in guaranine-live-*) ;; *) exit 1 ;; esac',
+                   'test -f /etc/guaranine/wifi.conf',
                    'grep -qx \'FLAGS="--state=mem:"\' /run/guaranine-tailscale-live.env',
                    'systemctl show tailscaled.service --property=EnvironmentFiles --value | '
                    'grep -q /run/guaranine-tailscale-live.env',
@@ -392,13 +402,17 @@ def main():
                     install_iso = cli.build_image(installer, 'iso', directory / 'install', source)
                 if suite in ('all', 'worker-bios'):
                     worker = boot(install_iso, directory, 5, install=True)
-                    boot(worker, directory, 6)
-                    print('BIOS worker suite passed: installed, powered off and rebooted with its configuration.', flush=True)
+                    identity = boot(worker, directory, 6)
+                    if boot(worker, directory, 9) != identity:
+                        raise ValueError('BIOS worker changed SSH identity across reboots')
+                    print('BIOS worker suite passed: configuration and SSH identity survived two installed boots.', flush=True)
                 if suite in ('all', 'worker-uefi'):
                     firmware = directory / 'worker-uefi.fd'
                     worker = boot(install_iso, directory, 7, install=True, uefi=True, firmware=firmware)
-                    boot(worker, directory, 8, uefi=True, firmware=firmware)
-                    print('UEFI worker suite passed: Kairos took priority over old entries and booted with its configuration.', flush=True)
+                    identity = boot(worker, directory, 8, uefi=True, firmware=firmware)
+                    if boot(worker, directory, 10, uefi=True, firmware=firmware) != identity:
+                        raise ValueError('UEFI worker changed SSH identity across reboots')
+                    print('UEFI worker suite passed: boot priority, configuration and SSH identity survived two installed boots.', flush=True)
                 install_iso.unlink()
         except Exception:
             # This harness creates disposable credentials only. Keep failed CI diagnosable.

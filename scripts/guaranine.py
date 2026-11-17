@@ -415,7 +415,8 @@ def machine_config(key, public_key, *, name=None, role=None, cluster_endpoint=No
     name = name or config.get('hostname')
     if name:
         check_name(name)
-        config['hostname'] = name
+        config.pop('hostname', None)
+        config['stages']['initramfs'].insert(0, {'name': 'Set the installed node hostname', 'hostname': name})
     config['ssh_authorized_keys'] = [public_key.strip()]
     files = [config_file('/etc/guaranine/tailscale-key', key + '\n')]
     if wifi:
