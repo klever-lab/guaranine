@@ -52,11 +52,30 @@ Directories start with mode `0770`. OpenEBS creates Kubernetes `local` PVs; kube
 
 ## Permissions and network access
 
-The `openebs` namespace is trusted infrastructure with privileged Pod Security enforcement and restricted audit/warnings. Only storage components belong there. Upstream helpers run as privileged root with the storage base directory mounted at `/data`; they use a separate ServiceAccount with no RoleBindings and no automatically mounted API token. They use pod networking, with no host network, PID or IPC namespace. Namespace NetworkPolicy denies their ingress and egress.
+The `openebs` namespace permits host volumes and retains restricted audit/warnings.
+Install the [native admission guards](security.md#admission-hardening) first.
+They replace upstream's privileged helper specification: kubelet creates only
+the claim directory, then a root helper with **zero capabilities**, a read-only
+root filesystem and RuntimeDefault seccomp sets that directory's mode to `0770`.
+The helper cannot see the parent storage directory or neighboring volumes. It
+uses a tokenless ServiceAccount without RoleBindings, no host namespaces, and
+the namespace's deny-all network policy. Arbitrary commands, hooks, extra mounts
+and credential mounts are rejected independently of the controller.
 
 The controller itself has a read-only root filesystem, dropped capabilities, RuntimeDefault seccomp and no host mounts. Its API permissions cover reading nodes/StorageClasses, managing PVs and updating claims, writing events, and creating/getting/deleting helper pods only in `openebs`. It cannot read Secrets, modify RBAC, execute into pods, access `nodes/proxy` or create pods in application namespaces. Its only permitted network destination is the Kubernetes API; analytics is disabled. There is no storage Service or host port.
 
-Creating privileged helpers makes this controller part of the host trust boundary. Token removal, RBAC and NetworkPolicy reduce exposure; they do not sandbox a privileged helper after host compromise. Application namespace restrictions remain unchanged. Keep the default protection against PVC-supplied base-path overrides enabled; application claims must not choose arbitrary host directories.
+Independent PV admission limits this controller to retained local volumes with
+PVC UUID paths below the configured storage base. It cannot use its PV-creation
+permission to expose an arbitrary host directory, and has no PV-delete permission.
+The supported class remains `Retain`; shell cleanup helpers and automatic Delete
+reclamation are deliberately rejected. Use the existing [deliberate cleanup
+procedure](#existing-volumes-and-cleanup). Keep the upstream protection against
+PVC-supplied base-path overrides enabled too.
+
+Apply the guards before reapplying `kubernetes/storage.yaml`. New helpers are
+hardened at creation; do not delete running application Pods or bound volumes to
+activate these policies. The controller still has authority over application
+storage data; it is not a separate tenant boundary.
 
 ## Capacity, outages and backups
 

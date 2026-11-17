@@ -4,6 +4,52 @@ metadata:
   name: default
 automountServiceAccountToken: false
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: operator-host-maintenance}
+rules:
+  - apiGroups: [""]
+    resources: [pods, serviceaccounts]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [daemonsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs, jobs/status]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [operator.kairos.io]
+    resources: [nodeops, nodeopupgrades, nodeops/status, nodeopupgrades/status, nodeops/finalizers, nodeopupgrades/finalizers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: operator-host-maintenance}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: operator-host-maintenance}
+subjects: [{kind: ServiceAccount, name: operator-kairos-operator}]
+---
+# Upstream tolerates this precreated, narrower role; metadata admission limits
+# the patch to the token's own node and the kairos.io metadata prefix.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: kairos-node-labeler}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch, patch]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: kairos-node-labeler}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: kairos-node-labeler}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: kairos-node-labeler}
+subjects: [{kind: ServiceAccount, name: kairos-node-labeler}]
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

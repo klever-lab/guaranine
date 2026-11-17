@@ -14,10 +14,16 @@ env -u NO_COLOR uv run --no-project --with-requirements requirements-dev.txt bas
 | --- | --- |
 | Markdown | Recursive PyMarkdown scan using [.pymarkdown.json](../.pymarkdown.json), respecting gitignore. |
 | Unit tests | [scripts/tests/](../scripts/tests/) covers private-file handling, role credentials, Wi-Fi capture, SSH trust, disk confirmations, USB flashing/readback, Pi recovery-image checks, rollout targeting/failures, deployment refusal and Terraform tool selection. |
+| Admission and RBAC | [test-admission.py](../scripts/test-admission.py) starts checksum-pinned upstream API-server/etcd binaries on loopback with disposable credentials. It checks real policy mutation, directory/PV confinement, actual Pod-bound token scope, rejected node changes, missing-mutation denial and operator namespace permissions. It runs no containers and never reads the production kubeconfig. |
 | OS validation | [validate-kairos.py](../scripts/validate-kairos.py) checks public and generated native Kairos profiles with the checksum-pinned upstream agent, JSON policy syntax, kiosk scripts, workflows with actionlint, udev rules with udevadm, shell with ShellCheck and Python compilation. |
 | Terraform validation | [validate-terraform.py](../scripts/validate-terraform.py) checks formatting, initialization, provider schemas, mock tests, lifecycle plans and VM replacement refusal. OVH's remote backend is excluded from offline checks. |
 
 The Terraform runner copies configuration into temporary storage, removes ambient cloud/Terraform inputs and uses mock providers. It verifies unchanged plans at different image paths, rejects relabelling stored image bytes with a new file's matching hash, checks seed-image replacement without VM replacement, and requires the specific `prevent_destroy` failure for OVH VM replacement. OVH checks also cover private image hashing, the fixed d2-2 flavor and attachment to OVH's default security group. The packet harness checks actual ingress restrictions. No cloud provisioning is required, though tool/provider downloads need internet access.
+
+Admission fixtures require OpenSSL and download their own kubectl for rendering.
+`GUARANINE_TEST_BIN_DIR` may point at an already-downloaded envtest directory for
+local development. The server's certificate, credentials, etcd data and processes
+are temporary; every listener binds to `127.0.0.1`.
 
 ## Firewall packet checks
 

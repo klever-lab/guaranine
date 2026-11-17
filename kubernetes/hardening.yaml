@@ -1,0 +1,225 @@
+# Native admission policies; no webhook server or extra controller.
+# Apply before the storage provisioner and Kairos Operator.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata: {name: guaranine-host-readers}
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  matchConditions:
+    - name: infrastructure-helper
+      expression: >-
+        size(object.spec.containers) == 1 &&
+        ((request.namespace == 'openebs' && object.spec.serviceAccountName == 'openebs-localpv-helper') ||
+         (request.namespace == 'kairos-operator' && object.spec.serviceAccountName == 'kairos-node-labeler'))
+  variables:
+    - name: storage
+      expression: request.namespace == 'openebs'
+    - name: initializer
+      expression: >-
+        variables.storage && has(object.spec.volumes) && size(object.spec.volumes) == 1 &&
+        has(object.spec.volumes[0].hostPath) && object.spec.volumes[0].hostPath.path == '/usr/local/openebs/local' &&
+        has(object.spec.containers[0].command) && size(object.spec.containers[0].command) == 5 &&
+        object.spec.containers[0].command[0] == 'mkdir' && object.spec.containers[0].command[1] == '-m' &&
+        object.spec.containers[0].command[2] == '0770' && object.spec.containers[0].command[3] == '-p' &&
+        object.spec.containers[0].command[4].matches('^/data/pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{op: 'add', path: '/spec/containers/0/securityContext', value:
+            Object.spec.containers.securityContext{
+              privileged: false, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true,
+              runAsNonRoot: !variables.storage,
+              runAsUser: variables.storage ? 0 : 1000,
+              runAsGroup: variables.storage ? 0 : 1000,
+              capabilities: Object.spec.containers.securityContext.capabilities{drop: ['ALL']},
+              seccompProfile: Object.spec.containers.securityContext.seccompProfile{type: 'RuntimeDefault'}
+            }}] +
+          (variables.storage ? [JSONPatch{op: 'add', path: '/spec/automountServiceAccountToken', value: false}] : [])
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          variables.storage ? (variables.initializer ? [
+            JSONPatch{op: 'replace', path: '/spec/volumes/0/hostPath', value:
+              Object.spec.volumes.hostPath{
+                path: '/usr/local/openebs/local/' + object.spec.containers[0].command[4].substring(6),
+                type: 'DirectoryOrCreate'}},
+            JSONPatch{op: 'replace', path: '/spec/containers/0/command', value: ['chmod', '0770', '/data']}
+          ] : []) : [
+            JSONPatch{op: 'replace', path: '/spec/containers/0/volumeMounts/0/mountPath', value: '/host/etc/kairos-release'},
+            JSONPatch{op: 'replace', path: '/spec/volumes/0/hostPath', value:
+              Object.spec.volumes.hostPath{path: '/etc/kairos-release', type: 'File'}}
+          ]
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          variables.storage ? Object{} : Object{spec: Object.spec{
+            containers: [Object.spec.containers{
+              name: object.spec.containers[0].name,
+              volumeMounts: [
+                Object.spec.containers.volumeMounts{
+                  name: 'host-os-release', mountPath: '/host/etc/os-release', readOnly: true}
+              ]
+            }],
+            volumes: [
+              Object.spec.volumes{name: 'host-os-release', hostPath: Object.spec.volumes.hostPath{
+                path: '/etc/os-release', type: 'File'}}
+            ]
+          }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata: {name: guaranine-host-readers}
+spec: {policyName: guaranine-host-readers}
+---
+# Kubelet creates the claim directory; the helper only sets its permissions.
+# Mounting the parent would let a compromised helper replace a future PV's root.
+# Retained volumes are removed deliberately by the operator, never a shell helper.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: guaranine-storage-helpers}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods, pods/ephemeralcontainers]
+  matchConditions:
+    - name: provisioner-or-helper
+      expression: >-
+        request.namespace == 'openebs' &&
+        (request.userInfo.username == 'system:serviceaccount:openebs:openebs-localpv' ||
+         object.spec.serviceAccountName == 'openebs-localpv-helper')
+  variables:
+    - name: container
+      expression: object.spec.containers[0]
+  validations:
+    - expression: >-
+        object.spec.serviceAccountName == 'openebs-localpv-helper' &&
+        has(object.spec.automountServiceAccountToken) && !object.spec.automountServiceAccountToken &&
+        size(object.spec.containers) == 1 &&
+        (!has(object.spec.initContainers) || size(object.spec.initContainers) == 0) &&
+        (!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0) &&
+        (!has(object.spec.hostNetwork) || !object.spec.hostNetwork) &&
+        (!has(object.spec.hostPID) || !object.spec.hostPID) &&
+        (!has(object.spec.hostIPC) || !object.spec.hostIPC) &&
+        (!has(object.spec.shareProcessNamespace) || !object.spec.shareProcessNamespace) &&
+        !has(object.spec.runtimeClassName) &&
+        (!has(object.spec.securityContext) ||
+          ((!has(object.spec.securityContext.sysctls) || size(object.spec.securityContext.sysctls) == 0) &&
+           !has(object.spec.securityContext.seLinuxOptions)))
+      message: The provisioner may create only a tokenless storage helper without host namespaces or custom runtime settings.
+    - expression: >-
+        variables.container.image == 'openebs/linux-utils:4.6.0@sha256:a3043d266b1c06fb42377ced0c3fc190c66e1e83ae1efda7670ed73feb4ede14' &&
+        has(variables.container.command) && variables.container.command == ['chmod', '0770', '/data'] &&
+        (!has(variables.container.args) || size(variables.container.args) == 0) &&
+        (!has(variables.container.env) || size(variables.container.env) == 0) &&
+        !has(variables.container.envFrom) && !has(variables.container.lifecycle) &&
+        !has(variables.container.livenessProbe) && !has(variables.container.readinessProbe) &&
+        !has(variables.container.startupProbe) && !has(variables.container.volumeDevices) &&
+        (!has(variables.container.ports) || size(variables.container.ports) == 0)
+      message: Storage helpers may only set permissions on their own directory, without hooks or injected configuration.
+    - expression: >-
+        has(variables.container.securityContext) &&
+        has(variables.container.securityContext.privileged) && !variables.container.securityContext.privileged &&
+        has(variables.container.securityContext.allowPrivilegeEscalation) && !variables.container.securityContext.allowPrivilegeEscalation &&
+        has(variables.container.securityContext.readOnlyRootFilesystem) && variables.container.securityContext.readOnlyRootFilesystem &&
+        variables.container.securityContext.runAsUser == 0 && variables.container.securityContext.runAsGroup == 0 &&
+        variables.container.securityContext.capabilities.drop == ['ALL'] &&
+        (!has(variables.container.securityContext.capabilities.add) || size(variables.container.securityContext.capabilities.add) == 0) &&
+        variables.container.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+        (!has(variables.container.securityContext.procMount) || variables.container.securityContext.procMount == 'Default') &&
+        !has(variables.container.securityContext.seLinuxOptions) &&
+        (!has(variables.container.securityContext.appArmorProfile) || variables.container.securityContext.appArmorProfile.type == 'RuntimeDefault')
+      message: Storage helpers require the native hardening mutation; full privilege and capabilities are forbidden.
+    - expression: >-
+        has(object.spec.volumes) && size(object.spec.volumes) == 1 &&
+        object.spec.volumes[0].name == 'data' && has(object.spec.volumes[0].hostPath) &&
+        object.spec.volumes[0].hostPath.path.matches('^/usr/local/openebs/local/pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') &&
+        object.spec.volumes[0].hostPath.type == 'DirectoryOrCreate' &&
+        has(variables.container.volumeMounts) && size(variables.container.volumeMounts) == 1 &&
+        variables.container.volumeMounts[0].name == 'data' && variables.container.volumeMounts[0].mountPath == '/data/' &&
+        !has(variables.container.volumeMounts[0].subPath) && !has(variables.container.volumeMounts[0].subPathExpr) &&
+        (!has(variables.container.volumeMounts[0].mountPropagation) || variables.container.volumeMounts[0].mountPropagation == 'None')
+      message: Storage helpers can mount only their claim directory, without access to its parent, API tokens, devices or mount propagation.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: guaranine-storage-helpers}
+spec: {policyName: guaranine-storage-helpers, validationActions: [Deny]}
+---
+# PV creation is filesystem authority even when Pod creation is constrained.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: guaranine-storage-volumes}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [persistentvolumes]
+  matchConditions:
+    - name: provisioner
+      expression: request.userInfo.username == 'system:serviceaccount:openebs:openebs-localpv'
+  validations:
+    - expression: >-
+        object.metadata.name.matches('^pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') &&
+        object.spec.storageClassName == 'openebs-hostpath' &&
+        has(object.spec.local) && object.spec.local.path == '/usr/local/openebs/local/' + object.metadata.name &&
+        object.spec.persistentVolumeReclaimPolicy == 'Retain'
+      message: The provisioner may manage only retained local volumes under the configured storage base.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: guaranine-storage-volumes}
+spec: {policyName: guaranine-storage-volumes, validationActions: [Deny]}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: guaranine-node-labeler}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [nodes]
+  matchConditions:
+    - name: node-labeler
+      expression: request.userInfo.username == 'system:serviceaccount:kairos-operator:kairos-node-labeler'
+  variables:
+    - {name: labels, expression: "has(object.metadata.labels) ? object.metadata.labels : {}"}
+    - {name: oldLabels, expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"}
+    - {name: annotations, expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"}
+    - {name: oldAnnotations, expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"}
+  validations:
+    - expression: >-
+        'authentication.kubernetes.io/node-name' in request.userInfo.extra &&
+        request.userInfo.extra['authentication.kubernetes.io/node-name'] == [object.metadata.name]
+      message: A node labeler may update only the node bound to its Pod service-account token.
+    - expression: >-
+        object.spec == oldObject.spec &&
+        variables.labels.all(k, k.startsWith('kairos.io/') || (k in variables.oldLabels && variables.labels[k] == variables.oldLabels[k])) &&
+        variables.oldLabels.all(k, k.startsWith('kairos.io/') || (k in variables.labels && variables.labels[k] == variables.oldLabels[k])) &&
+        variables.annotations.all(k, k.startsWith('kairos.io/') || (k in variables.oldAnnotations && variables.annotations[k] == variables.oldAnnotations[k])) &&
+        variables.oldAnnotations.all(k, k.startsWith('kairos.io/') || (k in variables.annotations && variables.annotations[k] == variables.oldAnnotations[k])) &&
+        (has(object.metadata.finalizers) ? object.metadata.finalizers : []) == (has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers : []) &&
+        (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+      message: Node labelers may change only kairos.io labels and annotations, never scheduling, host identity or ownership.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: guaranine-node-labeler}
+spec: {policyName: guaranine-node-labeler, validationActions: [Deny]}

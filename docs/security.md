@@ -95,6 +95,20 @@ The current K3s network-policy controller installs Pod rules asynchronously: a n
 
 Allowed destinations remain reachable by compromised applications. Firewall rules and removal of utilities cannot guarantee protection after host-root or kernel compromise.
 
+### Admission hardening
+
+[kubernetes/hardening.yaml](../kubernetes/hardening.yaml) uses the pinned
+Kubernetes release's native mutating and validating admission policies. It needs
+no webhook service. Install it through [setup](../SETUP.md#platform-admission-guards)
+before the infrastructure controllers. Keep its bindings installed: the storage
+guard rejects helpers if their hardening mutation is absent.
+
+[Storage](storage.md#permissions-and-network-access) owns helper and volume
+confinement; [operations](operations.md#operator-permissions-and-traffic) owns
+node-labeler restrictions and the remaining host-administrator boundary.
+The [escalation audit](security-audit.md) records the findings and verification.
+Admission changes affect new requests, not the permissions of existing containers.
+
 ## Private material and enrollment
 
 Use the [operator directory](../SETUP.md#operator-files) on encrypted storage with an off-machine backup. The CLI creates directories with mode 0700 and private files with mode 0600, refuses private paths inside the checkout, and rejects private inputs with symlinks, incorrect ownership or group/other permissions. Gitignore is a second line of defense, not the storage boundary.

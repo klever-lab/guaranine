@@ -99,9 +99,36 @@ Completed and failed operations retain status and Job logs. After reviewing a fi
 
 ### Operator permissions and traffic
 
-The operator runs on the cloud controller as a non-root container with a read-only root filesystem, dropped capabilities and the runtime seccomp profile. Upstream node metadata helpers run on each Kairos node with read-only host `/etc` access and permission to patch node metadata. Initial discovery also creates one completed Job per node. These helpers explain the extra node-management pods.
+The operator runs on the cloud controller as a non-root container with a read-only
+root filesystem, dropped capabilities and the runtime seccomp profile. The
+[native admission guards](security.md#admission-hardening) give its generated
+metadata helpers the same hardening and replace the broad host `/etc` mount with
+read-only mounts of just `kairos-release` and `os-release`. A helper's Pod-bound
+token can patch only its own node's `kairos.io/` labels and annotations; scheduling
+fields, other labels, ownership and peer nodes are rejected. Initial discovery
+also creates one completed Job per node.
 
-Only the `kairos-operator` namespace permits privileged maintenance Pods. A NodeOp mounts host `/` read-write and has host-administrator access; access to creating NodeOps and to this namespace is therefore administrator access. The controller also manages nodes, Pods, Jobs, DaemonSets, service accounts and RBAC for upstream discovery/reboot helpers. Its RBAC omits upstream build-only Secret, PVC and ConfigMap permissions, so in-cluster OSArtifact builds are unsupported. Application namespaces keep their restricted security policy.
+A NodeOp mounts host `/` read-write and has host-administrator access; creating
+NodeOps in `kairos-operator` is therefore administrator access. Workload, service
+account, namespaced RBAC and NodeOp writes are limited to this namespace. Global
+watches remain for upstream controllers, along with node maintenance and the
+ClusterRole/Binding creation needed for discovery. Build-only Secret, PVC and
+ConfigMap permissions remain absent; in-cluster OSArtifact builds are unsupported.
+This operator intentionally remains trusted to administer the hosts.
+
+For an existing installation, apply the guards first, reapply the repository's
+Kairos kustomization, then restart the generated labeler DaemonSet so its Pods
+receive the new admission settings:
+
+```bash
+kubectl delete clusterrolebinding operator-metrics-auth-rolebinding --ignore-not-found
+kubectl delete clusterrole operator-metrics-auth-role operator-metrics-reader --ignore-not-found
+kubectl -n kairos-operator rollout restart daemonset/kairos-node-labeler
+kubectl -n kairos-operator rollout status daemonset/kairos-node-labeler
+```
+
+An offline worker can delay completion. Do not delete its application data or
+run a NodeOp merely to refresh metadata readers.
 
 Namespace network policies deny ingress and allow only Kubernetes API egress over the cluster/tailnet. The default service account has no mounted token or role binding; ordinary configuration Jobs do not need API credentials. The operator and metadata helpers use their dedicated service accounts. Container pulls use the node's normal registry access. Host activation uses system D-Bus (`SYSTEMCTL_FORCE_BUS=1`), because systemd's private socket cannot resolve clients in a Pod PID namespace. No new host firewall ports or public endpoints are needed. These controls do not sandbox a privileged host operation after compromise.
 

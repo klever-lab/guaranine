@@ -182,6 +182,20 @@ To recreate the card for this Pi, put the SD card in a USB reader attached to th
 
 The command verifies the saved private recovery image. Select the reader's whole drive, check its path, model, size and serial, then type `ERASE`. It unmounts, writes and verifies the card before reporting success. With the Pi powered off, insert the card and connect Ethernet, HDMI and power. The installed setup resumes automatically after first-boot updates.
 
+## Platform admission guards
+
+Install the native [privilege-escalation guards](docs/security.md#admission-hardening)
+before installing or updating node management and application storage:
+
+```bash
+kubectl apply --server-side -f kubernetes/hardening.yaml
+```
+
+For an existing installation, follow the component rollout steps in
+[operations](docs/operations.md#operator-permissions-and-traffic) and
+[storage](docs/storage.md#permissions-and-network-access). These policies do not
+replace already-running containers.
+
 ## Node management
 
 Install the pinned upstream Kairos Operator and repository configuration:
@@ -196,7 +210,8 @@ See [configuration rollouts](docs/operations.md#configuration-rollouts) for upda
 
 ## Application storage
 
-After a worker is Ready, install the repository's storage provisioner:
+After a worker is Ready and the [admission guards](#platform-admission-guards)
+are installed, install the repository's storage provisioner:
 
 ```bash
 kubectl apply -f kubernetes/storage.yaml

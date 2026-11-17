@@ -6,6 +6,7 @@ Start with [SETUP.md](../SETUP.md) for first-time deployment. These guides own t
 - [OVH controller egress and IPv4 cost](ovh-egress.md) — NAT pricing, AWS comparison, IPv6-only egress limitations and cost alternatives.
 - [Laptop hardware](hardware.md) — model inventory, Wi-Fi coverage, boot requirements and qualification evidence.
 - [Networking and security](security.md) — tailnet policy, LAN isolation, workload restrictions and private material.
+- [Privilege-escalation audit](security-audit.md) — findings, remediation and the remaining administrator trust boundary after pod compromise.
 - [Application storage](storage.md) — automatic PVC provisioning, local disk limits, retention and recovery.
 - [Monitoring](monitoring.md) — private Grafana access, cluster metrics and monitoring storage.
 - [Operations](operations.md) — configuration rollouts, image batches, node retirement, backups, recovery, migration and OS updates.

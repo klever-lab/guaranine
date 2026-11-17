@@ -13,7 +13,7 @@ Guaranine runs one K3s server in an OVH Public Cloud VM and K3s agents on laptop
 | [kairos/worker.yaml](../kairos/worker.yaml) | K3s agent settings and power-off after installation. |
 | [kairos/auroraboot.yaml](../kairos/auroraboot.yaml) | Native UEFI disk build recipe; the CLI converts its raw output to QCOW2. |
 | [infra/ovh/main.tf](../infra/ovh/main.tf) | Private state bucket, image and d2-2 VM with a public network port using OVH's default security group. |
-| [kubernetes/](../kubernetes/) | Application network policy, [storage provisioner](storage.md), [monitoring stack](monitoring.md) and [Kairos Operator](operations.md#configuration-rollouts). |
+| [kubernetes/](../kubernetes/) | Application network policy, [admission guards](security.md#admission-hardening), [storage provisioner](storage.md), [monitoring stack](monitoring.md) and [Kairos Operator](operations.md#configuration-rollouts). |
 
 Terraform owns infrastructure, Kairos owns the OS and K3s configuration, and Kubernetes manifests own workloads. There is no custom management API or enrollment service. See [networking and security](security.md) for transport and trust boundaries.
 

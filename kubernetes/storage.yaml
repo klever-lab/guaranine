@@ -1,5 +1,6 @@
 # OpenEBS Local PV Hostpath only; apply explicitly after cluster bootstrap.
-# The upstream helper pods are privileged host infrastructure, confined here.
+# Install hardening.yaml first: native admission replaces privileged helpers
+# with a capability-free initializer confined to its own claim directory.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -35,7 +36,7 @@ rules:
     verbs: [get, list, watch, update, patch]
   - apiGroups: [""]
     resources: [persistentvolumes]
-    verbs: [get, list, watch, create, update, patch, delete]
+    verbs: [get, list, watch, create, update, patch]
   - apiGroups: [""]
     resources: [events]
     verbs: [create, update, patch]
