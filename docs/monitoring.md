@@ -2,6 +2,20 @@
 
 [kubernetes/monitoring.yaml](../kubernetes/monitoring.yaml) deploys Grafana, Prometheus, kube-state-metrics and one Tailscale Serve proxy. Apply it explicitly; node bootstrap only installs the default namespace policy. The manifest owns image versions and digests, resource limits, retention, provisioning, Serve configuration and workload permissions.
 
+## Terminal status
+
+Run from the operator computer for a snapshot that works without Grafana or Prometheus:
+
+```bash
+./guaranine status
+```
+
+The command shows Guaranine-tagged Tailscale devices, Kubernetes node readiness and pressure, Deployment/StatefulSet/DaemonSet readiness, unhealthy or terminating Pods with scheduling errors, and PVC bindings with their storage nodes. A bound local volume on an unavailable node is flagged explicitly. Completed Pods and workloads intentionally set to zero replicas are shown without being treated as failures. Peer presence is informational for sleeping readers and stopped application gateways; an offline display kiosk needs attention.
+
+It also checks Grafana's HTTPS health endpoint using the URL in the monitoring manifest. Each network check has a timeout, and unavailable checks leave the independent checks running. It returns exit code `0` when the checks pass or `1` for unhealthy or unknown status. It reads Kubernetes and local Tailscale state without changing the cluster or requiring a Tailscale API token, SSH access, or Grafana credentials. Normal kubectl context selection applies; an explicit `GUARANINE_OPERATOR_DIR` selects that directory's kubeconfig.
+
+This is a current health snapshot, without the dashboard's historical CPU, memory or disk-usage charts. If the Kubernetes API is down, node, workload and storage health is reported as unknown while Tailscale presence and Grafana availability are still checked. Tailscale presence does not prove an application or the Pi's browser is working.
+
 ## Open Grafana
 
 Connect to Tailscale and open <https://monitoring.tail3a78b9.ts.net>. Log in as `admin`. Read the generated password locally:

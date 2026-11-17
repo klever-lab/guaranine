@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare Guaranine machines, flash installation media and manage host configuration."""
 import argparse
+import configparser
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -15,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import urllib.parse
@@ -1130,10 +1132,180 @@ def rollout_config(args):
     raise ValueError(f'Timed out waiting for {name}; it continues in the cluster. Inspect status before retrying')
 
 
+def status_table(title, headers, rows):
+    print(f'\n{title}')
+    if not rows:
+        print('  None')
+        return
+    lines = [headers, *[[str(value) for value in row] for row in rows]]
+    widths = [max(len(row[column]) for row in lines) for column in range(len(headers))]
+    for row in lines:
+        print('  ' + '  '.join(value.ljust(width) for value, width in zip(row, widths)).rstrip())
+
+
+def cluster_status(_args):
+    """Read a bounded health snapshot without depending on the monitoring stack."""
+    attention = False
+    print(f'Guaranine status — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z}', flush=True)
+    try:
+        result = subprocess.run(['tailscale', 'status', '--json'], text=True, capture_output=True, timeout=5)
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or 'tailscale status failed')
+        tailnet = json.loads(result.stdout)
+        state = tailnet.get('BackendState', 'Unknown')
+        print(f'Tailscale: {state}')
+        attention |= state != 'Running'
+        for message in tailnet.get('Health') or []:
+            print(f'  {message}')
+            attention = True
+        peers = sorted((peer for peer in (tailnet.get('Peer') or {}).values()
+                        if any(tag.startswith('tag:guaranine-') for tag in peer.get('Tags') or [])),
+                       key=lambda peer: peer.get('HostName', ''))
+        rows = []
+        for peer in peers:
+            online = peer.get('Online', False)
+            attention |= not online and 'tag:guaranine-kiosk' in (peer.get('Tags') or [])
+            address = next((ip for ip in peer.get('TailscaleIPs') or [] if ':' not in ip), '-')
+            rows.append([peer.get('HostName') or peer.get('DNSName', '-'),
+                         'Online' if online else 'Offline', address,
+                         '-' if online else peer.get('LastSeen') or 'Unknown'])
+        status_table('Tailnet devices', ['DEVICE', 'STATUS', 'ADDRESS', 'LAST SEEN'], rows)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print(f'Tailscale: unavailable ({error})')
+        attention = True
+
+    print('\nKubernetes: checking…', flush=True)
+    try:
+        environment = os.environ.copy()
+        if environment.get('GUARANINE_OPERATOR_DIR'):
+            environment['KUBECONFIG'] = str(operator_directory() / 'kubeconfig')
+        result = subprocess.run(['kubectl', '--request-timeout=5s', 'get',
+            'nodes,pods,deployments,statefulsets,daemonsets,persistentvolumeclaims,persistentvolumes',
+            '--all-namespaces', '-o', 'json'], text=True, capture_output=True, timeout=15, env=environment)
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or 'kubectl get failed')
+        resources = json.loads(result.stdout)['items']
+        resources.sort(key=lambda item: (item['metadata'].get('namespace', ''), item['metadata']['name']))
+        nodes = {item['metadata']['name']: item for item in resources if item['kind'] == 'Node'}
+        unavailable = {name for name, node in nodes.items() if not any(
+            condition['type'] == 'Ready' and condition['status'] == 'True'
+            for condition in node.get('status', {}).get('conditions', []))}
+        attention |= bool(unavailable) or not nodes
+        rows = []
+        for name, node in nodes.items():
+            labels = node['metadata'].get('labels', {})
+            conditions = node.get('status', {}).get('conditions', [])
+            ready = next((condition for condition in conditions if condition['type'] == 'Ready'), {})
+            problems = [condition['type'] for condition in conditions if condition['status'] == 'True'
+                        and (condition['type'].endswith('Pressure') or condition['type'] == 'NetworkUnavailable')]
+            if name in unavailable:
+                problems.insert(0, ready.get('message') or ready.get('reason') or 'Ready condition missing')
+            if node.get('spec', {}).get('unschedulable'):
+                problems.append('Cordoned')
+            attention |= bool(problems)
+            role = 'Controller' if any(key in labels for key in (
+                'node-role.kubernetes.io/control-plane', 'node-role.kubernetes.io/master')) else 'Worker'
+            rows.append([name, role, 'NotReady' if name in unavailable else 'Ready', '; '.join(problems) or '-'])
+        print('Kubernetes: reachable' if nodes else 'Kubernetes: no nodes registered')
+        status_table('Nodes', ['NODE', 'ROLE', 'STATUS', 'DETAIL'], rows)
+
+        rows = []
+        for item in resources:
+            kind = item['kind']
+            if kind not in ('Deployment', 'StatefulSet', 'DaemonSet'):
+                continue
+            spec, status = item.get('spec', {}), item.get('status', {})
+            desired = status.get('desiredNumberScheduled', 0) if kind == 'DaemonSet' else spec.get('replicas', 1)
+            ready = status.get('numberReady' if kind == 'DaemonSet' else 'readyReplicas', 0)
+            updating = status.get('observedGeneration', 0) < item['metadata'].get('generation', 0)
+            problem = ready < desired or updating
+            attention |= problem
+            state = 'Needs attention' if problem else ('Ready' if desired else 'Inactive (desired 0)')
+            rows.append([item['metadata']['namespace'], f'{kind}/{item["metadata"]["name"]}',
+                         f'{ready}/{desired}', state])
+        status_table('Workloads', ['NAMESPACE', 'WORKLOAD', 'READY', 'STATUS'], rows)
+
+        rows, details = [], []
+        ready_pods = completed_pods = 0
+        for pod in (item for item in resources if item['kind'] == 'Pod'):
+            status = pod.get('status', {})
+            phase = status.get('phase', 'Unknown')
+            node = pod.get('spec', {}).get('nodeName', '-')
+            if phase == 'Succeeded':
+                completed_pods += 1
+                continue
+            elif pod['metadata'].get('deletionTimestamp'):
+                reason = 'Terminating'
+            elif node in unavailable:
+                reason = 'Node unavailable'
+            elif phase == 'Running' and any(condition['type'] == 'Ready' and condition['status'] == 'True'
+                                           for condition in status.get('conditions', [])):
+                ready_pods += 1
+                continue
+            else:
+                containers = [*status.get('initContainerStatuses', []), *status.get('containerStatuses', [])]
+                reasons = [state['reason'] for container in containers
+                           for name, state in container.get('state', {}).items()
+                           if state.get('reason') and (name == 'waiting' or state.get('exitCode', 0) != 0)]
+                reason = ', '.join(reasons) or status.get('reason') or ('NotReady' if phase == 'Running' else phase)
+            detail = next((condition.get('message', '') for condition in status.get('conditions', [])
+                           if condition['type'] == 'PodScheduled' and condition['status'] == 'False'), '')
+            name = f'{pod["metadata"]["namespace"]}/{pod["metadata"]["name"]}'
+            restarts = sum(container.get('restartCount', 0) for container in [
+                *status.get('initContainerStatuses', []), *status.get('containerStatuses', [])])
+            rows.append([name, node, reason, restarts])
+            if detail:
+                details.append(f'{name}: {detail}')
+        attention |= bool(rows)
+        print(f'\nPods: {ready_pods} ready, {completed_pods} completed, {len(rows)} need attention')
+        status_table('Pod issues', ['POD', 'NODE', 'STATUS', 'RESTARTS'], rows)
+        for detail in details:
+            print(textwrap.fill(detail, width=100, initial_indent='  ', subsequent_indent='    '))
+
+        volumes = {item['metadata']['name']: item for item in resources if item['kind'] == 'PersistentVolume'}
+        rows = []
+        for claim in (item for item in resources if item['kind'] == 'PersistentVolumeClaim'):
+            volume = volumes.get(claim.get('spec', {}).get('volumeName'), {})
+            hosts = sorted({name for term in volume.get('spec', {}).get('nodeAffinity', {}).get('required', {})
+                            .get('nodeSelectorTerms', []) for expression in term.get('matchExpressions', [])
+                            if expression['key'] == 'kubernetes.io/hostname' and expression['operator'] == 'In'
+                            for name in expression.get('values', [])})
+            phase = claim.get('status', {}).get('phase', 'Unknown')
+            blocked = bool(hosts) and all(name not in nodes or name in unavailable for name in hosts)
+            missing = phase == 'Bound' and not volume
+            attention |= phase != 'Bound' or blocked or missing
+            rows.append([f'{claim["metadata"]["namespace"]}/{claim["metadata"]["name"]}', phase,
+                         ', '.join(hosts) or '-', 'Node unavailable' if blocked else ('Volume missing' if missing else '-')])
+        status_table('Storage', ['CLAIM', 'STATUS', 'NODE', 'DETAIL'], rows)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print(f'Kubernetes: unavailable ({error})')
+        print('  Connect to Tailscale and check kubectl access; cluster health is unknown.')
+        attention = True
+
+    try:
+        config = next(document for document in yaml.safe_load_all((ROOT / 'kubernetes/monitoring.yaml').read_text())
+                      if document.get('kind') == 'ConfigMap' and document['metadata']['name'] == 'grafana')
+        settings = configparser.ConfigParser(interpolation=None)
+        settings.read_string(config['data']['grafana.ini'])
+        url = urllib.parse.urljoin(settings['server']['root_url'], 'api/health')
+        with urllib.request.urlopen(url, timeout=5) as response:
+            code = response.status
+            health = json.load(response)
+        database = health.get('database', 'Unknown')
+        print(f'\nGrafana: HTTP {code}; database {database} ({url})')
+        attention |= code != 200 or database != 'ok'
+    except (OSError, ValueError, KeyError, StopIteration, configparser.Error) as error:
+        print(f'\nGrafana: unavailable ({error})')
+        attention = True
+    print('\nOverall: ' + ('NEEDS ATTENTION' if attention else 'OK'))
+    return 1 if attention else 0
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(prog='guaranine', description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('status', help='Show cluster and tailnet health without Grafana').set_defaults(action=cluster_status)
     commands.add_parser('init', help='Create operator files (once)').set_defaults(
         action=lambda _args: initialize(operator_directory()))
     iso = commands.add_parser('iso', help='Build or update the laptop ISO; optionally flash a USB')
@@ -1153,7 +1325,7 @@ def main(argv=None):
     os.umask(0o077)
     try:
         args = parser.parse_args(argv or ['--help'])
-        args.action(args)
+        return args.action(args)
     except yaml.YAMLError:
         parser.exit(1, 'Invalid YAML; check the local operator/configuration file.\n')
     except (EOFError, KeyboardInterrupt):
@@ -1167,4 +1339,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
