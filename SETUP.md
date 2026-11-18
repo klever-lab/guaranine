@@ -93,6 +93,28 @@ unset TF_DATA_DIR
 
 Keep the bootstrap state backup outside OVH. The bucket remains Terraform-managed, versioned and protected from Terraform deletion. Use one operator at a time.
 
+### Scoped OVH storage users
+
+Run `bash infra/ovh-storage/request-credential.sh` to request a short-lived OVH management API credential. Choose the region of your OVH account portal. Open the printed link, check the proposed rights for this Public Cloud project, and enter the three keys in the terminal prompts. The script saves them in the private operator directory as `ovh-storage.env`.
+
+Use the [storage Terraform root](infra/ovh-storage/main.tf) to create the private Books bucket and the scoped Books and Terraform state users. It stores its own state under `guaranine/ovh-storage.tfstate` in the existing encrypted state bucket. Preserve the original bucket owner credentials as `ovh-owner-credentials` in the operator directory for bootstrap and this root.
+
+```bash
+(
+  umask 077
+  source "$GUARANINE_OPERATOR_DIR/ovh-storage.env"
+  export AWS_SHARED_CREDENTIALS_FILE="$GUARANINE_OPERATOR_DIR/ovh-owner-credentials"
+  export AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED
+  export AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
+  export TF_DATA_DIR="$GUARANINE_OPERATOR_DIR/terraform/ovh-storage-cache"
+  terraform -chdir=infra/ovh-storage init -lockfile=readonly \
+    -backend-config="$GUARANINE_OPERATOR_DIR/ovh.backend.hcl"
+  terraform -chdir=infra/ovh-storage apply
+)
+```
+
+With the same backend initialized, capture the sensitive `state_credentials` and `books_credentials` outputs with `terraform output -raw` directly into private mode-0600 files. Use the Books output as `books-s3.json` in the [self-hosted operator directory](https://github.com/klever-lab/self-hosted/blob/main/SETUP.md#books-object-storage). The state user has access to the controller state bucket and its `guaranine/ovh.tfstate` and `guaranine/ovh.tfstate.tflock` objects. Verify state reads and a locked Terraform plan with the new key before installing it as `ovh-s3-credentials` and updating the two S3 secrets in the GitHub environment.
+
 ### GitHub environment
 
 Create a GitHub environment named `ovh`, with deployment branches restricted to the **selected branch `main`**, without tag rules. An unrestricted environment or the generic protected-branches setting is insufficient. Configure these environment values through GitHub Settings or `gh secret set --env ovh` / `gh variable set --env ovh`:

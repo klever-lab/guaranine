@@ -170,6 +170,15 @@ def main():
         check_lifecycle_plans(events)
         check_disk_guard(root, env)
 
+        print("Terraform ovh-storage: format, init, validate and mock tests", flush=True)
+        root = scratch / "ovh-storage"
+        copy_configuration(REPOSITORY / "infra/ovh-storage", root)
+        env["TF_DATA_DIR"] = str(scratch / "ovh-storage-data")
+        terraform(root, env, "fmt", "-check", "-recursive", "-no-color")
+        terraform(root, env, "init", "-backend=false", "-input=false", "-lockfile=readonly", "-no-color")
+        terraform(root, env, "validate", "-no-color")
+        print(terraform(root, env, "test", "-no-color").stdout.strip(), flush=True)
+
 
 if __name__ == "__main__":
     main()
