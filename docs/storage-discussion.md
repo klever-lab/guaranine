@@ -1,6 +1,6 @@
 # Storage portability discussion
 
-Discussed on 2026-11-17. The Books deployment awaits the dedicated OVH bucket and a live restore check.
+Discussed on 2026-11-17.
 
 The goal was to reduce how many workloads depend on a particular worker, recover from loss of a worker or disk, and keep the cloud K3s controller small. Cross-worker storage would need to tolerate intermittent Wi-Fi and Tailscale links. [Current storage and recovery](storage.md#capacity-outages-and-backups) · [Controller availability](architecture.md#workloads-and-availability)
 
@@ -29,9 +29,9 @@ Argument Arena used about 4 MiB including its SQLite write-ahead log. Grafana us
 
 ## Calibre library and downloader handoff
 
-OVH Object Storage was selected for books. The Calibre library measured about 1.8 GiB. One copy at the listed Beauharnois Standard 1-AZ rate would be about CA$0.02/month for storage. A recoverable snapshot would keep the books, covers and SQLite catalog together. The proposal needs a dedicated private books bucket and scoped app credentials. [OVH prices](https://www.ovhcloud.com/en-ca/public-cloud/prices/) · [Current Calibre backup](https://github.com/klever-lab/self-hosted/blob/main/docs/operations.md#backups)
+OVH Object Storage was selected for books. The Calibre library measured about 1.8 GiB. One copy at the listed Beauharnois Standard 1-AZ rate would be about CA$0.02/month for storage. A recoverable snapshot would keep the books, covers and SQLite catalog together. The plan called for a dedicated private books bucket and scoped app credentials. [OVH prices](https://www.ovhcloud.com/en-ca/public-cloud/prices/) · [Current Calibre backup](https://github.com/klever-lab/self-hosted/blob/main/docs/operations.md#backups)
 
-The existing SABnzbd and qBittorrent jobs import books directly into Calibre-Web. The qBittorrent `books` category was empty at the audit. Manual uploads and the on-demand Gutenberg importer are also available. [Current book import paths](https://github.com/klever-lab/self-hosted/blob/main/docs/media-imports.md)
+Before cutover, SABnzbd and qBittorrent jobs imported books directly into Calibre-Web. The qBittorrent `books` category was empty at the audit. Manual uploads and the on-demand Gutenberg importer are also available. [Current book import paths](https://github.com/klever-lab/self-hosted/blob/main/docs/media-imports.md)
 
 The proposed handoff was to use OVH as the common inbox for automated downloads.
 
@@ -49,3 +49,9 @@ Test restoring the archive onto fresh OpenEBS claims on `wild`. It carries the c
 For cutover, pause book imports and stop Calibre-Web on `demure`. Verify that the OVH archive contains the state needed at cutover. Restore it directly from OVH onto `wild`, start Books at its existing HTTPS address, process pending inbox files and verify Kobo sync. qBittorrent can seed throughout the restore. Keep the source claims available for rollback.
 
 After verifying the storage changes, add a **Disk I/O** chart to the Grafana overview. Use the existing cAdvisor scrape to show read and write throughput per Kubernetes node in MiB/s alongside I/O pressure, the share of time that tasks waited on I/O. [Grafana overview](monitoring.md#open-grafana)
+
+### Cutover result
+
+On 2026-11-18, Calibre-Web restored 311 books, four accounts and the Kobo reading state directly from a verified OVH snapshot onto `wild`. All six active seeds resumed after the upload, before the restore began. The source claims are available for rollback.
+
+SABnzbd verified 51 completed jobs in OVH before switching downloads to temporary storage on `muller`. Calibre-Web had verified import records for all 52 inbox files. The restored Kobo pairing returned metadata and download links for three Asimov titles. Search and opening on the physical Kobo still need verification. [Books recovery](https://github.com/klever-lab/self-hosted/blob/main/docs/operations.md#backups)
