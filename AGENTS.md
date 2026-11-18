@@ -18,6 +18,7 @@ Read [README.md](README.md) first, then [SETUP.md](SETUP.md).
 - Wi-Fi client isolation is desirable but may be absent; never rely on it. Host firewalls must block direct LAN communication to and from nodes and their workloads, with only minimal exceptions for network setup, DNS and encrypted Tailscale transport.
 - Laptop workers must support built-in Wi-Fi from initial boot through installation and normal operation, without requiring Ethernet, adapters or external bridges. Verify OS, installer and driver support for the target laptops before recommending a platform or building installation media.
 - Terraform owns infrastructure, Kairos configuration owns the OS and K3s setup, and Kubernetes manifests own workloads.
+- Express every supported infrastructure, OS, and workload configuration as declarative, version-controlled code. Make deployments reproducible from the declared state and protected inputs. Reserve imperative setup and manual changes for gaps in declarative tooling.
 - Keep README.md short, setup instructions in SETUP.md and other documentation in docs/, the CLI in `scripts/guaranine.py`, and each Terraform root in one `main.tf`.
 - Run Python snippets through `uv` with `requirements.txt`, as `./guaranine` does.
 - Avoid helper-file proliferation, duplicate metadata and repeated operational facts; maintain each fact in its owning guide.
