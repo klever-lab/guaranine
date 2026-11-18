@@ -1,6 +1,6 @@
 # Storage portability discussion
 
-Discussed on 2026-11-17. All implementation is deferred.
+Discussed on 2026-11-17. The Books deployment awaits the dedicated OVH bucket and a live restore check.
 
 The goal was to reduce how many workloads depend on a particular worker, recover from loss of a worker or disk, and keep the cloud K3s controller small. Cross-worker storage would need to tolerate intermittent Wi-Fi and Tailscale links. [Current storage and recovery](storage.md#capacity-outages-and-backups) · [Controller availability](architecture.md#workloads-and-availability)
 
@@ -37,5 +37,15 @@ The proposed handoff was to use OVH as the common inbox for automated downloads.
 
 1. Both downloaders would use the same uploader for completed books. Files would be keyed by SHA-256 and uploaded with a conditional create, so a byte-identical file occupies one object even if two jobs upload it concurrently. The hash identifies exact file content. Different editions or formats can have different hashes. Torrent originals would stay on disk for seeding. [OVH conditional writes](https://docs.ovhcloud.com/en/guides/storage-and-backup/object-storage/s3-conditional-writes)
 2. For SABnzbd, the uploader would verify every book file from a successful release in OVH, record a durable receipt keyed by its altHUB release ID, and then remove that exact cart entry. The cart poller would check the receipt and SABnzbd's queue and history before submitting a download. Failed transfers would leave the cart entry available for retry. A receipt would let the poller retry a failed cart removal without downloading the release again. Unknown release IDs would need manual review. [Current altHUB tooling](https://github.com/klever-lab/self-hosted/blob/main/docs/usenet.md#operator-cli)
-3. Calibre-Web would check the inbox every two minutes, verify file hashes, and import new books through its authenticated upload endpoint. The existing import records would supply the initial deduplication history. The inbox would replace the two direct import jobs at cutover. Separate full-library snapshots would capture Calibre's catalog and local edits for recovery onto another worker.
+3. Calibre-Web would check the inbox every two minutes, verify file hashes, and import new books through its authenticated upload endpoint. The existing import records would supply the initial deduplication history. The inbox would replace the two direct import jobs at cutover.
 4. SABnzbd could switch to `emptyDir` volumes after testing that completed releases reach Calibre and unfinished cart releases can be picked up after a pod restart. Its uploader would share the pod's temporary download directory. A ConfigMap and Secrets would seed its configuration at startup. The cutover would keep the existing claims available for rollback until recovery was verified.
+
+### Cutover order
+
+Set up the inbox first. For the backup from `demure`, pause active qBittorrent seeds before exporting `/books` and `/config`. Upload the consistent archive to OVH and resume the same torrents as soon as the upload completes or the backup fails.
+
+Test restoring the archive onto fresh OpenEBS claims on `wild`. It carries the catalog, local edits, covers, accounts, Kobo pairing and reading state. [Application storage](storage.md#request-storage)
+
+For cutover, pause book imports and stop Calibre-Web on `demure`. Verify that the OVH archive contains the state needed at cutover. Restore it directly from OVH onto `wild`, start Books at its existing HTTPS address, process pending inbox files and verify Kobo sync. qBittorrent can seed throughout the restore. Keep the source claims available for rollback.
+
+After verifying the storage changes, add a **Disk I/O** chart to the Grafana overview. Use the existing cAdvisor scrape to show read and write throughput per Kubernetes node in MiB/s alongside I/O pressure, the share of time that tasks waited on I/O. [Grafana overview](monitoring.md#open-grafana)
