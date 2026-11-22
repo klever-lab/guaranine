@@ -214,6 +214,13 @@ spec:
         - ipBlock: {cidr: 100.82.17.107/32}
       ports:
         - {protocol: TCP, port: 9100}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: symphony}
+          podSelector:
+            matchLabels: {app: symphony}
+      ports:
+        - {protocol: TCP, port: 8081}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -328,6 +335,9 @@ data:
             target_label: node
           - source_labels: [__meta_kubernetes_node_name]
             target_label: instance
+      - job_name: symphony
+        static_configs:
+          - targets: [symphony.symphony.svc.cluster.local:8081]
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -489,7 +499,7 @@ data:
           "gridPos": {"x": 17, "y": 16, "w": 7, "h": 4},
           "options": {
             "mode": "markdown",
-            "content": "[Jellyfin](https://streams.tail3a78b9.ts.net) · [Calibre Web](https://books.tail3a78b9.ts.net)  \n[qBittorrent](https://qbittorrent.tail3a78b9.ts.net) · [NZB](https://usenet.tail3a78b9.ts.net)  \n[Friends VPN](https://vpn.bahasadri.com) · [Grafana](https://monitoring.tail3a78b9.ts.net)"
+            "content": "[Jellyfin](https://streams.tail3a78b9.ts.net) · [Calibre Web](https://books.tail3a78b9.ts.net)  \n[qBittorrent](https://qbittorrent.tail3a78b9.ts.net) · [NZB](https://usenet.tail3a78b9.ts.net)  \n[Friends VPN](https://vpn.bahasadri.com) · [Grafana](https://monitoring.tail3a78b9.ts.net) · [Symphony](https://symphony.tail3a78b9.ts.net)"
           }
         },
         {
@@ -526,6 +536,7 @@ data:
               "jellyfin": {"text": "Jellyfin"},
               "argument-arena": {"text": "Argument Arena"},
               "monitoring": {"text": "Monitoring"},
+              "symphony": {"text": "Symphony"},
               "kairos-operator": {"text": "Kairos"},
               "kube-system": {"text": "DNS"},
               "openebs": {"text": "Storage"}
@@ -719,6 +730,224 @@ data:
         }
       ]
     }
+  symphony.json: |
+    {
+      "uid": "guaranine-symphony", "title": "Symphony", "schemaVersion": 39,
+      "tags": ["guaranine", "symphony"], "timezone": "browser", "refresh": "30s",
+      "time": {"from": "now-24h", "to": "now"},
+      "links": [{"title": "Dashboards", "type": "dashboards", "tags": ["guaranine"], "asDropdown": false, "keepTime": true}],
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Symphony Target",
+          "gridPos": {"x": 0, "y": 0, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "up{job=\"symphony\"}"}],
+          "fieldConfig": {"defaults": {
+            "mappings": [{"type": "value", "options": {"0": {"text": "Down", "color": "red"}, "1": {"text": "Up", "color": "green"}}}],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+          }},
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 2, "type": "stat", "title": "Dispatch",
+          "gridPos": {"x": 3, "y": 0, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "symphony_dispatch_paused"}],
+          "fieldConfig": {"defaults": {
+            "mappings": [{"type": "value", "options": {"0": {"text": "Active", "color": "green"}, "1": {"text": "Paused", "color": "red"}}}],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
+          }},
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 3, "type": "stat", "title": "Draining",
+          "gridPos": {"x": 6, "y": 0, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "symphony_draining"}],
+          "fieldConfig": {"defaults": {
+            "mappings": [{"type": "value", "options": {"0": {"text": "Normal", "color": "green"}, "1": {"text": "Draining", "color": "yellow"}}}],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}]}
+          }},
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 4, "type": "stat", "title": "Coordinator Auth",
+          "gridPos": {"x": 9, "y": 0, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "symphony_coordinator_signed_in"}],
+          "fieldConfig": {"defaults": {
+            "mappings": [{"type": "value", "options": {"0": {"text": "Signed out", "color": "red"}, "1": {"text": "Signed in", "color": "green"}}}],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+          }},
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 5, "type": "stat", "title": "Coordinator",
+          "gridPos": {"x": 12, "y": 0, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "symphony_coordinator_busy"}],
+          "fieldConfig": {"defaults": {
+            "mappings": [{"type": "value", "options": {"0": {"text": "Idle", "color": "green"}, "1": {"text": "Busy", "color": "blue"}}}],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "blue", "value": 1}]}
+          }},
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 6, "type": "stat", "title": "Pending Events",
+          "gridPos": {"x": 15, "y": 0, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "symphony_pending_events"}],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
+          "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 7, "type": "bargauge", "title": "Codex Rate Limit Left (%)",
+          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "symphony_codex_rate_limit_remaining_percent", "legendFormat": "{{window}}"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 11}, {"color": "green", "value": 36}]}}},
+          "options": {"orientation": "horizontal", "displayMode": "gradient", "valueMode": "color", "namePlacement": "left", "showUnfilled": true, "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 8, "type": "table", "title": "Metric Coverage",
+          "description": "Shows whether optional or provider-supplied metric families have recorded real data. Unavailable metrics stay omitted rather than zero-filled or fabricated.",
+          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 6},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "format": "table", "expr": "symphony_metric_available"}],
+          "transformations": [{"id": "organize", "options": {
+            "excludeByName": {"Time": true, "__name__": true, "instance": true, "job": true},
+            "indexByName": {"metric": 0, "Value": 1},
+            "renameByName": {"metric": "Metric", "Value": "Status"}
+          }}],
+          "fieldConfig": {"defaults": {}, "overrides": [
+            {"matcher": {"id": "byName", "options": "Status"}, "properties": [
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+              {"id": "mappings", "value": [{"type": "value", "options": {
+                "0": {"text": "Unavailable", "color": "red"},
+                "1": {"text": "Collected", "color": "green"}
+              }}]}
+            ]}
+          ]},
+          "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Metric", "desc": false}]}
+        },
+        {
+          "id": 9, "type": "bargauge", "title": "Tasks by Phase",
+          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 6},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "instant": true, "range": false, "expr": "symphony_tasks_by_phase", "legendFormat": "{{phase}}"}],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
+          "options": {"orientation": "horizontal", "displayMode": "basic", "valueMode": "color", "namePlacement": "left", "showUnfilled": false, "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 10, "type": "timeseries", "title": "Tasks & Rework by Repository",
+          "gridPos": {"x": 0, "y": 10, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "expr": "sum by(repo) (symphony_tasks_total)", "legendFormat": "{{repo}} tasks"},
+            {"refId": "B", "expr": "sum by(repo) (symphony_tasks_reworked_total)", "legendFormat": "{{repo}} reworked tasks"},
+            {"refId": "C", "expr": "sum by(repo) (symphony_rework_attempts_total)", "legendFormat": "{{repo}} rework attempts"},
+            {"refId": "D", "expr": "sum by(repo) (symphony_worker_attempts_total)", "legendFormat": "{{repo}} worker attempts"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 11, "type": "timeseries", "title": "GitHub Actions CI Outcomes",
+          "gridPos": {"x": 12, "y": 10, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "expr": "sum by(repo,conclusion) (symphony_ci_runs_total)", "legendFormat": "{{repo}} · {{conclusion}}"},
+            {"refId": "B", "expr": "sum by(repo) (symphony_ci_runs_active)", "legendFormat": "{{repo}} · active"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 12, "type": "timeseries", "title": "Average Execution Stage Duration (s)",
+          "gridPos": {"x": 0, "y": 17, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by(repo,kind) (rate(symphony_execution_duration_seconds_sum[1h])) / sum by(repo,kind) (rate(symphony_execution_duration_seconds_count[1h]))", "legendFormat": "{{repo}} · {{kind}}"}],
+          "fieldConfig": {"defaults": {"unit": "s", "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 13, "type": "timeseries", "title": "Coordinator Turn Latency (s)",
+          "gridPos": {"x": 12, "y": 17, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by(repo,model,status) (rate(symphony_coordinator_turn_duration_seconds_sum[1h])) / sum by(repo,model,status) (rate(symphony_coordinator_turn_duration_seconds_count[1h]))", "legendFormat": "{{repo}} · {{model}} ({{status}})"}],
+          "fieldConfig": {"defaults": {"unit": "s", "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 14, "type": "timeseries", "title": "Symphony Pod CPU & Memory",
+          "gridPos": {"x": 0, "y": 24, "w": 14, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "expr": "sum by(pod) (rate(container_cpu_usage_seconds_total{namespace=\"symphony\",container!=\"\",container!=\"POD\"}[5m]))", "legendFormat": "{{pod}} CPU"},
+            {"refId": "B", "expr": "sum by(pod) (container_memory_working_set_bytes{namespace=\"symphony\",container!=\"\",container!=\"POD\"})", "legendFormat": "{{pod}} Memory"}
+          ],
+          "fieldConfig": {
+            "defaults": {"unit": "cores", "min": 0},
+            "overrides": [{"matcher": {"id": "byFrameRefID", "options": "B"}, "properties": [
+              {"id": "unit", "value": "bytes"},
+              {"id": "custom.axisPlacement", "value": "right"}
+            ]}]
+          },
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 15, "type": "stat", "title": "Symphony PVC Disk Usage",
+          "gridPos": {"x": 14, "y": 24, "w": 10, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "instant": true, "range": false, "expr": "symphony_pvc_bytes_used / symphony_pvc_bytes_total", "legendFormat": "Used %"},
+            {"refId": "B", "instant": true, "range": false, "expr": "symphony_pvc_bytes_used", "legendFormat": "Used"},
+            {"refId": "C", "instant": true, "range": false, "expr": "symphony_pvc_bytes_total", "legendFormat": "Capacity"}
+          ],
+          "fieldConfig": {
+            "defaults": {"unit": "bytes", "decimals": 1, "min": 0},
+            "overrides": [{"matcher": {"id": "byFrameRefID", "options": "A"}, "properties": [
+              {"id": "unit", "value": "percentunit"},
+              {"id": "decimals", "value": 1}
+            ]}]
+          },
+          "options": {"colorMode": "value", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 16, "type": "timeseries", "title": "Token Usage by Source, Repo & Model",
+          "gridPos": {"x": 0, "y": 31, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "expr": "sum by(source,repo,model) (symphony_tokens_total{direction=\"total\"})", "legendFormat": "{{source}} · {{repo}} · {{model}} (total)"},
+            {"refId": "B", "expr": "sum by(source,repo,model) (symphony_tokens_total{direction=\"input\"})", "legendFormat": "{{source}} · {{repo}} · {{model}} (input)"},
+            {"refId": "C", "expr": "sum by(source,repo,model) (symphony_tokens_total{direction=\"output\"})", "legendFormat": "{{source}} · {{repo}} · {{model}} (output)"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 17, "type": "timeseries", "title": "Estimated Spend (USD)",
+          "description": "Observed USD spend reported by model providers. Codex ChatGPT subscription coordinator turns have no per-token USD cost; missing series indicate unavailable spend per the Metric Coverage table.",
+          "gridPos": {"x": 12, "y": 31, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by(source,repo,model) (symphony_estimated_spend_usd_total)", "legendFormat": "{{source}} · {{repo}} · {{model}}"}],
+          "fieldConfig": {"defaults": {"unit": "currency:USD", "decimals": 4, "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 18, "type": "timeseries", "title": "Pushes to main & Deployments",
+          "gridPos": {"x": 0, "y": 38, "w": 24, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"refId": "A", "expr": "sum by(repo) (symphony_pushes_total)", "legendFormat": "{{repo}} pushes (total)"},
+            {"refId": "B", "expr": "sum by(repo) (increase(symphony_pushes_total[1d]))", "legendFormat": "{{repo}} pushes (24h)"},
+            {"refId": "C", "expr": "sum by(repo,workflow,conclusion) (symphony_deployments_total)", "legendFormat": "{{repo}} · {{workflow}} ({{conclusion}})"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        }
+      ]
+    }
 ---
 apiVersion: v1
 kind: Service
@@ -864,6 +1093,7 @@ spec:
             - {name: config, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml, subPath: dashboards.yaml, readOnly: true}
             - {name: config, mountPath: /etc/grafana/dashboards/overview.json, subPath: overview.json, readOnly: true}
             - {name: config, mountPath: /etc/grafana/dashboards/ovh.json, subPath: ovh.json, readOnly: true}
+            - {name: config, mountPath: /etc/grafana/dashboards/symphony.json, subPath: symphony.json, readOnly: true}
             - {name: secrets, mountPath: /etc/grafana/secrets, readOnly: true}
       volumes:
         - name: data
