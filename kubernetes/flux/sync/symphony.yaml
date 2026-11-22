@@ -37,3 +37,9 @@ spec:
         apiVersion: apps/v1
         kind: Deployment
         metadata: {name: symphony-webhook, namespace: symphony}
+    - target: {kind: PersistentVolumeClaim, name: symphony-webhook}
+      patch: |-
+        $patch: delete
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata: {name: symphony-webhook, namespace: symphony}
