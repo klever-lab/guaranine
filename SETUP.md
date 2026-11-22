@@ -296,3 +296,23 @@ kubectl -n monitoring rollout status deployment/kube-state-metrics
 ```
 
 See [Open Grafana](docs/monitoring.md#open-grafana) for private access and the generated password.
+
+## GitOps reconciliation
+
+Install the minimal [Flux](docs/operations.md#gitops-reconciliation) controllers and initial sync declarations once from the operator computer:
+
+```bash
+kubectl apply --server-side -k kubernetes/flux
+kubectl -n flux-system rollout status deployment/source-controller
+kubectl -n flux-system rollout status deployment/kustomize-controller
+kubectl apply --server-side -k kubernetes/flux/sync
+kubectl -n flux-system get gitrepositories,kustomizations
+```
+
+For automatic tailnet policy updates on `main`, create a GitHub environment named `tailscale` restricted to the **selected branch `main`** (same policy as `ovh`). In the Tailscale admin console under **Settings → Trust credentials**, add a GitHub OIDC credential scoped only to `policy_file` for `klever-lab/guaranine` environment `tailscale`, then set these environment variables on `tailscale`:
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| Variable | `TS_TAILNET` | Tailnet name from `operator.yaml`. |
+| Variable | `TS_OIDC_CLIENT_ID` | Federated identity Client ID from Tailscale. |
+| Variable | `TS_OIDC_AUDIENCE` | Federated identity Audience from Tailscale. |

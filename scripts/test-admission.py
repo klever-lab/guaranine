@@ -146,17 +146,18 @@ def main():
                 raise AssertionError(f'{obj["kind"]}: {code}: {result}')
             return result
 
-        for name in ('openebs', 'kairos-operator'):
+        for name in ('openebs', 'kairos-operator', 'flux-system', 'symphony'):
             create({'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': name}})
         for path in (ROOT / 'kubernetes/storage.yaml', ROOT / 'kubernetes/hardening.yaml'):
             for obj in yaml.safe_load_all(path.read_text()):
                 if obj and obj['kind'] != 'Deployment':
                     create(obj)
-        rendered = subprocess.run([str(tools / 'kubectl'), 'kustomize', str(ROOT / 'kubernetes/kairos-operator')],
-                                  check=True, capture_output=True).stdout
-        for obj in yaml.safe_load_all(rendered):
-            if obj and obj['kind'] in ('ServiceAccount', 'ClusterRole', 'ClusterRoleBinding', 'Role', 'RoleBinding'):
-                create(obj)
+        for overlay in ('kubernetes/kairos-operator', 'kubernetes/flux'):
+            rendered = subprocess.run([str(tools / 'kubectl'), 'kustomize', str(ROOT / overlay)],
+                                      check=True, capture_output=True).stdout
+            for obj in yaml.safe_load_all(rendered):
+                if obj and obj['kind'] in ('ServiceAccount', 'ClusterRole', 'ClusterRoleBinding', 'Role', 'RoleBinding'):
+                    create(obj)
 
         helper = {'apiVersion': 'v1', 'kind': 'Pod', 'metadata': {'name': 'storage-fixture', 'namespace': 'openebs'},
                   'spec': {'serviceAccountName': 'openebs-localpv-helper', 'restartPolicy': 'Never',
@@ -257,6 +258,34 @@ def main():
             review = {'apiVersion': 'authorization.k8s.io/v1', 'kind': 'SelfSubjectAccessReview',
                       'spec': {'resourceAttributes': {'namespace': namespace, 'verb': 'create', 'resource': 'pods'}}}
             assert request('POST', resource_path(review), review, user=OPERATOR)[1]['status']['allowed'] == expected
+
+        flux_checks = [
+            ('system:serviceaccount:flux-system:source-controller',
+             {'namespace': 'symphony', 'verb': 'get', 'resource': 'secrets'}, False),
+            ('system:serviceaccount:flux-system:source-controller',
+             {'namespace': 'flux-system', 'verb': 'list', 'group': 'source.toolkit.fluxcd.io', 'resource': 'gitrepositories'}, True),
+            ('system:serviceaccount:flux-system:kustomize-controller',
+             {'namespace': 'default', 'verb': 'create', 'resource': 'pods'}, False),
+            ('system:serviceaccount:flux-system:kustomize-controller',
+             {'namespace': 'flux-system', 'verb': 'impersonate', 'resource': 'serviceaccounts', 'name': 'symphony-reconciler'}, True),
+            ('system:serviceaccount:flux-system:kustomize-controller',
+             {'namespace': 'flux-system', 'verb': 'impersonate', 'resource': 'serviceaccounts', 'name': 'default'}, False),
+            ('system:serviceaccount:flux-system:flux-unprivileged',
+             {'namespace': 'symphony', 'verb': 'get', 'resource': 'configmaps'}, False),
+            ('system:serviceaccount:flux-system:symphony-reconciler',
+             {'namespace': 'symphony', 'verb': 'patch', 'group': 'apps', 'resource': 'deployments'}, True),
+            ('system:serviceaccount:flux-system:symphony-reconciler',
+             {'namespace': 'symphony', 'verb': 'get', 'resource': 'secrets'}, False),
+            ('system:serviceaccount:flux-system:symphony-reconciler',
+             {'namespace': 'default', 'verb': 'create', 'resource': 'configmaps'}, False),
+            ('system:serviceaccount:flux-system:symphony-reconciler',
+             {'verb': 'get', 'resource': 'namespaces'}, False),
+        ]
+        for account, attrs, expected in flux_checks:
+            review = {'apiVersion': 'authorization.k8s.io/v1', 'kind': 'SelfSubjectAccessReview',
+                      'spec': {'resourceAttributes': attrs}}
+            actual = request('POST', resource_path(review), review, user=account)[1]['status']['allowed']
+            assert actual == expected, f'{account} {attrs}: expected {expected}, got {actual}'
         # Mutation is mandatory: removing its binding must not admit the original
         # upstream privileged helper, even while the namespace permits host mounts.
         request('DELETE', '/apis/admissionregistration.k8s.io/v1/mutatingadmissionpolicybindings/guaranine-host-readers')

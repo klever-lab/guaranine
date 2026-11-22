@@ -135,6 +135,21 @@ run a NodeOp merely to refresh metadata readers.
 
 Namespace network policies deny ingress and allow only Kubernetes API egress over the cluster/tailnet. The default service account has no mounted token or role binding; ordinary configuration Jobs do not need API credentials. The operator and metadata helpers use their dedicated service accounts. Container pulls use the node's normal registry access. Host activation uses system D-Bus (`SYSTEMCTL_FORCE_BUS=1`), because systemd's private socket cannot resolve clients in a Pod PID namespace. No new host firewall ports or public endpoints are needed. These controls do not sandbox a privileged host operation after compromise.
 
+## GitOps reconciliation
+
+[kubernetes/flux/kustomization.yaml](../kubernetes/flux/kustomization.yaml) installs a minimal, digest-pinned [Flux](https://fluxcd.io/) control plane (`source-controller` and `kustomize-controller` only) in the `restricted` `flux-system` namespace. Both controllers watch only `flux-system` (`--watch-all-namespaces=false`); `kustomize-controller` disables remote bases and cross-namespace references, defaults to the zero-permission `flux-unprivileged` service account, and has no internet egress. Only `source-controller` reaches public HTTPS port 443.
+
+Every `Kustomization` in [kubernetes/flux/sync/](../kubernetes/flux/sync/kustomization.yaml) impersonates an explicit service account:
+
+- `guaranine-reconciler` (`cluster-admin`) reconciles `flux-sync` (`./kubernetes/flux/sync`) and `guaranine-platform` (`./kubernetes`, covering network policy, admission hardening, OpenEBS storage and monitoring). Like `kairos-operator`, it is part of the cluster-administrator trust boundary.
+- `symphony-reconciler` (namespaced `Role` in `symphony` only, with no `Secret` or cluster-scoped access) reconciles `symphony-infra` from `KianBahasadri/clusterfork` (`./symphony/kubernetes`), excluding `Namespace/symphony` and `Deployment/symphony` so `symphony-updater` keeps sole ownership of idle-aware Symphony image rollouts.
+
+Secret creation remains an explicit operator step outside GitOps. Tailnet ACL changes pushed to `main` are validated and applied by [Sync Tailscale policy](../.github/workflows/tailscale-policy.yml) using OIDC in the `main`-only `tailscale` GitHub environment. Inspect reconciliation status with:
+
+```bash
+kubectl -n flux-system get gitrepositories,kustomizations,pods
+```
+
 ## OS updates
 
 The installed operator also provides [NodeOpUpgrade](https://kairos.io/operator-docs/nodeop-upgrade/), which wraps native Kairos image upgrades and tracks node reboot completion. Use a tested **Guaranine public OS base**, built from this repository, with a pinned registry digest. Controller deployment publishes that base to GHCR and prints its immutable digest. Never upload a private ISO, QCOW2 or node configuration to a registry. Publishing a base does not qualify a production OS upgrade; the verification below still applies.

@@ -1,0 +1,27 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata: {name: guaranine, namespace: flux-system}
+spec:
+  interval: 1m
+  url: https://github.com/klever-lab/guaranine.git
+  ref: {branch: main}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: flux-sync, namespace: flux-system}
+spec:
+  interval: 5m
+  path: ./kubernetes/flux/sync
+  prune: true
+  serviceAccountName: guaranine-reconciler
+  sourceRef: {kind: GitRepository, name: guaranine}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: guaranine-platform, namespace: flux-system}
+spec:
+  interval: 5m
+  path: ./kubernetes
+  prune: false
+  serviceAccountName: guaranine-reconciler
+  sourceRef: {kind: GitRepository, name: guaranine}

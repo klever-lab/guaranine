@@ -1,0 +1,112 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: default, namespace: flux-system}
+automountServiceAccountToken: false
+---
+# Fail-closed default for Kustomizations that omit spec.serviceAccountName.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: flux-unprivileged, namespace: flux-system}
+automountServiceAccountToken: false
+---
+# Platform reconciler for klever-lab/guaranine manifests (cluster administrator boundary).
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: guaranine-reconciler, namespace: flux-system}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: guaranine-reconciler}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-admin}
+subjects:
+  - {kind: ServiceAccount, name: guaranine-reconciler, namespace: flux-system}
+---
+# Namespace-scoped reconciler for KianBahasadri/clusterfork Symphony infrastructure.
+# No Secret read/write, pod exec, or cross-namespace permissions.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: symphony-reconciler, namespace: flux-system}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: symphony-reconciler, namespace: symphony}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, persistentvolumeclaims, serviceaccounts, services]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: symphony-reconciler, namespace: symphony}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: symphony-reconciler}
+subjects:
+  - {kind: ServiceAccount, name: symphony-reconciler, namespace: flux-system}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: source-controller, namespace: flux-system}
+rules:
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: source-controller, namespace: flux-system}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: source-controller}
+subjects:
+  - {kind: ServiceAccount, name: source-controller, namespace: flux-system}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: kustomize-controller, namespace: flux-system}
+rules:
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: ["*"]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    resourceNames: [flux-unprivileged, guaranine-reconciler, symphony-reconciler]
+    verbs: [impersonate]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: kustomize-controller, namespace: flux-system}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: kustomize-controller}
+subjects:
+  - {kind: ServiceAccount, name: kustomize-controller, namespace: flux-system}

@@ -1,0 +1,39 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata: {name: clusterfork, namespace: flux-system}
+spec:
+  interval: 1m
+  url: https://github.com/KianBahasadri/clusterfork.git
+  ref: {branch: main}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: symphony-infra, namespace: flux-system}
+spec:
+  interval: 5m
+  path: ./symphony/kubernetes
+  prune: false
+  serviceAccountName: symphony-reconciler
+  sourceRef: {kind: GitRepository, name: clusterfork}
+  patches:
+    # Namespace already exists; symphony-reconciler has no cluster-scoped permissions.
+    - target: {kind: Namespace, name: symphony}
+      patch: |-
+        $patch: delete
+        apiVersion: v1
+        kind: Namespace
+        metadata: {name: symphony}
+    # Deployment/symphony image rollouts are owned by symphony-updater when idle.
+    - target: {kind: Deployment, name: symphony}
+      patch: |-
+        $patch: delete
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata: {name: symphony, namespace: symphony}
+    # Re-enable after secret/symphony-webhook-tailnet is provisioned (KIAN-1130).
+    - target: {kind: Deployment, name: symphony-webhook}
+      patch: |-
+        $patch: delete
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata: {name: symphony-webhook, namespace: symphony}

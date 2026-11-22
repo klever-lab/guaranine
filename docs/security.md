@@ -42,7 +42,7 @@ SSH tests cover the allowed user and rejection of other users and worker tags.
 The application repository owns the reader's opt-in enable/disable controls;
 no Kubernetes resources or public listeners are added for maintenance.
 
-Before applying it, back up the live policy outside the checkout. Use the standard [Access controls editor](https://console.tailscale.com/admin/acls); for API updates, validate first, use the live ETag with `If-Match` and read back the result. CI checks JSON syntax without credentials and never applies the live policy.
+Before applying a policy manually, back up the live policy outside the checkout. Use the standard [Access controls editor](https://console.tailscale.com/admin/acls) or the automated [Sync Tailscale policy](../.github/workflows/tailscale-policy.yml) workflow. That workflow runs only on `main` in the `tailscale` GitHub environment (restricted to the selected branch `main`) and authenticates with Tailscale Workload Identity Federation (OIDC) scoped to `policy_file`; no static Tailscale secret or personal API token enters GitHub Actions. Validation workflows check JSON syntax without credentials and never apply the live policy.
 
 The cluster nodes use Tailscale kernel networking and persistent identity, with subnet-route acceptance, Tailscale SSH and host DNS changes disabled. K3s uses Tailscale node addresses and binds Flannel to `tailscale0`; Flannel derives its MTU from that interface. Administration, API, kubelet and cross-node pod traffic use the tailnet. Cloud/LAN addresses are never cluster endpoints. Other operator VPNs must preserve the `100.64.0.0/10` routes.
 
