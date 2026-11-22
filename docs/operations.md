@@ -144,7 +144,7 @@ Every `Kustomization` in [kubernetes/flux/sync/](../kubernetes/flux/sync/kustomi
 - `guaranine-reconciler` (`cluster-admin`) reconciles `flux-sync` (`./kubernetes/flux/sync`) and `guaranine-platform` (`./kubernetes`, covering network policy, admission hardening, OpenEBS storage and monitoring). Like `kairos-operator`, it is part of the cluster-administrator trust boundary.
 - `symphony-reconciler` (namespaced `Role` in `symphony` only, with no `Secret` or cluster-scoped access) reconciles `symphony-infra` from `KianBahasadri/clusterfork` (`./symphony/kubernetes`), excluding `Namespace/symphony` and `Deployment/symphony` so `symphony-updater` keeps sole ownership of idle-aware Symphony image rollouts.
 
-Secret creation remains an explicit operator step outside GitOps. Tailnet ACL changes pushed to `main` are validated and applied by [Sync Tailscale policy](../.github/workflows/tailscale-policy.yml) using OIDC in the `main`-only `tailscale` GitHub environment. Inspect reconciliation status with:
+Secret creation remains an explicit operator step outside GitOps. Tailnet ACL changes pushed to `main` are validated and applied by [Sync Tailscale policy](../.github/workflows/tailscale-policy.yml) using a `policy_file`-scoped OAuth client in the `main`-only `tailscale` GitHub environment. Inspect reconciliation status with:
 
 ```bash
 kubectl -n flux-system get gitrepositories,kustomizations,pods

@@ -309,10 +309,10 @@ kubectl apply --server-side -k kubernetes/flux/sync
 kubectl -n flux-system get gitrepositories,kustomizations
 ```
 
-For automatic tailnet policy updates on `main`, create a GitHub environment named `tailscale` restricted to the **selected branch `main`** (same policy as `ovh`). In the Tailscale admin console under **Settings → Trust credentials**, add a GitHub OIDC credential scoped only to `policy_file` for `klever-lab/guaranine` environment `tailscale`, then set these environment variables on `tailscale`:
+For automatic tailnet policy updates on `main`, create a GitHub environment named `tailscale` restricted to the **selected branch `main`** (same policy as `ovh`). In the Tailscale admin console under **Settings → Trust credentials**, generate an OAuth client scoped only to **Policy File (Write)**, then configure the `tailscale` environment:
 
 | Kind | Name | Value |
 | --- | --- | --- |
 | Variable | `TS_TAILNET` | Tailnet name from `operator.yaml`. |
-| Variable | `TS_OIDC_CLIENT_ID` | Federated identity Client ID from Tailscale. |
-| Variable | `TS_OIDC_AUDIENCE` | Federated identity Audience from Tailscale. |
+| Secret | `TS_OAUTH_CLIENT_ID` | OAuth client ID from Tailscale. |
+| Secret | `TS_OAUTH_CLIENT_SECRET` | OAuth client secret from Tailscale. |
