@@ -75,13 +75,7 @@ Prometheus discovers nodes and reads `nodes/metrics`. It does not receive `nodes
 
 ## Storage and reapplication
 
-Grafana's retained local volume uses the persistent Kairos filesystem on the worker pinned in [the monitoring manifest](../kubernetes/monitoring.yaml):
-
-| Directory on pinned worker | Owner UID:GID | Volume |
-| --- | --- | --- |
-| `/usr/local/guaranine-monitoring/grafana` | `472:472` | Grafana database, users and saved dashboards |
-
-The directory must exist before applying the manifest. Create it on the worker over pinned Tailscale SSH with `install -d -m 0700 -o 472 -g 472 /usr/local/guaranine-monitoring/grafana`. Do not use `/var`'s temporary overlay. Its static local PV stays explicitly bound and satisfies the restricted workload policy. New applications can use [automatic storage provisioning](storage.md); installing it does not migrate monitoring data.
+Grafana's `grafana` PVC uses [automatic storage provisioning](storage.md) (the default `openebs-hostpath` class with `WaitForFirstConsumer` and `Retain`). OpenEBS creates a retained local volume under `/usr/local/openebs/local/pvc-<claim-uid>` on the worker that first schedules Grafana, and kubelet applies `fsGroup: 472` (`UID:GID 472:472`) for Grafana's database, users and saved dashboards. No hardcoded worker hostname or manual directory preparation is required.
 
 Prometheus uses a disk-backed `emptyDir` limited to 10 GiB. It can restart on another worker without a PVC; replacing its pod starts a new metrics history. Its age/size retention limits still apply while the pod exists. The former `prometheus` PVC and `monitoring-prometheus` PV are no longer declared or consumed. Applying without pruning leaves existing copies and their old history intact for recovery; do not remove them as part of this update.
 
@@ -89,9 +83,9 @@ Follow [Optional monitoring](../SETUP.md#optional-monitoring) for a fresh deploy
 
 Grafana enables SQLite write-ahead logging so dashboard reads can proceed during writes. Its health probes allow brief storage delays, with the upstream Grafana chart's 30-second liveness timeout and ten-failure threshold; readiness still removes an unhealthy instance from service. This avoids the former one-second liveness deadline turning database contention into repeated forced restarts.
 
-Grafana stays pinned by its local volume and is unavailable while that laptop is offline. Its volume capacity is a scheduling declaration, not a filesystem quota. Prometheus prunes by its configured age or size, whichever comes first, and needs free disk space for its WAL and temporary blocks. Back up the private files and Grafana data separately from the controller's K3s backup; stop Grafana briefly for a consistent database copy. Temporary metrics are not a backup.
+Once bound, Grafana's local volume locks the pod to that worker; Grafana is unavailable while that laptop is offline. Its volume capacity is a scheduling declaration, not a filesystem quota. Prometheus prunes by its configured age or size, whichever comes first, and needs free disk space for its WAL and temporary blocks. Back up the private files and Grafana data separately from the controller's K3s backup; stop Grafana briefly for a consistent database copy. Temporary metrics are not a backup.
 
-To move Grafana's volume, stop its deployment and fence an unreachable old worker first. Copy its directory with ownership preserved to the replacement's persistent filesystem, then replace the static PV definition with that worker's hostname and rebind the PVC. Its `Retain` policy preserves data when the claim is deleted. Do not delete the monitoring namespace as an update procedure. Controller replacement uses the normal [cloud restore procedure](operations.md#restore-on-another-cloud-vm).
+To move Grafana to another worker, stop its deployment and fence an unreachable old worker first. Delete the `grafana` PVC (its `Retain` policy leaves the old directory intact), recreate the claim and bind it on the target worker, copy the database directory with `472:472` ownership preserved into the new OpenEBS volume directory, and scale Grafana back up. Do not delete the monitoring namespace as an update procedure. Controller replacement uses the normal [cloud restore procedure](operations.md#restore-on-another-cloud-vm).
 
 ## Check collection
 

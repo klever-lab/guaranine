@@ -264,7 +264,7 @@ exception's constraints and removal procedure.
 
 ## Optional monitoring
 
-For private Grafana and cluster metrics, prepare the worker directories described in [monitoring storage](docs/monitoring.md#storage-and-reapplication). Apply the current [tailnet policy](docs/security.md#tailnet-policy) and host firewall from this repository before collecting kubelet metrics; updating files in the checkout does not update an installed OS.
+For private Grafana and cluster metrics, install [application storage](#application-storage) first so Grafana's PVC provisions automatically. Apply the current [tailnet policy](docs/security.md#tailnet-policy) and host firewall from this repository before collecting kubelet metrics; updating files in the checkout does not update an installed OS.
 
 Enable MagicDNS and HTTPS certificates in the tailnet's DNS settings. Create a single-use, preauthorized, non-ephemeral auth key for `tag:guaranine-monitoring`, expiring within 24 hours. This key enrolls only the monitoring proxy; the operator API token stays outside the cluster.
 
