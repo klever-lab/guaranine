@@ -451,7 +451,8 @@ def build_base(directory):
                              + (ROOT / 'kairos/Dockerfile').read_bytes()
                              + (ROOT / 'kairos/config.yaml').read_bytes()
                              + (ROOT / 'kairos/lid.yaml').read_bytes()
-                             + (ROOT / 'kairos/battery.yaml').read_bytes()).hexdigest()[:16]
+                             + (ROOT / 'kairos/battery.yaml').read_bytes()
+                             + (ROOT / 'kairos/disk.yaml').read_bytes()).hexdigest()[:16]
     image = 'guaranine-kairos:' + identity
     args = {'K3S_VERSION': PINS['k3s'], 'K3S_SHA256': PINS['k3s_sha256']}
     command = ['sudo', '--', 'docker', 'build', '--platform', 'linux/amd64', '--tag', image]

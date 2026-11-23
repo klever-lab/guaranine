@@ -120,11 +120,11 @@ class ImageHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / 'kairos').mkdir()
-            for name in ('Dockerfile', 'config.yaml', 'lid.yaml', 'battery.yaml'):
+            for name in ('Dockerfile', 'config.yaml', 'lid.yaml', 'battery.yaml', 'disk.yaml'):
                 (root / 'kairos' / name).write_text('fixture source')
             with (patch.object(cli, 'ROOT', root), patch.object(cli, 'private_command'),
                   contextlib.redirect_stdout(io.StringIO())):
-                for name in ('lid.yaml', 'battery.yaml'):
+                for name in ('lid.yaml', 'battery.yaml', 'disk.yaml'):
                     before = cli.build_base(root)
                     (root / 'kairos' / name).write_text('changed policy')
                     self.assertNotEqual(cli.build_base(root), before)

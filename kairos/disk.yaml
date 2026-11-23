@@ -1,0 +1,32 @@
+#cloud-config
+name: Guaranine worker disk and logging quiet policy
+stages:
+  initramfs:
+    - name: Keep journald in RAM and silence unused ttyS0 and optical polling
+      files:
+        - path: /etc/systemd/journald.conf.d/10-guaranine-volatile.conf
+          permissions: 0644
+          content: |
+            [Journal]
+            Storage=volatile
+            RuntimeMaxUse=64M
+            RateLimitIntervalSec=30s
+            RateLimitBurst=1000
+        - path: /etc/udev/rules.d/61-guaranine-disk.rules
+          permissions: 0644
+          content: |
+            ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sr[0-9]*", ATTR{events_poll_msecs}="0"
+            ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="mq-deadline", ATTR{queue/nr_requests}="256", ATTR{queue/add_random}="0", RUN+="/sbin/blockdev --setra 512 /dev/%k"
+      systemctl:
+        mask:
+          - serial-getty@ttyS0.service
+  boot:
+    - name: Apply disk, optical-polling and journald settings to the running host
+      commands:
+        - systemctl daemon-reload
+        - systemctl stop serial-getty@ttyS0.service || true
+        - systemctl restart systemd-journald.service
+        - udevadm verify /etc/udev/rules.d/61-guaranine-disk.rules
+        - udevadm control --reload-rules
+        - udevadm trigger --action=change --subsystem-match=block --sysname-match="sd*" --sysname-match="sr*"
+        - udevadm settle --timeout=30

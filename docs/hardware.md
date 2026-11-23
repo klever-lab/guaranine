@@ -65,6 +65,20 @@ After `muller` and `vi` returned, all six workers were Ready and their models ap
 
 These are firmware-reported observations, not a confirmed diagnosis of either pack. Local battery checks are needed; [Dell documents battery-health and diagnostic checks](https://www.dell.com/support/contents/en-us/article/product-support/self-support-knowledgebase/battery-and-power/battery) for `muller`. Applying the profile to both workers completed successfully but did not repair their readings or verify a cap. Host and post-rollout observations are retained privately in `muller-vi-inspection.log`, `muller-root-inspection.log`, `vi-root-inspection.log` and `muller-vi-post-rollout.log`. At this later check `wild` was discharging at 89%; reconnecting its charger around 50–55% allows its existing thresholds to hold the lower range.
 
+## Disk I/O, journald, and unused devices
+
+The native [disk profile](../kairos/disk.yaml) keeps laptop spinning disks quiet during normal cluster operation:
+
+- Masks `serial-getty@ttyS0.service` so laptops without a physical serial port do not crash-loop `agetty` every ten seconds when booting with `console=ttyS0`. Physical `getty@tty1.service` and Tailscale SSH are unaffected.
+- Configures `systemd-journald` with `Storage=volatile` (`RuntimeMaxUse=64M`, `RateLimitIntervalSec=30s`, `RateLimitBurst=1000`) in `/etc/systemd/journald.conf.d/10-guaranine-volatile.conf` so host logs stay in RAM instead of flushing continuously to slow rotational drives.
+- Installs `/etc/udev/rules.d/61-guaranine-disk.rules` to disable empty optical-drive polling (`sr[0-9]*` `events_poll_msecs=0`, preventing repeated SATA link resets on `kate`'s DVD drive) and tune rotational `sd[a-z]` disks (`mq-deadline`, `read_ahead_kb=256`, `nr_requests=256`, `add_random=0`).
+
+New images include this public profile under `/system/oem/91_guaranine-disk.yaml`. On existing installed workers, roll it out with:
+
+```bash
+./guaranine rollout kairos/disk.yaml
+```
+
 ## Laptop models
 
 These model names are confirmed by the operator. Coverage targets their factory Wi-Fi options, including variants that cannot be identified while the laptops are powered off.
