@@ -5,6 +5,7 @@
     "tag:guaranine-monitoring": ["autogroup:admin"],
     "tag:guaranine-kiosk": ["autogroup:admin"],
     "tag:guaranine-app-gateway": ["autogroup:admin"],
+    "tag:guaranine-webhook-gateway": ["autogroup:admin"],
     "tag:guaranine-jellyfin": ["autogroup:admin"],
     "tag:guaranine-kobo": ["autogroup:admin"]
   },
@@ -66,6 +67,10 @@
     {
       "target": ["tag:guaranine-jellyfin"],
       "attr": ["funnel"]
+    },
+    {
+      "target": ["tag:guaranine-webhook-gateway"],
+      "attr": ["funnel"]
     }
   ],
   "ssh": [
@@ -113,9 +118,14 @@
       "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "100.123.102.71:22", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
+      "src": "tag:guaranine-webhook-gateway",
+      "proto": "tcp",
+      "deny": ["tag:guaranine-controlplane:22", "tag:guaranine-controlplane:6443", "tag:guaranine-worker:22", "tag:guaranine-worker:10250", "tag:guaranine-monitoring:443", "tag:guaranine-app-gateway:443", "tag:guaranine-jellyfin:443", "100.123.102.71:22", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
+    },
+    {
       "src": "user@example.com",
       "proto": "tcp",
-      "deny": ["tag:guaranine-app-gateway:443", "tag:guaranine-jellyfin:443", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
+      "deny": ["tag:guaranine-app-gateway:443", "tag:guaranine-webhook-gateway:443", "tag:guaranine-jellyfin:443", "kobo-clara-bw:22", "kobo-clara-bw-v6:22"]
     },
     {
       "src": "kianbahasadri@gmail.com",
